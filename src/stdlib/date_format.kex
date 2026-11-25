@@ -22,23 +22,16 @@ module DateFormat do
   # patterns.
   #
   # @param pattern [String] the pattern
-  # @return [Result<DateFormat, ParseError>] the format, or where the
+  # @return [Result<DateFormat, PatternError>] the format, or where the
   #   pattern goes wrong
   #
   # @example
   #   DateFormat.parse("yyyy-MM-dd")   # => Ok(DateFormat { pattern: "yyyy-MM-dd" })
-  #   DateFormat.parse("yyyy-QQ")      # => Error(ParseError { position: 5, ... })
-  parse : String -> Result<DateFormat, ParseError>
-  let parse(pattern) do
+  #   DateFormat.parse("yyyy-QQ")      # => Error(PatternError { position: 5, ... })
+  let parse(pattern: String) -> Result<DateFormat, PatternError> do
     match DateFormat.pieces(pattern) do
       Ok(_) => return Ok(DateFormat { pattern: pattern })
-      Error((index, message)) => return Error(ParseError {
-        input: pattern,
-        position: pattern.take(index).byteSize,
-        value: None,
-        message: message,
-        rest: pattern.drop(index)
-      })
+      Error((index, message)) => return Error(PatternError { position: index, message: message })
     end
   end
 

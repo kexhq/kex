@@ -768,41 +768,32 @@ int main() {
             assertEqual(result->toString(), std::string("999999999999999999999999"));
         });
 
-        it("Integer.parse returns a typed ParseError on invalid input", []() {
+        it("Integer.parse answers NoDigits on invalid input", []() {
             auto result =
                 run("main do\n"
                     "  match Integer.parse(\"abc\") do\n"
-                    "    Ok(_) => -1\n"
-                    "    Error(e) => e.position\n"
+                    "    Error(NoDigits(at)) => at\n"
+                    "    _ => -1\n"
                     "  end\n"
                     "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(0));
         });
 
-        it("Integer.parse returns value and rest on trailing", []() {
+        it("Integer.parse answers the value and the rest as Trailing", []() {
             auto result =
                 run("main do\n"
                     "  match Integer.parse(\"12ab\") do\n"
-                    "    Ok(_) => -1\n"
-                    "    Error(e) => e.value\n"
+                    "    Error(Trailing(value, rest)) => (value, rest)\n"
+                    "    _ => (-1, \"\")\n"
                     "  end\n"
-                    "end\n");
-            assertEqual(std::get<IntValue>(result->data).value, int64_t(12));
-        });
-
-        it("Integer.parsePrefix returns Just((value, rest))", []() {
-            auto result =
-                run("main do\n"
-                    "  let Just(pair) = Integer.parsePrefix(\"123xyz\")\n"
-                    "  pair\n"
                     "end\n");
             auto& tup = std::get<TupleValue>(result->data);
             assertEqual(tup.elements.size(), size_t(2));
-            assertEqual(std::get<IntValue>(tup.elements[0]->data).value, int64_t(123));
-            assertEqual(std::get<StringValue>(tup.elements[1]->data).value, std::string("xyz"));
+            assertEqual(std::get<IntValue>(tup.elements[0]->data).value, int64_t(12));
+            assertEqual(std::get<StringValue>(tup.elements[1]->data).value, std::string("ab"));
         });
 
-        it("Float.parse returns a typed ParseError on invalid input", []() {
+        it("Float.parse says why in its message", []() {
             auto result =
                 run("main do\n"
                     "  match Float.parse(\"abc\") do\n"
@@ -810,7 +801,8 @@ int main() {
                     "    Error(e) => e.message\n"
                     "  end\n"
                     "end\n");
-            assertEqual(std::get<StringValue>(result->data).value, std::string("invalid float"));
+            assertEqual(
+                std::get<StringValue>(result->data).value, std::string("expected a digit at 0"));
         });
 
         it("rejects unsupported fixed decimal precision", []() {

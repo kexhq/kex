@@ -53,8 +53,7 @@ end
 
 # A pattern that failed to compile.
 #
-# Mirrors +ParseError+: the +position+ is a *character* offset into the
-# pattern, not a byte offset, so it agrees across backends on patterns
+# The +position+ is a *character* offset into the pattern, not a byte offset, so it agrees across backends on patterns
 # containing non-ASCII.
 #
 #   regex("(")

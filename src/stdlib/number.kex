@@ -444,221 +444,68 @@ end
 # Reading integers out of text.
 #
 # Use +parse+ when a failure needs explaining and +"42".to(Integer)+ when it
-# does not: +to+ answers a plain +Optional+, +parse+ answers a
-# +Result+ carrying a +ParseError+ that says where it stopped and what it had
-# read so far.
+# does not: +to+ answers a plain +Optional+, +parse+ a +Result+ whose
+# +ParseError+ says why, one case per reason.
 module Integer do
-  # Parses the whole string as a base-10 integer.
+  # Parses +text+ as an integer: an optional sign, then digits in +radix+,
+  # grouped as +culture+ groups them once a group separator appears. Digits
+  # with no separator at all read in every culture.
   #
-  # The string must be entirely consumed: leading or trailing characters make
-  # it an +Error+, with a +ParseError+ describing where parsing stopped. Use
-  # +parsePrefix+ when a trailing remainder is expected.
-  # For localized text, pass +culture:+ explicitly.
+  # A number followed by anything is +Trailing+ with the number and the rest,
+  # so +"10 USD"+ is not lost: match it to read a number off the front.
   #
-  # @param s [String] the text to parse
-  # @return [Result<Integer, ParseError>] the integer, or a described failure
+  # @param text [String] the text to read
+  # @param radix [Integer] the base, 2 to 36; digits above 9 in either case
+  # @param culture [Culture] whose group separator to accept
+  # @return [Result<Integer, ParseError<Integer>>] the integer, or why not
   #
   # @example
-  #   Integer.parse("42")     # => Ok(42)
-  #   Integer.parse("-7")     # => Ok(-7)
-  #   Integer.parse("4x")     # => Error(ParseError { ... rest: "x" ... })
-  #
+  #   Integer.parse("42")                 # => Ok(42)
+  #   Integer.parse("ff", radix: 16)      # => Ok(255)
+  #   Integer.parse("10 USD")             # => Error(Trailing(10, " USD"))
+  #   Integer.parse("abc")                # => Error(NoDigits(0))
+  # @example In a culture
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Integer.parse("1 500", culture: hu)   # => Ok(1500)
+  #   Integer.parse("1500", culture: hu)    # => Ok(1500)
+  #   Integer.parse("1 50", culture: hu)    # => Error(BadGrouping(2))
   # @example Reading a setting with a fallback
   #   let port = Integer.parse(raw).or(8080)
-  #
-  # @example Reporting why the input was rejected
-  #   match Integer.parse(raw) do
-  #     Ok(n)    => IO.printLine("port ${n}")
-  #     Error(e) => IO.printError("bad port: ${e.message}")
-  #   end
-  parse : String -> Result<Integer, ParseError>
-  let parse(s: String) -> Result<Integer, ParseError> = Kex.Intrinsic.Integer.parse(s)
-
-  # Parses the whole string as an integer in +culture+.
-  #
-  # Group separators must match the culture and land on group boundaries; a
-  # decimal separator never parses as an integer. Anything else fails at its
-  # exact position with +value: None+.
-  #
-  # @param s [String] the text to parse
-  # @param culture [Culture] the culture to parse with
-  # @return [Result<Integer, ParseError>] the integer, or a described failure
-  #
-  # @example
-  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-  #   Integer.parse("1 500", culture: hu)              # => Ok(1500)
-  #   Integer.parse("1,500", culture: hu)              # => Error(ParseError { ... })
-  parse : String -> Culture -> Result<Integer, ParseError>
-  let parse(s, culture: Culture) do
-    match Culture.validateInteger(s, culture) do
-      Ok(normalized) => Kex.Intrinsic.Integer.parse(normalized)
-      Error(e) => Error(e)
+  let parse(text: String, radix: Integer = 10, culture: Culture = Culture.DEFAULT) -> Result<Integer, ParseError<Integer>> do
+    # Plain digits read the same in every culture: only the rest is scanned.
+    match Culture.valid?(culture) then Kex.Intrinsic.Integer.fromDigits(text, radix) else None do
+      Just(value) => Ok(value)
+      None => Culture.readNumber(text, culture, radix, false) { |digits, _| Kex.Intrinsic.Integer.fromDigits(digits, radix) }
     end
-  end
-
-  # Parses the whole string as an integer written in base +radix+, 2 through
-  # 36. Digits above 9 are accepted in either case.
-  #
-  # @param s [String] the text to parse
-  # @param radix [Integer] the base, 2 to 36
-  # @return [Result<Integer, ParseError>] the integer, or a described failure
-  #
-  # @example
-  #   Integer.parse("ff", radix: 16)     # => Ok(255)
-  #   Integer.parse("FF", radix: 16)     # => Ok(255)
-  #   Integer.parse("1010", radix: 2)    # => Ok(10)
-  #
-  # @example Reading a hex colour component
-  #   Integer.parse(hex.take(2), radix: 16).or(0)
-  parse : String -> Integer -> Result<Integer, ParseError>
-  let parse(s, radix: Integer) = Kex.Intrinsic.Integer.parse(s, radix)
-
-  # Parses an integer from the front of the string and returns it together
-  # with whatever text was left over.
-  #
-  # This is the building block for hand-written scanners: parse a number, keep
-  # going from the remainder. Answers +None+ when the string does not begin
-  # with a number at all.
-  #
-  # @param s [String] the text to parse from
-  # @return [(Integer, String)?] the value and the unconsumed remainder
-  #
-  # @example
-  #   Integer.parsePrefix("42abc")   # => Just((42, "abc"))
-  #   Integer.parsePrefix("abc")     # => None
-  #
-  # @example Reading a leading count off a line
-  #   match Integer.parsePrefix("3 items") do
-  #     Just(pair) => do
-  #       let (count, rest) = pair
-  #       IO.printLine("${count} of${rest}")   # prints: 3 of items
-  #     end
-  #     None => IO.printError("no leading count")
-  #   end
-  parsePrefix : String -> (Integer, String)?
-  let parsePrefix(s) = Kex.Intrinsic.Integer.parsePrefix(s)
-
-  # Parses the longest integer prefix in +culture+ and returns it together
-  # with whatever text was left over. Answers +None+ when the string does
-  # not begin with a number at all.
-  #
-  # @param s [String] the text to parse from
-  # @param culture [Culture] the culture to parse with
-  # @return [(Integer, String)?] the value and the unconsumed remainder
-  #
-  # @example
-  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-  #   Integer.parsePrefix("12abc", culture: hu)              # => Just((12, "abc"))
-  #   Integer.parsePrefix("abc", culture: hu)                # => None
-  parsePrefix : String -> Culture -> (Integer, String)?
-  let parsePrefix(s, culture: Culture) do
-    var best: (Integer, String)? = None
-    var length = 1
-    while length <= s.count do
-      match Culture.validateInteger(s.take(length), culture) do
-        Ok(normalized) => do
-          match Integer.parse(normalized) do
-            Ok(v) => best = Just((v, s.drop(length)))
-            Error(_) => ()
-          end
-        end
-        Error(_) => ()
-      end
-      length = length + 1
-    end
-    best
   end
 end
 
 # Reading floating-point numbers out of text.
 module Float do
-  # Parses the whole string as a float.
+  # Parses +text+ as a float: an optional sign, digits grouped as +culture+
+  # groups them once a group separator appears, then optionally the
+  # culture's decimal separator with digits after it, and an exponent
+  # (+e3+, +E-2+). A whole number is a float too: +"5"+ is +5.0+.
   #
-  # The string must be entirely consumed; anything left over makes it an
-  # +Error+ carrying a +ParseError+.
-  # For localized text, pass +culture:+ explicitly.
-  #
-  # @param s [String] the text to parse
-  # @return [Result<Float, ParseError>] the float, or a described failure
-  #
-  # @example
-  #   Float.parse("3.5")     # => Ok(3.5)
-  #   Float.parse("-0.25")   # => Ok(-0.25)
-  #   Float.parse("3.5m")    # => Error(ParseError { ... rest: "m" ... })
-  #
-  # @example Averaging a column of text values
-  #   rows.map { |r| Float.parse(r).or(0.0) }.sum / rows.count.to(Float).or(1.0)
-  parse : String -> Result<Float, ParseError>
-  let parse(s) = Kex.Intrinsic.Float.parse(s)
-
-  # Parses the whole string as a float in +culture+.
-  #
-  # The decimal separator and grouping follow the culture; the grammar is
-  # otherwise strict — an optional sign, grouped integer digits, an optional
-  # decimal separator with required fraction digits, and an optional
-  # exponent. Anything else fails at its exact position with +value: None+.
-  #
-  # @param s [String] the text to parse
-  # @param culture [Culture] the culture to parse with
-  # @return [Result<Float, ParseError>] the float, or a described failure
+  # @param text [String] the text to read
+  # @param culture [Culture] whose decimal and group separators to accept
+  # @return [Result<Float, ParseError<Float>>] the float, or why not
   #
   # @example
+  #   Float.parse("3.5")       # => Ok(3.5)
+  #   Float.parse("1e3")       # => Ok(1000.0)
+  #   Float.parse("12.5kg")    # => Error(Trailing(12.5, "kg"))
+  #   Float.parse("1e999")     # => Error(OutOfRange)
+  # @example In a culture
   #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-  #   Float.parse("1,44", culture: hu)              # => Ok(1.44)
-  #   Float.parse("1,44")                            # => Error(ParseError { ... })
-  parse : String -> Culture -> Result<Float, ParseError>
-  let parse(s, culture: Culture) do
-    match Culture.validateFloat(s, culture) do
-      Ok(normalized) => Kex.Intrinsic.Float.parse(normalized)
-      Error(e) => Error(e)
+  #   Float.parse("1,44", culture: hu)   # => Ok(1.44)
+  let parse(text: String, culture: Culture = Culture.DEFAULT) -> Result<Float, ParseError<Float>> do
+    # Canonical text reads the same in every culture with a "." decimal
+    # point: only the rest is scanned.
+    match culture.numbers.decimalSeparator == '.' && Culture.valid?(culture) then Kex.Intrinsic.Float.fromDigits(text) else None do
+      Just(value) => Ok(value)
+      None => Culture.readNumber(text, culture, 10, true) { |digits, tail| Kex.Intrinsic.Float.fromDigits(digits + tail) }
     end
-  end
-
-  # Parses a float from the front of the string and returns it together with
-  # the unconsumed remainder. Answers +None+ when the string does not begin
-  # with a number.
-  #
-  # @param s [String] the text to parse from
-  # @return [(Float, String)?] the value and the remainder
-  #
-  # @example
-  #   Float.parsePrefix("3.5rest")   # => Just((3.5, "rest"))
-  #   Float.parsePrefix("rest")      # => None
-  #
-  # @example Splitting a measurement from its unit
-  #   Float.parsePrefix("12.5kg")   # => Just((12.5, "kg"))
-  parsePrefix : String -> (Float, String)?
-  let parsePrefix(s) = Kex.Intrinsic.Float.parsePrefix(s)
-
-  # Parses the longest float prefix in +culture+ and returns it together with
-  # the unconsumed remainder. Answers +None+ when the string does not begin
-  # with a number at all.
-  #
-  # @param s [String] the text to parse from
-  # @param culture [Culture] the culture to parse with
-  # @return [(Float, String)?] the value and the remainder
-  #
-  # @example
-  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-  #   Float.parsePrefix("1,5x", culture: hu)              # => Just((1.5, "x"))
-  #   Float.parsePrefix("x", culture: hu)                 # => None
-  parsePrefix : String -> Culture -> (Float, String)?
-  let parsePrefix(s, culture: Culture) do
-    var best: (Float, String)? = None
-    var length = 1
-    while length <= s.count do
-      match Culture.validateFloat(s.take(length), culture) do
-        Ok(normalized) => do
-          match Float.parse(normalized) do
-            Ok(v) => best = Just((v, s.drop(length)))
-            Error(_) => ()
-          end
-        end
-        Error(_) => ()
-      end
-      length = length + 1
-    end
-    best
   end
 
   # The largest finite +Float+.
@@ -810,51 +657,40 @@ end
 # Reading a number out of text without deciding in advance which half of the
 # numeric tower it belongs to.
 module Number do
-  # Parses the whole string as an +Integer+ or a +Float+, whichever the text
-  # describes.
+  # Parses +text+ as an +Integer+ or a +Float+, whichever it describes: a
+  # fraction or an exponent makes it a +Float+. The grammar is
+  # +Float.parse+'s.
   #
   # Use it when the input's shape is not known ahead of time: a config value,
   # a CSV column that may hold either.
-  # For localized text, pass +culture:+ explicitly.
   #
-  # @param s [String] the text to parse
-  # @return [Result<Number, ParseError>] the number, or a described failure
+  # @param text [String] the text to read
+  # @param culture [Culture] whose decimal and group separators to accept
+  # @return [Result<Number, ParseError<Number>>] the number, or why not
   #
   # @example
   #   Number.parse("42")     # => Ok(42)
   #   Number.parse("3.5")    # => Ok(3.5)
-  #   Number.parse("x")      # => Error(ParseError { ... })
-  parse : String -> Result<Number, ParseError>
-  let parse(s) = Kex.Intrinsic.Number.parse(s)
-
-  # Parses the whole string as an +Integer+ or a +Float+ in +culture+,
-  # whichever the text describes.
-  #
-  # @param s [String] the text to parse
-  # @param culture [Culture] the culture to parse with
-  # @return [Result<Number, ParseError>] the number, or a described failure
-  #
-  # @example
+  #   Number.parse("x")      # => Error(NoDigits(0))
+  # @example In a culture
   #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-  #   Number.parse("1 500,5", culture: hu)              # => Ok(1500.5)
-  #   Number.parse("1 500", culture: hu)                # => Ok(1500)
-  parse : String -> Culture -> Result<Number, ParseError>
-  let parse(s, culture: Culture) do
-    match Integer.parse(s, culture: culture) do
-      Ok(n) => return Ok(n)
-      Error(_) => None
+  #   Number.parse("1 500,5", culture: hu)   # => Ok(1500.5)
+  #   Number.parse("1 500", culture: hu)     # => Ok(1500)
+  let parse(text: String, culture: Culture = Culture.DEFAULT) -> Result<Number, ParseError<Number>> do
+    # Canonical text reads the same in every culture with a "." decimal
+    # point: only the rest is scanned.
+    let valid = Culture.valid?(culture)
+    match valid then Kex.Intrinsic.Integer.fromDigits(text, 10) else None do
+      Just(value) => return Ok(value)
+      None => ()
     end
-    match Float.parse(s, culture: culture) do
-      Ok(f) => return Ok(f)
-      Error(_) => None
+    match valid && culture.numbers.decimalSeparator == '.' then Kex.Intrinsic.Float.fromDigits(text) else None do
+      Just(value) => return Ok(value)
+      None => ()
     end
-    Error(ParseError {
-      input: s,
-      position: 0,
-      value: None,
-      message: "invalid number for culture",
-      rest: s
-    })
+    Culture.readNumber(text, culture, 10, true) do |digits, tail|
+      tail.empty? then Kex.Intrinsic.Integer.fromDigits(digits, 10) else Kex.Intrinsic.Float.fromDigits(digits + tail)
+    end
   end
 
   # Builds a +NumberFormat+ from a digit pattern, for +to(String, format)+.
@@ -896,7 +732,7 @@ module Number do
   let validateFormat(source: String) -> [TaggedValidation.Issue] do
     match NumberFormat.parse(source) do
       Ok(_) => return []
-      Error(problem) => return [TaggedValidation.fatalAt(problem.position, problem.message)]
+      Error(problem) => return [TaggedValidation.fatalAt(source.take(problem.position).byteSize, problem.message)]
     end
   end
 end
@@ -915,23 +751,16 @@ module NumberFormat do
   # describes the patterns.
   #
   # @param pattern [String] the pattern
-  # @return [Result<NumberFormat, ParseError>] the format, or where the
+  # @return [Result<NumberFormat, PatternError>] the format, or where the
   #   pattern goes wrong
   #
   # @example
   #   NumberFormat.parse("#.00")   # => Ok(NumberFormat { pattern: "#.00" })
-  #   NumberFormat.parse("#.#0")   # => Error(ParseError { position: 3, ... })
-  parse : String -> Result<NumberFormat, ParseError>
-  let parse(pattern) do
+  #   NumberFormat.parse("#.#0")   # => Error(PatternError { position: 3, ... })
+  let parse(pattern: String) -> Result<NumberFormat, PatternError> do
     match layout(pattern) do
       Ok(_) => return Ok(NumberFormat { pattern: pattern })
-      Error((index, message)) => return Error(ParseError {
-        input: pattern,
-        position: pattern.take(index).byteSize,
-        value: None,
-        message: message,
-        rest: pattern.drop(index)
-      })
+      Error((index, message)) => return Error(PatternError { position: index, message: message })
     end
   end
 

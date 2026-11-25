@@ -1,0 +1,39 @@
+# A program may declare a type with a prelude type's name. The two are then
+# different types with one spelling: the program's own where it writes the
+# name, the prelude's where a prelude function answers one.
+
+# A record named like the prelude's ParseError, with a field the prelude's
+# Errorable `message` function shares its name with.
+record ParseError do
+  message : String
+  line : Integer
+end
+
+# A variant type named like the prelude's PatternError record.
+type PatternError = Unclosed(Integer) | Empty
+
+let describe(error: ParseError) -> String = "line ${error.line}: ${error.message}"
+
+let shown(error: PatternError) -> String = match error do
+  Unclosed(at) => "unclosed at ${at}"
+  Empty => "empty"
+end
+
+main do
+  IO.printLine(describe(ParseError { message: "own", line: 3 }))
+  match Integer.parse("12x") do
+    Ok(n) => IO.printLine(n)
+    Error(Trailing(n, rest)) => IO.printLine("${n} then ${rest}")
+    Error(e) => IO.printLine(e.message)
+  end
+  match Float.parse("abc") do
+    Ok(f) => IO.printLine(f)
+    Error(e) => IO.printLine(e.message)
+  end
+  IO.printLine(shown(Unclosed(4)))
+  IO.printLine(shown(Empty))
+  match DateFormat.parse("yyyy-QQ") do
+    Ok(_) => IO.printLine("unexpected ok")
+    Error(e) => IO.printLine("${e.position}: ${e.message}")
+  end
+end

@@ -20,33 +20,58 @@ trait Errorable do
   message :> String
 end
 
-# A parse failure, with everything needed to report it or to carry on from it.
+# Why +Integer.parse+, +Float.parse+ or +Number.parse+ could not read a
+# number: one case per reason, so a caller matches on the reason instead of
+# reading a message. Positions count characters from the start of the text.
 #
-# Answered by +Integer.parse+, +Float.parse+ and +Number.parse+ when the input
-# is not what they expected. Reach for those over +to(Integer)+ exactly when
-# this detail matters: +to+ answers a plain +None+.
+#   match Integer.parse(text) do
+#     Ok(n) => Money(n, Currency.DEFAULT)
+#     Error(Trailing(n, unit)) => Money(n, unit.trim)
+#     Error(NoDigits(_)) => die("no amount in ${text}")
+#     Error(e) => die(e.message)
+#   end
 #
-#   Integer.parse("12x")
-#   # => Error(ParseError { input: "12x", position: 2, value: 12,
-#   #                       message: "trailing characters after integer",
-#   #                       rest: "x" })
-#
-# The +position+ and +rest+ are what make a hand-written scanner possible: the
-# error says exactly where it stopped and what was left.
-record ParseError do
-  # The text that was handed to the parser.
-  input    : String
+# Reach for +parse+ over +to(Integer)+ exactly when the reason matters: +to+
+# answers a plain +None+.
+type ParseError<T> =
+  # Nothing numeric where a digit was expected, at this position: +""+,
+  # +"-"+ and +"abc"+ (all at 0, +"-"+ at 1).
+  | NoDigits(Integer)
+  # A number, then text it does not belong to: +"10 USD"+ is
+  # +Trailing(10, " USD")+, and +"1.5"+ read as an Integer is
+  # +Trailing(1, ".5")+. What follows the number is left as written.
+  | Trailing(T, String)
+  # A group separator with the wrong number of digits behind it, at the
+  # group's first digit: +"1 50"+ in Hungarian, which groups by three.
+  | BadGrouping(Integer)
+  # Digits too large for the type: +Float.parse("1e999")+.
+  | OutOfRange
+  # A radix outside 2 to 36.
+  | BadRadix(Integer)
+  # A culture whose number settings are unusable: the same character for
+  # the decimal point and the groups, or a group size below 1 (+Culture.valid?+).
+  | BadCulture
 
-  # The byte offset where parsing stopped, and from which it can continue.
+make ParseError<T>, implement: Errorable do
+  # The failure as a sentence for a person: what +Errorable+ asks for.
+  #
+  # @example
+  #   Integer.parse("12 USD").mapError(~message)   # => Error("unexpected \" USD\" after the number")
+  let message(@NoDigits(at)) -> String = "expected a digit at ${at}"
+  let message(@Trailing(_, rest)) -> String = "unexpected \"${rest}\" after the number"
+  let message(@BadGrouping(at)) -> String = "digit group out of place at ${at}"
+  let message(@OutOfRange) -> String = "the number is out of range"
+  let message(@BadRadix(radix)) -> String = "radix ${radix} is not between 2 and 36"
+  let message(@BadCulture) -> String = "the culture's number settings are unusable"
+end
+
+# Where a format pattern known only at run time goes wrong:
+# +NumberFormat.parse+ and +DateFormat.parse+. Written for the pattern's
+# author, who reads the message; the position is a character index.
+record PatternError do
+  # The character index of the first problem.
   position : Integer
 
-  # Whatever prefix was successfully parsed, if any. Typed +Any+ so that one
-  # record works across +Integer+, +Float+ and +Number+.
-  value    : Any
-
-  # A human-readable description of what went wrong.
+  # What is wrong there.
   message  : String
-
-  # The unconsumed remainder of the input, so the caller can resume parsing.
-  rest     : String
 end

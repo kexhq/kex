@@ -15,9 +15,9 @@ main do
   let Just(x, y) = Just(1)
   # Locally defined record: Pair has two fields.
   let Pair(only) = Pair { a: 1, b: 2 }
-  # Imported record: ParseError has five. Its field count crosses the
+  # Imported record: PatternError has two. Its field count crosses the
   # interface boundary, so this is caught too rather than failing at runtime
   # with `if_clause` on BEAM.
-  let Error(ParseError(err)) = Integer.parse("12x")
+  let Error(PatternError(err)) = DateFormat.parse("yyyy-QQ")
   IO.printLine(x)
 end

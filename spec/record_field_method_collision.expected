@@ -20,11 +20,9 @@ erased receiver
 from the method
 Integer
 String
-1.5xy
-3
-1.5
-trailing characters after float
-xy
+5
+`Q` is not a date or time field; quote literal text, as in `'at'`
+unexpected "xy" after the number
 Andrew
 Andrew
 2001

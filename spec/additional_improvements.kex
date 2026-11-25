@@ -1,44 +1,37 @@
-# Spec: parse (Result-typed) + parsePrefix (Optional-typed)
+# Spec: parse answers Result<T, ParseError<T>>, one case per reason.
 #
 # Run: ./build/kex spec/additional_improvements.kex
-
-# ---------------------------------------------------------------
-# parse: Result<T, ParseError> — bare Ok(v) on full match,
-#   Error(ParseError{value, rest, position, message}) on trailing
-# ---------------------------------------------------------------
 
 # full match one-liner
 let Ok(n) = Integer.parse("42")
 assert(n == 42, "parse full match")
 
-# trailing: Error with parsed value + rest
+# trailing: the number read, and what follows it as written
 match Integer.parse("12ab") do
-  Ok(_) => assert(false, "parse trailing — expected Error")
-  Error(e) => do
-    assert(e.value == 12,   "parse trailing value")
-    assert(e.rest == "ab",  "parse trailing rest")
-    assert(e.position == 2, "parse trailing position")
+  Error(Trailing(value, rest)) => do
+    assert(value == 12, "parse trailing value")
+    assert(rest == "ab", "parse trailing rest")
   end
+  _ => assert(false, "parse trailing — expected Trailing")
 end
 
-# invalid
-match Integer.parse("abc") do
-  Ok(_) => assert(false, "parse invalid — unexpected Ok")
-  Error(e) => do
-    assert(e.position == 0, "parse invalid position")
-    assert(e.rest == "abc", "parse invalid rest")
-    assert(e.value == None, "parse invalid no value")
+# a number off the front of the text
+match Integer.parse("6 USD") do
+  Error(Trailing(value, unit)) => do
+    assert(value == 6, "Trailing value")
+    assert(unit.trim == "USD", "Trailing rest")
   end
+  _ => assert(false, "expected Trailing")
 end
+
+# invalid: where a digit was expected
+assert(Integer.parse("abc") == Error(NoDigits(0)), "parse invalid")
+assert(Integer.parse("-x") == Error(NoDigits(1)), "parse invalid after a sign")
 
 # Float
 let Ok(f) = Float.parse("3.14")
 assert(f > 3.13, "Float.parse Ok")
-
-match Float.parse("xyz") do
-  Error(e) => assert(e.message == "invalid float", "Float.parse invalid")
-  Ok(_) => assert(false, "Float.parse invalid — unexpected Ok")
-end
+assert(Float.parse("xyz") == Error(NoDigits(0)), "Float.parse invalid")
 
 # Number.parse — int-first, float fallback
 let Ok(ni) = Number.parse("42")
@@ -46,24 +39,6 @@ assert(ni == 42, "Number.parse int")
 
 let Ok(nf) = Number.parse("3.14")
 assert(nf > 3.13, "Number.parse float")
-
-# ---------------------------------------------------------------
-# parsePrefix: Optional<(T, String)> — Just((v, rest))
-#   on any partial/full match, None on complete failure
-# ---------------------------------------------------------------
-
-# one-liner
-
-let Just((val, rest)) = Integer.parsePrefix("123abc")
-assert(val == 123, "parsePrefix val")
-assert(rest == "abc", "parsePrefix rest")
-
-let Just((v, r)) = Integer.parsePrefix("6 USD")
-assert(v == 6, "parsePrefix whitespace val")
-assert(r == " USD", "parsePrefix whitespace rest")
-
-# invalid
-assert(Integer.parsePrefix("xyz") == None, "parsePrefix invalid")
 
 main do
   IO.printLine("passed")

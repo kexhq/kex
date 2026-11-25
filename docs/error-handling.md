@@ -130,7 +130,7 @@ outcome:
 
 ```kex
 let parsed = ["1", "x"].map { |text| Integer.parse(text).try }
-# [Ok(1), Error(ParseError { ... })]
+# [Ok(1), Error(NoDigits(0))]
 ```
 
 Where the block is passed as a function that must give a plain value, the

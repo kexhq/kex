@@ -1,5 +1,5 @@
   (body-only rescue)
 5 0
 5/parsed 0/failed
-ok:5 | parse error: invalid integer
+ok:5 | no digit at 0
 6 -99

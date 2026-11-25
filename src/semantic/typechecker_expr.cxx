@@ -1175,8 +1175,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     auto resolvedVar = varType ? resolve(varType) : Type::unknown();
                     auto* named = std::get_if<NamedType>(&resolvedVar->kind);
-                    auto record = named ? m_recordFields.find(resolveRecordName(named->name))
-                                        : m_recordFields.end();
+                    auto record = named ? findRecordFields(*named) : m_recordFields.end();
                     if (record == m_recordFields.end()) {
                         error(diag::Code::FieldAssignmentNeedsRecord, expr.location);
                         return Type::voidType();
@@ -3161,7 +3160,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     auto receiver = resolve(m_currentMakeType);
                     auto* named = std::get_if<NamedType>(&receiver->kind);
-                    if (!named || !m_recordFields.count(resolveRecordName(named->name))) {
+                    if (!named || !(findRecordFields(*named) != m_recordFields.end())) {
                         error(
                             diag::Code::ThisConstructionNeedsRecord, expr.location,
                             {{"name", sourceName}});
@@ -3348,8 +3347,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // which is what `Box { items: [] }` deserves.
                 const size_t paramCount =
                     record == m_recordFields.end() ? 0 : recordTypeParamCount(record->second);
+                // A literal names the program's own record when it has one of
+                // a prelude record's name.
                 if (paramCount == 0) {
-                    return Type::named(recordName);
+                    return ownType(Type::named(recordName));
                 }
                 std::vector<TypePtr> typeArgs(paramCount, Type::unknown());
                 for (const auto& [slot, bound] : typeParamSlots) {
@@ -3358,7 +3359,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         typeArgs[index] = bound;
                     }
                 }
-                return Type::named(recordName, std::move(typeArgs));
+                return ownType(Type::named(recordName, std::move(typeArgs)));
             } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
                 if (node.condition) {
                     checkCondition(*node.condition, diag::Code::IfConditionNotBool);
@@ -4927,7 +4928,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
             return true;
         };
         if (auto* named = std::get_if<NamedType>(&argType->kind)) {
-            auto record = m_recordFields.find(resolveRecordName(named->name));
+            auto record = findRecordFields(*named);
             if (record == m_recordFields.end()) {
                 return false;
             }
@@ -5158,14 +5159,15 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
         // A variant of an ADT is a value of that ADT; a parameter written as
         // one variant (`FileMode.Write`) takes that variant only.
         if (argNamed && (!argNamed->variant.empty() || !paramNamed->variant.empty()) &&
-            argNamed->name == paramNamed->name) {
+            argNamed->name == paramNamed->name &&
+            argNamed->shadowsPrelude == paramNamed->shadowsPrelude) {
             return paramNamed->variant.empty() || argNamed->variant == paramNamed->variant;
         }
         // A bare name suffix-matches a qualified one (`Version` is
         // `Kex.Version`), but a constructor's singleton type is no spelling
         // of a type at all: NetErrorKind's `Backend` is not a `Kex.Backend`.
         const bool sameType =
-            argNamed &&
+            argNamed && argNamed->shadowsPrelude == paramNamed->shadowsPrelude &&
             (argNamed->name == paramNamed->name ||
              (!constructorOwner(*argNamed) && namedTypesMatch(argNamed->name, paramNamed->name)));
         if (!sameType) {
@@ -6335,8 +6337,7 @@ auto TypeChecker::checkCallCore(
             return false;
         };
         if (auto* named = std::get_if<NamedType>(&receiver->kind)) {
-            if (auto record = m_recordFields.find(resolveRecordName(named->name));
-                record != m_recordFields.end()) {
+            if (auto record = findRecordFields(*named); record != m_recordFields.end()) {
                 if (auto field = record->second.find(name); field != record->second.end()) {
                     // Same substitution the main field-access path does: a
                     // `Box<Integer>` reads `.items` as `[Integer]`, not as
@@ -6424,7 +6425,7 @@ auto TypeChecker::checkCallCore(
             bool reported = false;
             auto inner = resolve(optional->inner);
             if (auto* innerNamed = std::get_if<NamedType>(&inner->kind)) {
-                if (auto record = m_recordFields.find(resolveRecordName(innerNamed->name));
+                if (auto record = findRecordFields(*innerNamed);
                     record != m_recordFields.end() && record->second.count(name)) {
                     error(
                         diag::Code::FieldOfOptional, loc,
@@ -6987,7 +6988,7 @@ auto TypeChecker::checkCallCore(
         if (!argTypes.empty()) {
             auto receiver = resolve(argTypes[0]);
             if (auto* named = std::get_if<NamedType>(&receiver->kind)) {
-                auto ri = m_recordFields.find(resolveRecordName(named->name));
+                auto ri = findRecordFields(*named);
                 if (ri != m_recordFields.end()) {
                     auto fi = ri->second.find(name);
                     if (fi != ri->second.end()) {
@@ -7132,9 +7133,9 @@ auto TypeChecker::checkCallCore(
             const bool fieldMayExist =
                 std::holds_alternative<TypeVar>(optional ? valueType->kind : argTypes[0]->kind) ||
                 (optional && std::holds_alternative<UnknownType>(valueType->kind)) || structural ||
-                (named && !(isPrimitiveTypeName(named->name) || m_adtVariants.count(named->name) ||
-                            constructorOwner(*named) ||
-                            m_recordFields.count(resolveRecordName(named->name))));
+                (named &&
+                 !(isPrimitiveTypeName(named->name) || m_adtVariants.count(named->name) ||
+                   constructorOwner(*named) || (findRecordFields(*named) != m_recordFields.end())));
             m_unresolvedMethods.push_back(
                 {name, loc, typeToString(receiver), fieldMayExist, receiver});
             auto& imports = m_unresolvedMethodImports.emplace_back(m_declarationImports);
@@ -7526,8 +7527,7 @@ auto TypeChecker::checkCallCore(
             if (!named) {
                 return false;
             }
-            if (auto record = m_recordFields.find(resolveRecordName(named->name));
-                record != m_recordFields.end()) {
+            if (auto record = findRecordFields(*named); record != m_recordFields.end()) {
                 return record->second.count(name) > 0;
             }
             return m_importedInterfaces &&
@@ -8540,7 +8540,7 @@ auto TypeChecker::checkCallCore(
                             }
                         }
                     } else if (auto* named = std::get_if<NamedType>(&actual->kind)) {
-                        auto record = m_recordFields.find(resolveRecordName(named->name));
+                        auto record = findRecordFields(*named);
                         if (record != m_recordFields.end()) {
                             for (const auto& [name, fieldPattern] : pr->fields) {
                                 auto found = record->second.find(name);
@@ -9149,7 +9149,7 @@ auto TypeChecker::checkCallCore(
     // that name (the plan's §11, item 9).
     if (argumentOff && isMethodCall && offIndex == 0 && argTypes.size() == 1 && !argTypes.empty()) {
         if (const auto* named = std::get_if<NamedType>(&resolve(argTypes[0])->kind)) {
-            const auto record = m_recordFields.find(resolveRecordName(named->name));
+            const auto record = findRecordFields(*named);
             if (record != m_recordFields.end() && !record->second.contains(sourceName(name))) {
                 std::vector<std::string> available;
                 for (const auto& [field, fieldType] : record->second) {
@@ -9308,7 +9308,9 @@ auto TypeChecker::ownerOfCall(
 auto TypeChecker::ownTypeAnswers(const std::vector<TypePtr>& argTypes, const std::string& method)
     -> std::optional<OwnAnswer> {
     const auto* named = std::get_if<NamedType>(&resolve(argTypes.front())->kind);
-    if (!named) {
+    if (!named || (!named->shadowsPrelude && m_preludeShadows.contains(named->name))) {
+        // The prelude's type under a name the program reuses is not the
+        // program's: its imported functions answer for it.
         return std::nullopt;
     }
     const auto owner = ownTypeIdentity(named->name);

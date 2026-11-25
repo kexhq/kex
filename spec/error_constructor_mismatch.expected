@@ -1,9 +1,9 @@
-spec/error_constructor_mismatch.kex:3:7: [KEXET-0119]: Error, cannot match `Ok`: expected Result, got (Integer, String)?
+spec/error_constructor_mismatch.kex:3:7: [KEXET-0119]: Error, cannot match `Ok`: expected Result, got Integer?
   |
-3 |   let Ok((v, r)) = Integer.parsePrefix("42")  # prefix returns Optional, Ok is for Result
-  |       ^^^^^^^^^^
-spec/error_constructor_mismatch.kex:4:7: [KEXET-0119]: Error, cannot match `Just`: expected Optional, got Result<Integer, ParseError>
+3 |   let Ok(x)   = "42".to(Integer)     # to returns Optional, Ok is for Result
+  |       ^^^^^
+spec/error_constructor_mismatch.kex:4:7: [KEXET-0119]: Error, cannot match `Just`: expected Optional, got Result<Integer, ParseError<Integer>>
   |
-4 |   let Just(x)   = Integer.parse("42")          # parse returns Result, Just is for Optional
+4 |   let Just(y) = Integer.parse("42")  # parse returns Result, Just is for Optional
   |       ^^^^^^^
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

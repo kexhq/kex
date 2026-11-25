@@ -1704,18 +1704,18 @@ int main() {
 
     describe("BEAM REPL — record rendering", []() {
         it("renders records by name, not as raw tagged tuples", []() {
-            // inspect_string/1 consulted only the VARIANT table, so every
-            // record (prelude ones included) printed as "(:ParseError, ...)".
-            auto out = runBeamRepl("Integer.parse(\"12x\")\n");
-            assertTrue(out.find("ParseError {") != std::string::npos, out);
-            assertTrue(out.find("(:ParseError") == std::string::npos, out);
+            // A record, a prelude one included, prints by name rather than as
+            // the tagged tuple it is on BEAM.
+            auto out = runBeamRepl("DateFormat.parse(\"yyyy-QQ\")\n");
+            assertTrue(out.find("PatternError {") != std::string::npos, out);
+            assertTrue(out.find("(:PatternError") == std::string::npos, out);
         });
 
         it("reports a record's type by name, not Tuple", []() {
             // The checked type also fills in the Ok half, which the value
             // alone cannot know (it only ever holds one side).
             auto out = runBeamRepl("Integer.parse(\"12x\")\n");
-            assertTrue(out.find("Result<Integer, ParseError>") != std::string::npos, out);
+            assertTrue(out.find("Result<Integer, ParseError<Integer>>") != std::string::npos, out);
             assertTrue(out.find("Tuple") == std::string::npos, out);
         });
 

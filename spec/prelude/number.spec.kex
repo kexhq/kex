@@ -134,11 +134,7 @@ describe("Integer.parse and Float.parse") do
 
   it("Integer.parse fails on non-numeric input") do
     assert(Integer.parse("abc").error?)
-    # The payload is a ParseError record, so match it to reach the message.
-    match Integer.parse("abc") do
-      Error(e) => assert(e.message == "invalid integer")
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+    assert(Integer.parse("abc") == Error(NoDigits(0)))
     # `none?` is Optional's; a Result crosses over with optional.
     assert(Integer.parse("abc").optional.none?)
   end
@@ -191,8 +187,8 @@ describe("Integer.parse and Float.parse") do
     # Still a Result, so the failure is still matchable and still carries its
     # reason. This is why `parse` exists next to `to`.
     match Float.parse("xyz") do
-      Error(e) => assert(e.message == "invalid float")
-      Ok(v) => assert(false, "expected Error, got ${v}")
+      Error(NoDigits(at)) => assert(at == 0)
+      other => assert(false, "expected NoDigits, got ${other}")
     end
   end
 
@@ -202,18 +198,54 @@ describe("Integer.parse and Float.parse") do
     assert(255.to(String, radix: 16) == Just("ff"))
   end
 
-  it("Integer.parsePrefix parses leading integer") do
-    match Integer.parsePrefix("42abc") do
-      Just((n, rest)) => do
-        assert(n == 42)
-        assert(rest == "abc")
-      end
-      None => assert(false, "expected Just")
-    end
+  it("answers the number and what follows it as Trailing") do
+    assert(Integer.parse("42abc") == Error(Trailing(42, "abc")))
+    assert(Integer.parse("4.5") == Error(Trailing(4, ".5")))
+    assert(Float.parse("3.14abc") == Error(Trailing(3.14, "abc")))
+    assert(Float.parse("1.") == Error(Trailing(1.0, ".")))
   end
 
-  it("Integer.parsePrefix returns None when no digits") do
-    assert(Integer.parsePrefix("abc") == None)
+  it("answers NoDigits where a digit was expected") do
+    assert(Integer.parse("") == Error(NoDigits(0)))
+    assert(Integer.parse(" 42") == Error(NoDigits(0)))
+    assert(Integer.parse("-") == Error(NoDigits(1)))
+    assert(Float.parse("e10") == Error(NoDigits(0)))
+  end
+
+  it("reads a sign") do
+    assert(Integer.parse("-7") == Ok(-7))
+    assert(Integer.parse("+7") == Ok(7))
+    assert(Float.parse("-0.25") == Ok(-0.25))
+  end
+
+  it("reads exponents") do
+    assert(Float.parse("1e3") == Ok(1000.0))
+    assert(Float.parse("1.5E-2") == Ok(0.015))
+    assert(Float.parse("2e+1") == Ok(20.0))
+    assert(Float.parse("1e") == Error(Trailing(1.0, "e")))
+  end
+
+  it("answers OutOfRange for a Float too large to hold") do
+    assert(Float.parse("1e999") == Error(OutOfRange))
+    assert(Number.parse("1e999") == Error(OutOfRange))
+  end
+
+  it("reads integers of any size") do
+    assert(Integer.parse("123456789012345678901234567890") == Ok(123456789012345678901234567890))
+  end
+
+  it("reads a radix") do
+    assert(Integer.parse("ff", radix: 16) == Ok(255))
+    assert(Integer.parse("FF", radix: 16) == Ok(255))
+    assert(Integer.parse("-1010", radix: 2) == Ok(-10))
+    assert(Integer.parse("12z", radix: 16) == Error(Trailing(18, "z")))
+    assert(Integer.parse("1", radix: 1) == Error(BadRadix(1)))
+    assert(Integer.parse("1", radix: 37) == Error(BadRadix(37)))
+  end
+
+  it("says why as a message") do
+    assert(Integer.parse("abc").mapError(~message) == Error("expected a digit at 0"))
+    assert(Integer.parse("10 USD").mapError(~message) == Error("unexpected \" USD\" after the number"))
   end
 end
 
@@ -221,36 +253,15 @@ describe("Float.parse — decimal separator") do
   it("Float.parse stops at a comma, like the dot-only float syntax") do
     # `1,44` is not a Kex float literal, so it does not parse as one: the
     # comma ends the number exactly where the dot-only parser stops.
-    match Float.parse("1,44") do
-      Error(e) => do
-        assert(e.message == "trailing characters after float")
-        assert(e.position == 1)
-        assert(e.value == 1.0)
-        assert(e.rest == ",44")
-      end
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+    assert(Float.parse("1,44") == Error(Trailing(1.0, ",44")))
   end
 
-  it("Number.parse rejects a comma decimal separator") do
-    match Number.parse("1,44") do
-      Error(e) => assert(e.message == "invalid number")
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+  it("Number.parse stops at a comma decimal separator") do
+    assert(Number.parse("1,44") == Error(Trailing(1, ",44")))
   end
 
   it("to(Float) answers None for a comma decimal separator") do
     assert("1,44".to(Float) == None)
-  end
-
-  it("Float.parsePrefix stops at a comma") do
-    match Float.parsePrefix("1,44") do
-      Just((f, rest)) => do
-        assert(f == 1.0)
-        assert(rest == ",44")
-      end
-      None => assert(false, "expected Just")
-    end
   end
 end
 
@@ -310,22 +321,6 @@ describe("Float — floor, ceil, round") do
     assert(3.7.round == 4)
     assert(3.2.round == 3)
     assert((-1.5).round == -2)
-  end
-end
-
-describe("Float.parsePrefix") do
-  it("Float.parsePrefix parses leading float") do
-    match Float.parsePrefix("3.14abc") do
-      Just((f, rest)) => do
-        assert(f == 3.14)
-        assert(rest == "abc")
-      end
-      None => assert(false, "expected Just")
-    end
-  end
-
-  it("Float.parsePrefix returns None when no digits") do
-    assert(Float.parsePrefix("abc") == None)
   end
 end
 

@@ -2211,14 +2211,34 @@ collection does not: `[1, 2.0]` is an `[Integer | Float]` (see Lists), and a
 
 | Function | Returns | Description |
 |---|---|---|
-| `Integer.parse(s)` | `Result<Integer, ParseError>` | Parse full string |
-| `Integer.parsePrefix(s)` | `(Integer, String)?` | Parse prefix, return value + rest |
-| `Float.parse(s)` | `Result<Float, ParseError>` | |
-| `Float.parsePrefix(s)` | `(Float, String)?` | |
-| `Number.parse(s)` | `Result<Number, ParseError>` | Integer or Float |
+| `Integer.parse(s, radix: 10, culture: Culture.DEFAULT)` | `Result<Integer, ParseError<Integer>>` | Radix 2 to 36 |
+| `Float.parse(s, culture: Culture.DEFAULT)` | `Result<Float, ParseError<Float>>` | Fraction and exponent optional |
+| `Number.parse(s, culture: Culture.DEFAULT)` | `Result<Number, ParseError<Number>>` | A fraction or exponent makes a Float |
+
+A failure says why as a case of `ParseError<T>`:
+
+| Case | When |
+|---|---|
+| `NoDigits(at)` | No digit where one was expected: `""`, `"abc"`, `"-"` (at 1) |
+| `Trailing(value, rest)` | A number, then more text: `Integer.parse("10 USD")` is `Trailing(10, " USD")` |
+| `BadGrouping(at)` | A digit group of the wrong size: `"1 50"` in Hungarian |
+| `OutOfRange` | Too large for the type: `Float.parse("1e999")` |
+| `BadRadix(radix)` | A radix outside 2 to 36 |
+| `BadCulture` | A culture whose number settings are unusable |
+
+Positions count characters. `e.message` gives the reason as a sentence.
+
+```kex
+match Integer.parse(text) do
+  Ok(n) => Money(n, Currency.DEFAULT)
+  Error(Trailing(n, unit)) => Money(n, unit.trim)
+  Error(e) => die(e.message)
+end
+```
 
 Parsing is dot-only by default; the same functions take an explicit
-`culture:` for localized text. `Culture` is opt-in — start with
+`culture:` for localized text, whose group separator is accepted once one
+appears: digits without separators read in every culture. `Culture` is opt-in — start with
 `using Culture` and resolve a preset with `Culture.of`:
 `Float.parse("1,44", culture: Culture.of("hu-HU").or(Culture.DEFAULT))`
 answers `Ok(1.44)`, while `Float.parse("1,44")` is an `Error`. Printing

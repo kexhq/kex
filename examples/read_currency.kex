@@ -33,11 +33,11 @@ record Money do
 end
 
 module Money do
-  type MoneyError = NoCurrency(Float) | UnsupportedCurrency(String)
-  let fromValue(value: String) -> Money or! MoneyError do
-    match Float.parse(value) do
+  type MoneyError = NoAmount(String) | NoCurrency(Integer) | UnsupportedCurrency(String)
+  let fromValue(text: String) -> Money or! MoneyError do
+    match Integer.parse(text) do
       Ok(amount) => Error(NoCurrency(amount))
-      Error(ParseError { value, rest }) => do
+      Error(Trailing(value, rest)) => do
         let rem = rest.trim
         let curr = Currency.fromCode(rem)
 
@@ -45,6 +45,7 @@ module Money do
 
         return Ok(Money { value, currency: curr.try.code })
       end
+      Error(_) => Error(NoAmount(text))
     end
   end
 end

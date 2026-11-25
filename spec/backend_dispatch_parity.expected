@@ -6,7 +6,7 @@ true
 -- a local record shadows a same-named prelude one --
 /admin/users
 local
-invalid float
+`Q` is not a date or time field; quote literal text, as in `'at'`
 -- a top-level constant beats an imported accessor --
 42
 -- a Range answers the list questions, like on BEAM --

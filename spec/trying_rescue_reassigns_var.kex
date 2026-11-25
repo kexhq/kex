@@ -29,7 +29,7 @@ let multiArm(text: String) -> String do
   trying do
     note = "ok:${Integer.parse(text).try}"
   rescue
-    ParseError { message } => note = "parse error: ${message}"
+    NoDigits(at) => note = "no digit at ${at}"
     _ => note = "other"
   end
   return note

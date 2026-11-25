@@ -26,14 +26,15 @@ type Optional<X> = Just(X) | None
 #
 # Use +Result+ over +Optional+ when the *reason* for failure matters to the
 # caller. Parsing is the standard example: +"12x".to(Integer)+ answers +None+,
-# while +Integer.parse("12x")+ answers an +Error+ that says where it stopped.
+# while +Integer.parse("12x")+ answers +Error(Trailing(12, "x"))+: why it
+# stopped, as a case to match.
 # @example
 #   Integer.parse("42").or(0)     # => 42
 #   Integer.parse("4x").or(0)     # => 0
 #
 #   match Integer.parse(input) do
 #     Ok(n)    => IO.printLine("got ${n}")
-#     Error(e) => IO.printError("bad number: ${e}")
+#     Error(e) => IO.printError("bad number: ${e.message}")
 #   end
 type Result<X, E> = Ok(X) | Error(E)
 
@@ -455,7 +456,7 @@ end
 # a conversion failed is usually implied by the types alone. When the reason
 # carries information (where a parse gave up and on what) reach for
 # +Integer.parse+ or +Float.parse+, which answer with
-# +Result<_, ParseError>+. So: +to+ for every day, +parse+ when the failure
+# +Result<_, ParseError<_>>+, one case per reason. So: +to+ for every day, +parse+ when the failure
 # needs handling.
 #
 # @param t [Type] the target type

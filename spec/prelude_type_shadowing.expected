@@ -1,0 +1,6 @@
+line 3: own
+12 then x
+expected a digit at 0
+unclosed at 4
+empty
+5: `Q` is not a date or time field; quote literal text, as in `'at'`
