@@ -2,6 +2,7 @@
 build/
 build-wasm/
 build-metamorphic-coverage/
+build-sanitize/
 out/
 node_modules/
 *.vsix

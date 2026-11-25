@@ -15,6 +15,7 @@ auto mixHash(uint64_t seed, uint64_t value) -> uint64_t {
 }
 
 auto hashValue(const ValuePtr& value) -> uint64_t {
+    ensureStackFor("hash");
     if (!value) {
         return 0;
     }

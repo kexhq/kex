@@ -91,7 +91,7 @@ auto failOnErrorResult(const kex::interpreter::ValuePtr& outcome, const std::str
     const auto* variant =
         outcome ? std::get_if<kex::interpreter::VariantValue>(&outcome->data) : nullptr;
     if (variant && variant->tag == "Error" && variant->parentType == "Result") {
-        throw std::runtime_error(
+        throw ProgramError(
             ".try propagated out of the " + where + ": " +
             (variant->args.empty() ? std::string("Error") : variant->args[0]->toString()));
     }
@@ -225,7 +225,7 @@ auto Evaluator::registerTestBuiltins() -> void {
                 try {
                     auto* hookFn = std::get_if<FunctionValue>(&(*hook)->data);
                     if (!hookFn || !hookFn->native) {
-                        throw std::runtime_error("after(:all) requires a block");
+                        throw ProgramError("after(:all) requires a block");
                     }
                     failOnErrorResult(hookFn->native({}), "after(:all) hook");
                 } catch (...) {
@@ -248,7 +248,7 @@ auto Evaluator::registerTestBuiltins() -> void {
 
     auto registerHook = [this](std::vector<ValuePtr> args, bool isAfter) -> ValuePtr {
         if (m_testHookScopes.empty()) {
-            throw std::runtime_error(
+            throw ProgramError(
                 std::string(isAfter ? "after" : "before") + " must be declared inside describe");
         }
         auto scope = std::string("each");
@@ -256,20 +256,19 @@ auto Evaluator::registerTestBuiltins() -> void {
         if (args.size() == 2) {
             auto* atom = std::get_if<AtomValue>(&args[0]->data);
             if (!atom || (atom->name != "each" && atom->name != "all")) {
-                throw std::runtime_error("test hook scope must be :each or :all");
+                throw ProgramError("test hook scope must be :each or :all");
             }
             scope = atom->name;
             blockIndex = 1;
         }
         if (args.size() <= blockIndex ||
             !std::holds_alternative<FunctionValue>(args[blockIndex]->data)) {
-            throw std::runtime_error(
-                std::string(isAfter ? "after" : "before") + " requires a block");
+            throw ProgramError(std::string(isAfter ? "after" : "before") + " requires a block");
         }
         if (scope == "all" && !isAfter) {
             auto* fn = std::get_if<FunctionValue>(&args[blockIndex]->data);
             if (!fn || !fn->native) {
-                throw std::runtime_error("before(:all) requires a block");
+                throw ProgramError("before(:all) requires a block");
             }
             failOnErrorResult(fn->native({}), "before(:all) hook");
             return Value::unit();
@@ -343,7 +342,7 @@ auto Evaluator::registerTestBuiltins() -> void {
             auto run = [&](const ValuePtr& hook) {
                 auto* hookFn = std::get_if<FunctionValue>(&hook->data);
                 if (!hookFn || !hookFn->native) {
-                    throw std::runtime_error("test hook requires a block");
+                    throw ProgramError("test hook requires a block");
                 }
                 failOnErrorResult(hookFn->native({}), "test hook");
             };
@@ -421,7 +420,7 @@ auto Evaluator::registerTestBuiltins() -> void {
         if (args.size() > 1) {
             msg += ": " + args[1]->toString();
         }
-        throw std::runtime_error(msg);
+        throw ProgramError(msg);
     });
 }
 

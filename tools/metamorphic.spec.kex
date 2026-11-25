@@ -138,4 +138,34 @@ describe("metamorphic") do
       seed += 1
     end
   end
+
+  it("puts a program back together from its tokens, trivia and all") do
+    let source = "# head\nlet x = 16   # tail\nlet y = x + 2\n"
+    let tokens = tokensOf(source)
+    assert(withToken(tokens, 1, "let") == source)
+    assert(withToken(tokens, 1, "var").startsWith?("# head\nvar x = 16   # tail"))
+  end
+
+  it("rewrites one token the way each syntax-shaped mutation does") do
+    let tokens = tokensOf("let x = 16\nlet y = x + 2.5\nIO.printLine(y)\n")
+    let at = { |text| indicesOf(tokens.map(&.text)).find { |i| textAt(tokens, i) == text }.or(-1) }
+    assert(letAsMinus(tokens, at("=")) == Just("-"))
+    assert(swappedOperator(tokens, at("+")) == Just("-"))
+    assert(numberAsZero(tokens, at("16")) == Just("0"))
+    assert(numberAsZero(tokens, at("2.5")) == Just("0.0"))
+    assert(safeNavigation(tokens, at(".")) == Just("?."))
+    assert(insertedTry(tokens, at(")")) == Just(").try"))
+    assert(duplicatedToken(tokens, at("16")) == Just("16 16"))
+    assert(deletedToken(tokens, at("16")) == Just(""))
+    assert(letAsMinus(tokens, at("+")) == None)
+  end
+
+  it("finds a site for every token mutation") do
+    let files = corpus
+    var seed = 0
+    while seed < tokenMutations.count do
+      assert(tokenMutationCase(seed, files).set?, "no site for token mutation ${seed}")
+      seed += 1
+    end
+  end
 end

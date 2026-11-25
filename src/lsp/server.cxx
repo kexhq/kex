@@ -3970,7 +3970,7 @@ private:
                 // The `make` block the cursor is in, from the parsed program: the
                 // last one starting before it. `localReceiverTypes` holds one
                 // `new` for the whole file, so `@` in `make Vector` offered the
-                // fields of a `make Config` further down (`make lsp-sweep`).
+                // fields of a `make Config` further down (`make fuzz-lsp`).
                 if (const auto* parsed = m_db.fileState(found->second.path)) {
                     int nearest = 0;
                     const auto cursorLine = static_cast<int>(params.position.line + 1);

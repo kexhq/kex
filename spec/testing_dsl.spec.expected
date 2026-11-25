@@ -22,4 +22,4 @@ a group with one passing and one failing test
 nesting
   indents one level per describe
     ✓ still runs
-Internal error: assertion failed: assert outside of it propagates as an uncaught error
+Error: assertion failed: assert outside of it propagates as an uncaught error

@@ -4,16 +4,21 @@
 # compiled with `kex --compile` into the running program and calling it,
 # which a program used to do with `BEAM.code.load_abs`, `BEAM.rpc.call` and
 # checking raw tuples. Every failure is an `Error`, not a crash.
+#
+# It compiles with the compiler under test, which the spec targets pass as
+# KEX_UNDER_TEST (`build/kex` when run by hand), into a directory of its own:
+# another build's compiler, or another run sharing the directory, made it fail.
 
 main do
-  let root = "${FS.Directory.current}/.kex_spec_load"
+  let root = "${FS.Directory.temporary}/kex_spec_load_${Random.integer(0..999999999)}"
+  let kex = ENV.get("KEX_UNDER_TEST", "${FS.Directory.current}/build/kex")
   FS.Directory.deleteAll(root)
   FS.Directory.create("${root}/out")
   FS.File.write("${root}/theme_3f2a.kex", `
     let greet(name: String) -> String = "Hello, ${name}!"
     let divide(x: Integer) -> Integer = 10 / x
   `)
-  let build = Process.run("${FS.Directory.current}/build/kex",
+  let build = Process.run(kex,
     ["--compile", "-o", "${root}/out", "${root}/theme_3f2a.kex"]).try
   IO.printLine("compiled: ${build.exitCode}")
 

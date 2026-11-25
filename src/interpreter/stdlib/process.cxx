@@ -196,7 +196,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         for (size_t offset = 0; offset < bytes.size(); offset += 256) {
             const auto chunk = std::min<size_t>(256, bytes.size() - offset);
             if (::getentropy(bytes.data() + offset, chunk) != 0)
-                throw std::runtime_error("Random.secureBytes: no entropy available");
+                throw ProgramError("Random.secureBytes: no entropy available");
         }
 #endif
         return Value::binary(std::move(bytes));

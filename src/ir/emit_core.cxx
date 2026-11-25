@@ -2,6 +2,8 @@
 #include "module_passes.hxx"
 #include "../pass/options.hxx"
 #include "walk.hxx"
+#include "lower.hxx"
+#include "../common/stack_guard.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
@@ -442,6 +444,9 @@ struct Emitter {
     }
 
     auto emitPattern(const Pattern& p) -> std::string {
+        if (kex::stack::nearEnd()) {
+            throw LowerError(diag::Code::NestedTooDeepToCompile);
+        }
         // `This = {'B', N}`: the whole value bound beside its parts.
         if (!p.alias.empty()) {
             return erlVar(p.alias) + " = " + emitPatternShape(p);
@@ -575,6 +580,10 @@ struct Emitter {
     }
 
     auto emit(const ExprPtr& e) -> std::string {
+        // Past what the stack holds: refused like lowering refuses it.
+        if (kex::stack::nearEnd()) {
+            throw LowerError(diag::Code::NestedTooDeepToCompile);
+        }
         return std::visit(
             [&](const auto& n) -> std::string {
                 using T = std::decay_t<decltype(n)>;

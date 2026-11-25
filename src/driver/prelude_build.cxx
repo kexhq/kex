@@ -11,6 +11,8 @@
 #include "../hir/hir.hxx"
 #include "../ir/emit_core.hxx"
 #include "../ir/module_passes.hxx"
+#include "../ir/verify.hxx"
+#include <cstdio>
 #include "../ir/passes/specialize.hxx"
 #include "../ir/serialize.hxx"
 #include "../pass/options.hxx"
@@ -177,6 +179,14 @@ auto compilePreludeCore(
             PreludeBuildModule built;
             pipeline.run(modules[i], analyses);
             analyses.clear(modules[i]);
+            // The standard library is checked as a program is (src/ir/verify.hxx).
+            if (const auto problems = kex::ir::verify(modules[i]); !problems.empty()) {
+                for (const auto& problem : problems) {
+                    std::fprintf(
+                        stderr, "IR verify: %s: %s\n", modules[i].name.c_str(), problem.c_str());
+                }
+                return false;
+            }
             built.emitted = kex::ir::emitCore(modules[i]);
             std::ofstream out(dir + "/" + built.emitted.moduleName + ".core");
             if (!out) {

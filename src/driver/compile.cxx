@@ -158,29 +158,33 @@ auto runCompiledBeam(
     // A prebuilt .beam carries no evidence of being a spec — the file name it
     // was compiled from is gone — so mocks here are strictly opt-in
     // (issue #144).
-    std::string mainCall = beamOtpFloorGuard() +
-                           "io:setopts(standard_io, [{encoding, unicode}]), "
-                           "io:setopts(standard_error, [{encoding, unicode}]), " +
-                           (options.allowMocks ? "kex_test:allow_mocks(), " : "") +
-                           beamTestGate(options.testReportMode, options.testFilters) +
-                           "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
-                           "\"), "
-                           "code:load_binary('" +
-                           moduleName + "',\"" + absBeamPath +
-                           "\",_Bin), "
-                           "case lists:member({main,1},erlang:get_module_info('" +
-                           moduleName +
-                           "',exports)) of "
-                           "true -> '" +
-                           moduleName +
-                           "':main([unicode:characters_to_binary(A) || A <- "
-                           "init:get_plain_arguments()]); "
-                           "false -> '" +
-                           moduleName +
-                           "':main() end of "
-                           "Result -> halt() "
-                           "catch _:Reason:_ -> io:format(standard_error, \"Internal error: "
-                           "runtime error: ~p~n\", [Reason]), halt(1) end";
+    std::string mainCall =
+        beamOtpFloorGuard() +
+        "io:setopts(standard_io, [{encoding, unicode}]), "
+        "io:setopts(standard_error, [{encoding, unicode}]), " +
+        (options.allowMocks ? "kex_test:allow_mocks(), " : "") +
+        beamTestGate(options.testReportMode, options.testFilters) +
+        "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
+        "\"), "
+        "code:load_binary('" +
+        moduleName + "',\"" + absBeamPath +
+        "\",_Bin), "
+        "case lists:member({main,1},erlang:get_module_info('" +
+        moduleName +
+        "',exports)) of "
+        "true -> '" +
+        moduleName +
+        "':main([unicode:characters_to_binary(A) || A <- "
+        "init:get_plain_arguments()]); "
+        "false -> '" +
+        moduleName +
+        "':main() end of "
+        "Result -> halt() "
+        "catch _:Reason:_ -> case Reason of "
+        "_R when is_binary(_R); is_list(_R) -> "
+        "io:format(standard_error, \"Error: ~ts~n\", [_R]); "
+        "_R -> io:format(standard_error, \"Internal error: runtime error: ~p~n\", [_R]) "
+        "end, halt(1) end";
     // Erlang prepends each -pa directory, so add the toolchain first and the
     // compiled unit last. A source module intentionally shadows a stdlib
     // module with the same public name (for example a user-defined `Math`).
@@ -406,11 +410,12 @@ auto runBuiltProgram(
                     "code:load_binary('" +
                     emitted.moduleName + "',\"" + absBeam + "\"," + binaryVar + "), ";
     }
-    // Kex runtime errors carry a String (binary/charlist) reason
-    // printed verbatim; anything else (raw BEAM errors like
-    // badarg tuples) falls back to ~p.
+    // Kex runtime errors carry a String (binary/charlist) reason: the
+    // program's own failure, said as `Error:` as the walker says it.
+    // Anything else (a raw BEAM error, a badarg tuple) is what the
+    // checker or codegen should have stopped: an internal error.
     std::string reasonFmt = "case Reason of _R when is_binary(_R); is_list(_R) -> "
-                            "io:format(standard_error, \"Internal error: ~ts~n\", [_R]); "
+                            "io:format(standard_error, \"Error: ~ts~n\", [_R]); "
                             "_R -> io:format(standard_error, \"Internal error: ~p~n\", [_R]) "
                             "end";
     // Same UTF-8 pinning as the `.beam` runner above.

@@ -1,5 +1,6 @@
 // Patterns methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/stack_guard.hxx"
 
 #include <algorithm>
 
@@ -374,6 +375,9 @@ auto Lowering::withTypeGuards(ExprPtr existing) -> std::optional<ExprPtr> {
 }
 
 auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
+    if (kex::stack::nearEnd()) {
+        throw LowerError(diag::Code::NestedTooDeepToCompile);
+    }
     if (!p) {
         auto w = std::make_unique<Pattern>();
         w->kind = PatKind::Wild;

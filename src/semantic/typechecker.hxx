@@ -1601,6 +1601,11 @@ private:
     // A unary `-` the operand's type declares (taking only the receiver), its
     // call decided on `expr`; None for any other operand.
     auto unaryOperatorResult(const ast::Expr& expr, const TypePtr& operand) -> TypePtr;
+    // Whether the stack is nearly spent (src/common/stack_guard.hxx): then the
+    // program is reported, once, as nested too deeply to check, and the caller
+    // stops recursing.
+    auto outOfStack(SourceLocation location) -> bool;
+    bool m_reportedOutOfStack = false;
     auto traitOperatorResult(
         const TypePtr& receiver, const std::string& op, const TypePtr& right, SourceLocation loc)
         -> TypePtr;

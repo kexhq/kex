@@ -1,8 +1,11 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build format format-check test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench-net
+.PHONY: build-tey spec-tey build format format-check test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz-differential bench-net
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
+# A spec that runs the compiler itself (kex_load_beam) runs this one: the
+# compiler under test, not whatever `build/kex` happens to be.
+export KEX_UNDER_TEST = $(abspath $(KEX))
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 STDLIBDIR ?= $(PREFIX)/share/kex/stdlib
@@ -66,14 +69,19 @@ help:
 	@echo "                    check it against the tree-walker's golden output."
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
-	@echo "  make test-fuzz    Test the fuzzer generator and failure handling"
-	@echo "  make test-metamorphic  Gate the metamorphic relations that pass"
-	@echo "  make metamorphic-search  Relations and type-breaking spec mutations, fresh seed"
-	@echo "  make lsp-sweep           Language-server answers checked against the checker's"
-	@echo "  make metamorphic-coverage  The search with LLVM compiler coverage"
-	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
-	@echo "                    programs (tools/fuzz.kex). Override with"
-	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS."
+	@echo "  make fuzz-differential  Walker vs BEAM on generated programs (tools/fuzz.kex);"
+	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS"
+	@echo "  make fuzz-metamorphic   Relations, type- and syntax-breaking spec mutations,"
+	@echo "                    fresh seed (METAMORPHIC_SEED / METAMORPHIC_CASES)"
+	@echo "  make fuzz-metamorphic-coverage  The metamorphic search with LLVM coverage"
+	@echo "  make fuzz-garbage       Nonsense input: kex must fail cleanly"
+	@echo "                    (GARBAGE_SEED / GARBAGE_CASES)"
+	@echo "  make fuzz-lsp           Language-server answers checked against the checker's"
+	@echo "  make test-fuzz          Test the differential fuzzer's generator"
+	@echo "  make test-metamorphic   Gate the metamorphic relations that pass"
+	@echo "  make test-garbage       Test the garbage fuzzer's inputs and oracle"
+	@echo "  make test-sanitize      The tests, the specs and a short fuzz with ASan + UBSan"
+	@echo "                    (builds build-sanitize/ with KEX_SANITIZE=address,undefined)"
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
@@ -180,6 +188,28 @@ test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-ex
           spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json \
           verify-hir-stdlib build-tey
 
+# The compiler built with AddressSanitizer and UBSan (KEX_SANITIZE), in its
+# own tree: the C++ tests and the spec suites on both backends, then a short
+# run of each fuzzer that feeds it input, so a use-after-free or a read past
+# an end is reported where it happens. Optimized, to keep the suites
+# bearable; frame pointers kept for the reports. Leak checking is off: the
+# interpreter keeps its values to the end on purpose.
+.PHONY: build-sanitize test-sanitize
+SANITIZE_BUILD_DIR ?= build-sanitize
+SANITIZE_KEX = $(SANITIZE_BUILD_DIR)/kex
+export ASAN_OPTIONS ?= detect_leaks=0:abort_on_error=0:halt_on_error=1
+export UBSAN_OPTIONS ?= print_stacktrace=1:halt_on_error=1
+build-sanitize:
+	@cmake -B $(SANITIZE_BUILD_DIR) -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DKEX_SANITIZE=address,undefined > /dev/null
+	@cmake --build $(SANITIZE_BUILD_DIR) $(CMAKE_BUILD_JOBS)
+
+test-sanitize: build-sanitize
+	@$(MAKE) --no-print-directory -o build BUILD_DIR=$(SANITIZE_BUILD_DIR) test spec spec-beam
+	@"$(SANITIZE_KEX)" --run-walker --no-colors -- tools/garbage.kex "$(GARBAGE_SEED)" 60 "$(SANITIZE_KEX)" "$(GARBAGE_OUTDIR)" 60000
+	@"$(SANITIZE_KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" 30 "$(SANITIZE_KEX)" "$(METAMORPHIC_OUTDIR)" 60000 search
+	@"$(SANITIZE_BUILD_DIR)/lsp_sweep" --kex "$(SANITIZE_KEX)" --out "$(LSP_SWEEP_OUTDIR)" --checks garbage,crash --timeout 300 $(wildcard examples/*.kex)
+
 # The checker decides every call the standard library makes: none is left
 # for a backend to work out (`--verify-hir`, src/hir/).
 .PHONY: verify-hir-stdlib
@@ -212,15 +242,30 @@ FUZZ_SEED ?= 42
 FUZZ_CASES ?= 400
 FUZZ_OUTDIR ?= /tmp/kex-fuzz
 FUZZ_BUDGET_MS ?= 15000
-fuzz: build
+fuzz-differential: build
 	@"$(KEX)" --run-walker --no-colors -- tools/fuzz.kex "$(FUZZ_SEED)" "$(FUZZ_CASES)" "$(KEX)" "$(FUZZ_OUTDIR)" "$(FUZZ_BUDGET_MS)"
+
+# Garbage fuzzer (tools/garbage.kex): token soup, cut and spliced programs,
+# raw bytes. Every step must answer in time, exit 0 or 1, and report what is
+# wrong as a located diagnostic. A fresh seed from the clock unless
+# GARBAGE_SEED is given; the run prints it, so a finding replays.
+.PHONY: fuzz-garbage test-garbage
+GARBAGE_SEED ?=
+GARBAGE_CASES ?= 100
+GARBAGE_OUTDIR ?= /tmp/kex-garbage
+GARBAGE_BUDGET_MS ?= 15000
+fuzz-garbage: build
+	@"$(KEX)" --run-walker --no-colors -- tools/garbage.kex "$(GARBAGE_SEED)" "$(GARBAGE_CASES)" "$(KEX)" "$(GARBAGE_OUTDIR)" "$(GARBAGE_BUDGET_MS)"
+
+test-garbage: build
+	@"$(KEX)" --run-walker --no-colors tools/garbage.spec.kex
 
 # Metamorphic checks (tools/metamorphic.kex). The gate runs the fixed
 # relations that pass. The search runs every relation and mutates the spec
 # programs the way a type error would: the checker must reject the result,
 # or it must run alike on both backends. A fresh seed from the clock unless
 # METAMORPHIC_SEED is given; the run prints it, so a finding replays.
-.PHONY: test-metamorphic metamorphic-search metamorphic-coverage
+.PHONY: test-metamorphic fuzz-metamorphic fuzz-metamorphic-coverage
 METAMORPHIC_OUTDIR ?= /tmp/kex-metamorphic
 METAMORPHIC_SEED ?=
 METAMORPHIC_CASES ?= 40
@@ -229,10 +274,10 @@ test-metamorphic: build
 	@"$(KEX)" --run-walker --no-colors tools/metamorphic.spec.kex
 	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex 0 10 "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 gate
 
-metamorphic-search: build
+fuzz-metamorphic: build
 	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" "$(METAMORPHIC_CASES)" "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 "$(METAMORPHIC_MODE)"
 
-metamorphic-coverage:
+fuzz-metamorphic-coverage:
 	@JOBS="$(JOBS)" METAMORPHIC_SEED="$(METAMORPHIC_SEED)" \
 		METAMORPHIC_CASES="$(METAMORPHIC_CASES)" \
 		bash tools/metamorphic_coverage.sh
@@ -242,11 +287,11 @@ metamorphic-coverage:
 # checker's — a hover type, a name completion should offer or must not, the
 # diagnostics, a definition target. A search, not a gate; one finding per
 # line, so two runs diff. LSP_SWEEP_FILES picks the files.
-.PHONY: lsp-sweep
+.PHONY: fuzz-lsp
 LSP_SWEEP_FILES ?= $(wildcard examples/*.kex)
 LSP_SWEEP_OUTDIR ?= /tmp/kex-lsp-sweep
 LSP_SWEEP_SEED ?= 1
-lsp-sweep: build
+fuzz-lsp: build
 	@"$(BUILD_DIR)/lsp_sweep" --kex "$(KEX)" --out "$(LSP_SWEEP_OUTDIR)" --seed "$(LSP_SWEEP_SEED)" $(LSP_SWEEP_FILES)
 
 SHELL := /bin/bash

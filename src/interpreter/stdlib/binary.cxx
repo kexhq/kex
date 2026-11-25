@@ -97,7 +97,7 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         }
         const auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) {
-            throw std::runtime_error("Binary.fromBytes expected [Byte]");
+            throw ProgramError("Binary.fromBytes expected [Byte]");
         }
         bytes.reserve(list->elements.size());
         for (const auto& value : list->elements) {

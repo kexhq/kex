@@ -869,6 +869,9 @@ auto TypeChecker::expectedBlockHints(const ast::Expr& expr) -> std::vector<TypeP
 }
 
 auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
+    if (outOfStack(expr.location)) {
+        return Type::unknown();
+    }
     if (m_recordsNames) {
         recordNames(expr);
     }

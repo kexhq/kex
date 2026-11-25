@@ -11,7 +11,7 @@
 #   a finding: the checker let a wrong program through.
 #
 # make test-metamorphic gates the relations that pass. make
-# metamorphic-search runs the relations and the mutations from a seed: a
+# fuzz-metamorphic runs the relations and the mutations from a seed: a
 # fresh one from the clock unless METAMORPHIC_SEED is given, printed first so
 # a run replays. It skips nothing: a relation or mutation that finds a bug
 # fails the search until the bug is fixed. Every case and what each step
@@ -1032,7 +1032,11 @@ end
 # A mutated spec: refused by the checker, or run alike on both backends
 # without crashing. The spec suite has already run the original.
 foul mutationHandled?(run: Run, seed: Integer) -> Bool do
-  if let Just(item) = mutationCase(seed, run.files)
+  # Type-error-shaped and syntax-shaped (tokens) by turns.
+  let half = seed / 2
+  let found = seed % 2 == 0 then mutationCase(half, run.files)
+                            else tokenMutationCase(half, run.files)
+  if let Just(item) = found
     return mutationVerdict(run, seed, item)
   end
   IO.printLine("SKIP mutation ${seed}: no site in the corpus")
@@ -1046,7 +1050,15 @@ foul mutationVerdict(run: Run, seed: Integer, item: MutationCase) -> Bool do
   FS.File.write(after, item.changed).try
   let label = "mutation ${seed}: ${item.name} in ${item.path}"
   let check = invoke(run, after, "-C", "spec")
-  return passes(label, "rejected") if !succeeded?(check)
+  # Refused, cleanly: a checker that crashes on the mutant refused nothing.
+  if !succeeded?(check) && !compilerCrash?(check)
+    return passes(label, "rejected")
+  end
+  if compilerCrash?(check)
+    let header = findingHeader(seed, item, "the checker crashed")
+    let details = [...header, ...detailsOf([("check", check)])]
+    return fails("${label}: the checker crashed", root, details)
+  end
   let runs = bothBackends(run, [after], "spec")
   let crashed = runs.any? { |_, result| typeCrash?(result) }
   # Both backends failing alike is the program's own error (an index out of
@@ -1055,18 +1067,137 @@ foul mutationVerdict(run: Run, seed: Integer, item: MutationCase) -> Bool do
   let agreed = succeeding == 0 || runsAgree?(runs)
   return passes(label, "accepted, runs") if !crashed && agreed
   let verdict = crashed then "accepted by the checker, then crashed" else "backends disagree"
-  let header = [
-    "seed=${seed}",
-    "rule=${item.name}",
-    "file=${item.path}",
-    "site=${item.site}",
-    "verdict=${verdict}"
-  ]
   let steps = [("check", check), ...runs]
-  fails("${label}: ${verdict}", root, [...header, ...detailsOf(steps)])
+  fails("${label}: ${verdict}", root, [...findingHeader(seed, item, verdict), ...detailsOf(steps)])
 rescue |error|
   IO.printError("metamorphic: cannot write mutation ${seed}: ${error}")
   return false
+end
+
+# What a mutation finding.txt starts with: the case, and what was wrong.
+let findingHeader(seed: Integer, item: MutationCase, verdict: String) -> [String] do
+  let named = ["seed=${seed}", "rule=${item.name}", "file=${item.path}"]
+  [...named, "site=${item.site}", "verdict=${verdict}"]
+end
+
+# --- Token mutations -----------------------------------------------------------
+
+# A syntax-shaped change: one token of a spec program rewritten, the way a
+# typo is (kexhq/kex#708). `let X - 16` for `let X = 16` parsed, checked
+# clean and failed in lowering; nothing type-shaped writes that.
+record TokenMutation do
+  name    : String
+  # What the token at the index becomes in the program's tokens, or None
+  # where this mutation does not apply.
+  rewrite : [SyntaxToken] -> Integer -> String?
+end
+
+let tokenMutations -> [TokenMutation] = [
+  TokenMutation { name: "= as - in a let", rewrite: ~letAsMinus },
+  TokenMutation { name: "delete a token", rewrite: ~deletedToken },
+  TokenMutation { name: "duplicate a token", rewrite: ~duplicatedToken },
+  TokenMutation { name: "swap a binary operator", rewrite: ~swappedOperator },
+  TokenMutation { name: "number as 0", rewrite: ~numberAsZero },
+  TokenMutation { name: "insert .try", rewrite: ~insertedTry },
+  TokenMutation { name: ". as ?.", rewrite: ~safeNavigation }
+]
+
+let binaryOperators -> [String] = [
+  "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "!=", "&&", "||"
+]
+
+# Tokens that are no text of the program: deleting or doubling them says
+# nothing.
+let structural?(token: SyntaxToken) -> Bool = ["Newline", "Eof"].contains?(token.kind)
+
+let tokenAt(tokens: [SyntaxToken], index: Integer) -> SyntaxToken? = tokens.at(index)
+
+let textAt(tokens: [SyntaxToken], index: Integer) -> String do
+  tokenAt(tokens, index).map(&.text).or("")
+end
+
+# `let name = value` as `let name - value`.
+let letAsMinus(tokens: [SyntaxToken], index: Integer) -> String? do
+  textAt(tokens, index) == "=" && textAt(tokens, index - 2) == "let" then Just("-") else None
+end
+
+let deletedToken(tokens: [SyntaxToken], index: Integer) -> String? do
+  tokenAt(tokens, index).filter { |token| !structural?(token) }.map { |_| "" }
+end
+
+let duplicatedToken(tokens: [SyntaxToken], index: Integer) -> String? do
+  let token = tokenAt(tokens, index).filter { |token| !structural?(token) }
+  token.map { |token| "${token.text} ${token.text}" }
+end
+
+# The next operator of the list, so a replay swaps the same way.
+let swappedOperator(tokens: [SyntaxToken], index: Integer) -> String? do
+  let position = binaryOperators.indexOf(textAt(tokens, index))
+  position.map { |at| binaryOperators.at((at + 1) % binaryOperators.count).or("+") }
+end
+
+# A divisor of 0, an index of 0, a count of 0.
+let numberAsZero(tokens: [SyntaxToken], index: Integer) -> String? do
+  let token = tokenAt(tokens, index).filter { |token| ["Integer", "Float"].contains?(token.kind) }
+  let nonZero = token.filter { |token| token.text != "0" }
+  nonZero.map { |token| token.kind == "Float" then "0.0" else "0" }
+end
+
+# `.try` after a value: a name or a call's closing parenthesis.
+let insertedTry(tokens: [SyntaxToken], index: Integer) -> String? do
+  let token = tokenAt(tokens, index).filter { |token| [")", "LowerIdent"].contains?(token.kind) }
+  token.map { |token| "${token.text}.try" }
+end
+
+# `a.b` as `a?.b`.
+let safeNavigation(tokens: [SyntaxToken], index: Integer) -> String? do
+  textAt(tokens, index) == "." then Just("?.") else None
+end
+
+tokensIn : SyntaxElement -> [SyntaxToken]
+let tokensIn(TokenElement(token)) = [token]
+let tokensIn(NodeElement(node))   = node.children.into(~tokensIn)
+
+# The tokens of +source+, in order; none when it does not parse.
+let tokensOf(source: String) -> [SyntaxToken] do
+  Kex.AST.parseSyntax(source).map { |tree| tree.children.into(~tokensIn) }.or([])
+end
+
+# The program again, the token at +index+ written as +text+: each token's
+# trivia (the spaces and comments before it) kept.
+let withToken(tokens: [SyntaxToken], index: Integer, text: String) -> String do
+  let changed = tokenAt(tokens, index).map { |token| "${token.trivia}${text}" }.or("")
+  [sourceOfTokens(tokens.take(index)), changed, sourceOfTokens(tokens.drop(index + 1))].join
+end
+
+let sourceOfTokens(tokens: [SyntaxToken]) -> String do
+  tokens.map { |token| token.trivia + token.text }.join
+end
+
+# The seed picks a token mutation, a file, and one of the tokens it applies
+# to there, as mutationCase does for the node mutations.
+foul tokenMutationCase(seed: Integer, files: [String]) -> MutationCase? do
+  let mutation = tokenMutations.at(seed % tokenMutations.count).try
+  let start = seed / tokenMutations.count * 7919
+  var attempt = 0
+  while attempt < files.count do
+    let path = files.at((start + attempt) % files.count).or("")
+    let tokens = tokensOf(FS.File.read(path).or(""))
+    let sites = indicesOf(tokens.map(&.text)).filter { |at| mutation.rewrite(tokens, at).present? }
+    if !sites.empty?
+      let index = sites.at(seed / tokenMutations.count * 104729 % sites.count).try
+      let text = mutation.rewrite(tokens, index).try
+      let line = tokens.take(index).count { |token| token.kind == "Newline" } + 1
+      return Just(MutationCase {
+        name: mutation.name,
+        path: path,
+        site: "line ${line}: ${textAt(tokens, index)}  ->  ${text}",
+        changed: withToken(tokens, index, text)
+      })
+    end
+    attempt += 1
+  end
+  None
 end
 
 # --- Running -----------------------------------------------------------------
@@ -1135,24 +1266,39 @@ let typeCrashMarkers -> [String] = [
   "no matching clause", "No matching clause", "undefined method",
   "undefined function", "undefined variable", "cannot add", "cannot subtract",
   "cannot multiply", "cannot divide", "cannot compare", "cannot call",
-  "Internal error", "pattern mismatch",
+  "Internal error", "runtime error", "pattern mismatch",
   # A compile stage refusing what the check passed: any error diagnostic
   # (`[KEXEB-0030]` from lowering, `[KEXET-0491]` from the checker a run
   # repeats), and a backend failing below the diagnostics (kexhq/kex#708).
   "[KEXE", "erlc failed", "IR lower", "unimplemented",
-  "cannot negate", "requires a variable binding"
+  "cannot negate", "requires a variable binding", "N3kex"
 ]
+
+# The compiler itself failing, not a program: an internal error, a mangled
+# C++ name in a message, death by a signal.
+let compilerCrashMarkers -> [String] = [
+  "Internal error", "N3kex", "unimplemented", "Assertion failed", "AddressSanitizer",
+  "UndefinedBehaviorSanitizer"
+]
+
+compilerCrash? : Outcome -> Bool
+let compilerCrash?(Ok(value)) do
+  let text = value.stdout + value.stderr
+  value.exitCode >= 128 || compilerCrashMarkers.any? { |marker| text.contains?(marker) }
+end
+# One that did not finish in its budget, or could not run, hangs or broke.
+let compilerCrash?(Error(_))  = true
 
 typeCrash? : Outcome -> Bool
 let typeCrash?(Ok(value)) do
   let text = value.stdout + value.stderr
-  value.exitCode != 0 && crashText?(text) && !ownFailure?(text)
+  value.exitCode >= 128 || (value.exitCode != 0 && crashText?(text) && !ownFailure?(text))
 end
 let typeCrash?(Error(_))  = false
 
 # A failing `assert` of the program itself: a mutation can make one fail
 # (`Just(None)` as `None`), which says nothing about the checker. It prints
-# as "Internal error: assertion failed" on both backends.
+# as "Error: assertion failed" on both backends.
 let ownFailure?(text: String) -> Bool = text.contains?("assertion failed")
 
 let crashText?(text: String) -> Bool = typeCrashMarkers.any? { |marker| text.contains?(marker) }

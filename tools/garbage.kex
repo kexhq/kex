@@ -1,0 +1,426 @@
+# garbage — feeds kex nonsense and checks it fails well (kexhq/kex#709).
+#
+# The other fuzzers write programs that are valid (tools/fuzz.kex) or broken
+# the way a type error breaks them (tools/metamorphic.kex). This one writes
+# what no one meant to: random runs of valid tokens, spec and example
+# programs truncated, spliced into each other or with a chunk doubled, and
+# raw bytes (invalid UTF-8, NUL, a line of thousands of characters, nesting
+# thousands deep, a string or `${` never closed), and REPL sessions:
+# definitions, their uses, a definition typed over several entries, the
+# REPL's own commands and token soup, entered one after another.
+#
+# Each file goes through `--check`; when that passes, through codegen
+# (`--emit-core`); and a short one through the REPL (`-e`). A session goes
+# through the tree-walk REPL, and every other one through the BEAM REPL too.
+# Every step must answer within the budget, exit 0 or 1, and say what is
+# wrong as a located diagnostic (the REPL's place is the entry typed). A
+# finding is any of:
+#
+# - a crash: a signal, an `Internal error`, a C++ abort or assertion, a
+#   mangled C++ name (`N3kex...`) in a message, `unimplemented`
+# - a hang: no answer within the budget
+# - a diagnostic with no `file:line:col`
+# - `--check` passing and codegen then failing
+#
+#   kex --run-walker tools/garbage.kex 42 200 ./build/kex /tmp/kex-garbage 15000
+#
+# Arguments, all positional and all optional: seed, case count, path to the
+# kex binary, output directory, per-step timeout in milliseconds. With no
+# seed the clock picks one, printed first so the run replays: case i uses
+# seed + i. A finding saves <out>/garbage_<seed>.kex (the input as bytes),
+# <out>/garbage_<seed>.min.kex (the smallest input that still fails the same
+# way) and <out>/garbage_<seed>.txt (what each step answered). Exit status is
+# 0 with no finding, 1 with findings, 2 when the run cannot start.
+#
+# Deep nesting is input here, not a hazard: the parser and checker must
+# refuse it with a diagnostic rather than overflow their stacks. The fuzzer
+# itself runs on the walker and never recurses deeply: every loop is a
+# `while`.
+
+using FS
+
+main(args) do
+  let seedText = args.at(0).or("")
+  let clock = "${DateTime.now().epochSeconds}"
+  let seed = Integer.parse(seedText.empty? then clock else seedText).or(-1)
+  let count = Integer.parse(args.at(1).or("50")).or(0)
+  let budget = Integer.parse(args.at(4).or("15000")).or(0)
+  if seed < 0 || count < 1 || budget < 1 || args.count > 5
+    IO.printError("usage: garbage [seed] [cases] [kex] [out dir] [timeout ms]")
+    return System.exit(2)
+  end
+  let run = Run {
+    kex: args.at(2).or("./build/kex"),
+    outDir: args.at(3).or("/tmp/kex-garbage"),
+    budget: budget,
+    corpus: corpus
+  }
+  System.exit(drive(run, seed, count))
+end
+
+# Where a run's cases go, what runs them, and the programs inputs are cut
+# from.
+record Run do
+  kex    : String
+  outDir : String
+  budget : Integer
+  corpus : [String] = []
+end
+
+# Runs +count+ cases from +seed+: 0 when every case held, 1 on a finding, 2
+# when the run could not start.
+foul drive(run: Run, seed: Integer, count: Integer) -> Integer do
+  let version = Process.run(run.kex, ["--version"], run.budget)
+  return startFailed("${run.kex} --version failed") if !answered?(version)
+  ensureDirectory(run.outDir).try
+  IO.printLine("garbage: seed ${seed}, ${count} cases")
+  var failed = 0
+  var index = 0
+  while index < count do
+    failed += 1 if !caseHolds?(run, seed + index)
+    index += 1
+  end
+  IO.printLine("${count} cases, ${failed} findings (seed ${seed})")
+  failed == 0 then 0 else 1
+rescue |error|
+  startFailed("cannot write to ${run.outDir}: ${error}")
+end
+
+# The compiler ran and answered: its exit status 0.
+let answered?(outcome: Result<ProcessResult, String>) -> Bool do
+  outcome.map { |result| result.exitCode == 0 }.or(false)
+end
+
+foul startFailed(why: String) -> Integer do
+  IO.printError("garbage: ${why}")
+  2
+end
+
+foul ensureDirectory(path: String) -> Void or! FS.FileError do
+  return Ok(()) if FS.Directory.exists?(path)
+  FS.Directory.create(path)
+end
+
+# --- Random numbers ---------------------------------------------------------
+
+# A Lehmer generator: the same seed, the same input, on any machine.
+record Rng do
+  state : Integer
+end
+
+let rngOf(seed: Integer) -> Rng = Rng { state: seed % 2147483646 + 1 }
+
+let advance(rng: Rng) -> Rng = Rng { state: rng.state * 48271 % 2147483647 }
+
+# A number in 0 ... bound - 1, and the generator after it.
+let draw(rng: Rng, bound: Integer) -> (Integer, Rng) do
+  let after = advance(rng)
+  (after.state % (bound < 1 then 1 else bound), after)
+end
+
+# One of +items+, and the generator after it.
+let pick(rng: Rng, items: [String]) -> (String, Rng) do
+  let (at, after) = draw(rng, items.count)
+  (items.at(at).or(""), after)
+end
+
+# --- Inputs -----------------------------------------------------------------
+
+# What a case feeds kex: its bytes, and how it was made.
+record Input do
+  kind    : String
+  bytes   : Binary
+  # A REPL session: each entry typed in turn. Empty for a file.
+  entries : [String] = []
+end
+
+# The seed picks the kind of input, then everything about it.
+foul inputFor(run: Run, seed: Integer) -> Input do
+  let rng = rngOf(seed)
+  match seed % 4 do
+    0 => tokenSoup(rng)
+    1 => spliced(rng, run.corpus)
+    2 => rawBytes(rng)
+    _ => replSession(rng)
+  end
+end
+
+let textInput(kind: String, text: String) -> Input do
+  Input { kind: kind, bytes: Binary.fromBytes(text.bytes) }
+end
+
+let bytesInput(kind: String, bytes: [Byte]) -> Input do
+  Input { kind: kind, bytes: Binary.fromBytes(bytes) }
+end
+
+# Tokens the lexer accepts, in an order no grammar does: past the lexer, into
+# the parser and the checker.
+let vocabulary -> [String] = [
+  "let", "var", "foul", "do", "end", "if", "elif", "else", "then", "match",
+  "when", "trying", "rescue", "return", "make", "record", "type", "trait",
+  "module", "using", "with", "main", "compiled", "private", "implement:",
+  "(", ")", "[", "]", "{", "}", ",", ".", "=>", "->", ":>", ":", "|", "|>",
+  "~", "@", "&", "?", ".try", "?.", "..", "=", "+", "-", "*", "/", "%", "==",
+  "!=", "<", ">", "&&", "||", "!", "16", "2.5", "0", "\"s\"", "'c'", ":atom",
+  "\"\${x}\"", "x", "y", "Foo", "Just", "None", "Ok", "Error", "IO.printLine",
+  "this", "@x", "_", "\n", "\n", "\n"
+]
+
+let tokenSoup(rng: Rng) -> Input do
+  let (text, _) = tokenSoupText(rng, 60)
+  textInput("token soup", text)
+end
+
+# Up to +most+ tokens joined, and the generator after them.
+let tokenSoupText(rng: Rng, most: Integer) -> (String, Rng) do
+  let (length, start) = draw(rng, most)
+  var state = start
+  var words: [String] = []
+  while words.count <= length do
+    let (word, after) = pick(state, vocabulary)
+    words = [...words, word]
+    state = after
+  end
+  (words.join(" "), state)
+end
+
+# A spec or example program cut short, spliced into another, or with a
+# chunk of it doubled.
+foul spliced(rng: Rng, corpus: [String]) -> Input do
+  let (first, r1) = pick(rng, corpus)
+  let (second, r2) = pick(r1, corpus)
+  let a = FS.File.read(first).or("")
+  let b = FS.File.read(second).or("")
+  let (how, r3) = draw(r2, 3)
+  let (cut, r4) = draw(r3, a.count + 1)
+  let (other, r5) = draw(r4, b.count + 1)
+  let (width, _) = draw(r5, 200)
+  match how do
+    0 => textInput("truncated ${first}", a.take(cut))
+    1 => textInput("${first} spliced into ${second}", a.take(cut) + b.drop(other))
+    _ => textInput("chunk of ${first} doubled", a.take(cut + width) + a.drop(cut))
+  end
+end
+
+# Bytes no editor writes on purpose.
+let rawBytes(rng: Rng) -> Input do
+  let (how, r1) = draw(rng, 8)
+  let (depth, _) = draw(r1, 5000)
+  let deep = depth + 200
+  match how do
+    # `let x = "` then 0xFF 0xC0, half of nothing, then `"`.
+    0 => bytesInput("invalid UTF-8", [108, 101, 116, 32, 120, 32, 61, 32, 34, 255, 192, 34, 10])
+    1 => textInput("NUL in a string", "IO.printLine(\"\0\")\n")
+    2 => textInput("a line of ${deep * 12} characters", "let x = ${"1 + ".repeat(deep * 3)}1\n")
+    3 => textInput("${deep} parentheses deep", "let x = ${"(".repeat(deep)}1${")".repeat(deep)}\n")
+    4 => textInput("${deep} lists deep", "let x = " + "[".repeat(deep) + "]".repeat(deep) + "\n")
+    5 => textInput("${deep} do blocks deep", "main " + "do\n".repeat(deep) + "end\n".repeat(deep))
+    6 => textInput("an unterminated string", "main do\n  IO.printLine(\"never closed\n end\n")
+    _ => textInput("an unterminated interpolation", "main do\n  IO.printLine(\"\${x \n  end\n")
+  end
+end
+
+# What a REPL session types: definitions and their uses, a definition over
+# several entries, the REPL's own commands, and token soup between them.
+let replEntries -> [String] = [
+  "let x = 1", "x + 1", "var n = 0", "n += 1", "n", "let f(a: Integer) -> Integer = a * 2",
+  "f(x)", "f(\"no\")", "let g(a) do", "a + 1", "end", "g(2)", "record P do", "x : Integer",
+  "end", "P { x: 1 }.x", "type T = A | B(Integer)", "B(2)", "match B(1) do", "A => 0",
+  "B(k) => k", "end", "[1, 2].map { |i| i + x }", "/set types", "/unset types",
+  "/set ast", "/unset ast", "/set tokens", "/unset tokens", "/reset", "/complete f",
+  "/complete ", "/help", "/load nowhere.kex", "/unload Nothing", "/reload",
+  "/with Clock = 1", "/without Clock", "/set", "/bogus", "exit"
+]
+
+let replSession(rng: Rng) -> Input do
+  let (length, start) = draw(rng, 12)
+  var state = start
+  var entries: [String] = []
+  while entries.count <= length do
+    let (soup, r1) = draw(state, 4)
+    let (entry, r2) = soup == 0 then tokenSoupText(r1, 6) else pick(r1, replEntries)
+    entries = [...entries, entry]
+    state = r2
+  end
+  let bytes = Binary.fromBytes(entries.join("\n").bytes)
+  Input { kind: "REPL session", bytes: bytes, entries: entries }
+end
+
+# Programs to cut inputs from: the specs and the examples.
+foul corpus -> [String] do
+  [...programsIn("spec"), ...programsIn("examples")]
+end
+
+foul programsIn(directory: String) -> [String] do
+  let names = FS.Directory.list(directory).or([]).sort.filter(&.endsWith?(".kex"))
+  names.map { |name| "${directory}/${name}" }
+end
+
+# --- Running ----------------------------------------------------------------
+
+# One step of a case: what was run, and what it answered.
+record Step do
+  name    : String
+  outcome : Result<ProcessResult, String>
+end
+
+# The steps an input goes through: `--check`; codegen when the check passes;
+# the REPL for a short one.
+foul stepsFor(run: Run, path: String, root: String, input: Input) -> [Step] do
+  return sessionSteps(run, input.entries) if !input.entries.empty?
+  let check = runStep(run, "check", ["-C", path])
+  let checked = answered?(check.outcome)
+  let codegen = checked then [runStep(run, "codegen", ["-E", "-o", root, path])] else []
+  let text = input.bytes.to(String).or("")
+  let short = !text.empty? && text.count < 400 && !text.contains?("\u{0}")
+  let repl = short then [runStep(run, "repl", ["-i", "-e", text])] else []
+  [check, ...codegen, ...repl]
+end
+
+# A REPL session, each entry typed in turn: on the tree-walk REPL, and on
+# the BEAM one for every other session (it is slower to start).
+foul sessionSteps(run: Run, entries: [String]) -> [Step] do
+  let typed = entries.into { |entry| ["-e", entry] }
+  let walker = runStep(run, "repl", ["-i", ...typed])
+  entries.count % 2 == 0 then [walker, runStep(run, "beam repl", typed)] else [walker]
+end
+
+foul runStep(run: Run, name: String, args: [String]) -> Step do
+  Step { name: name, outcome: Process.run(run.kex, ["--no-colors", ...args], run.budget) }
+end
+
+# --- The oracle -------------------------------------------------------------
+
+# What a step's output must never hold: the compiler failing, not the input.
+let crashMarkers -> [String] = [
+  "Internal error", "N3kex", "unimplemented", "Assertion failed",
+  "terminate called", "libc++abi", "Segmentation fault", "stack overflow",
+  "Abort trap", "AddressSanitizer", "UndefinedBehaviorSanitizer"
+]
+
+# What is wrong with a step, or None. Its exit status is 0 or 1, it answered
+# within the budget, it did not crash, and its diagnostics say where.
+problemOf : Step -> String?
+let problemOf(Step { name, outcome: Error(error) }) = Just("${name}: no answer: ${error}")
+let problemOf(Step { name, outcome: Ok(result) }) do
+  let text = result.stdout + result.stderr
+  return Just("${name}: killed by a signal (exit ${result.exitCode})") if result.exitCode >= 128
+  if let Just(marker) = crashMarkers.find { |marker| text.contains?(marker) }
+    return Just("${name}: ${marker}")
+  end
+  return Just("${name}: exit ${result.exitCode}") if result.exitCode > 1
+  # The REPL's input is the line just typed: it is where its diagnostics are.
+  return None if name.endsWith?("repl")
+  if let Just(line) = text.split("\n").find { |line| unlocated?(line) }
+    return Just("${name}: a diagnostic with no location: ${line}")
+  end
+  None
+end
+
+# A diagnostic line (`... [KEXET-0001]: Error, ...`) that does not start
+# with `file:line:col: `.
+let unlocated?(line: String) -> Bool do
+  let at = line.indexOf(" [KEX").or(-1)
+  return false if at < 0 || !line.contains?("]: ")
+  let parts = line.take(at).split(":")
+  let numberAt = { |back| digits?(parts.at(parts.count - back).or("")) }
+  let numbered = parts.count >= 3 && numberAt(2) && numberAt(3)
+  !(line.take(at).endsWith?(":") && numbered)
+end
+
+let digits?(text: String) -> Bool = !text.empty? && text.chars.all?(&.digit?)
+
+# What is wrong with a case: a step's problem, or codegen refusing what the
+# check passed. None when it held.
+let caseProblem(steps: [Step]) -> String? do
+  if let Just(found) = steps.map(~problemOf).find(&.set?)
+    return found
+  end
+  let codegen = steps.find { |step| step.name == "codegen" }
+  let failed = codegen.map { |step| !answered?(step.outcome) }.or(false)
+  failed then Just("codegen failed on what --check passed") else None
+end
+
+# --- Cases ------------------------------------------------------------------
+
+foul caseHolds?(run: Run, seed: Integer) -> Bool do
+  let input = inputFor(run, seed)
+  let root = "${run.outDir}/case_${seed}"
+  ensureDirectory(root).try
+  let path = "${root}/input.kex"
+  FS.File.writeBytes(path, input.bytes).try
+  let steps = stepsFor(run, path, root, input)
+  let label = "case ${seed}: ${input.kind}"
+  if let Just(problem) = caseProblem(steps)
+    let smallest = minimized(run, root, input, problem)
+    FS.File.writeBytes("${run.outDir}/garbage_${seed}.kex", input.bytes).try
+    FS.File.writeBytes("${run.outDir}/garbage_${seed}.min.kex", smallest).try
+    let report = ["seed=${seed}", "input=${input.kind}", "problem=${problem}", ...stepLines(steps)]
+    FS.File.write("${run.outDir}/garbage_${seed}.txt", report.join("\n")).try
+    IO.printLine("FAIL ${label}: ${problem} (${run.outDir}/garbage_${seed}.kex)")
+    return false
+  end
+  IO.printLine("PASS ${label}")
+  true
+rescue |error|
+  IO.printError("garbage: cannot write case ${seed}: ${error}")
+  false
+end
+
+let stepLines(steps: [Step]) -> [String] do
+  steps.into { |step| ["${step.name}:", ...outcomeLines(step.outcome)] }
+end
+
+outcomeLines : Result<ProcessResult, String> -> [String]
+let outcomeLines(Ok(result)) do
+  ["exit=${result.exitCode}", "stdout:", result.stdout, "stderr:", result.stderr]
+end
+let outcomeLines(Error(error)) = ["error=${error}"]
+
+# --- Minimizing -------------------------------------------------------------
+
+# The smallest input found that still fails with the same kind of problem:
+# chunks removed, halves first, then smaller, while the problem stays. A
+# bounded number of tries, so a slow failure cannot stall the run.
+foul minimized(run: Run, root: String, input: Input, problem: String) -> Binary do
+  let wanted = problemKind(problem)
+  let session = !input.entries.empty?
+  var current = input.bytes
+  var chunk = current.count / 2
+  var tries = 0
+  while chunk >= 1 && tries < 120 do
+    var start = 0
+    var removed = false
+    while start < current.count && tries < 120 do
+      let candidate = current.take(start) + current.drop(start + chunk)
+      tries += 1
+      if !candidate.empty? && sameProblem?(run, root, candidate, wanted, session)
+        current = candidate
+        removed = true
+      else
+        start += chunk
+      end
+    end
+    chunk = removed then chunk else chunk / 2
+  end
+  current
+end
+
+foul sameProblem?(run: Run, root: String, bytes: Binary, wanted: String, session: Bool) -> Bool do
+  let path = "${root}/candidate.kex"
+  return false if !FS.File.writeBytes(path, bytes).ok?
+  # A session stays one: its entries are its lines.
+  let entries = session then bytes.to(String).or("").split("\n") else []
+  let input = Input { kind: "candidate", bytes: bytes, entries: entries }
+  let found = caseProblem(stepsFor(run, path, root, input))
+  found.map { |problem| problemKind(problem) == wanted }.or(false)
+end
+
+# A problem without its particulars (the exit status, the line), so a
+# smaller input failing the same way counts as the same failure.
+let problemKind(problem: String) -> String do
+  let step = problem.split(":").first.or("")
+  let rest = problem.drop(step.count + 1).trim
+  let kind = crashMarkers.find { |marker| rest.contains?(marker) }
+  "${step}: ${kind.or(rest.split(" ").take(3).join(" "))}"
+end

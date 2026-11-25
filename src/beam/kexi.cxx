@@ -238,6 +238,7 @@ auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
 }
 
 auto termToType(const TermPtr& term) -> KexiTypePtr {
+    ensureStackForDecoding();
     if (!term) {
         return kexiUnknown();
     }

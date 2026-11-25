@@ -1,2 +1,2 @@
 1000
-Internal error: spec/walker_deep_recursion.kex:10:58: runtime error: stack overflow: recursion too deep in 'down'
+Error: spec/walker_deep_recursion.kex:10:58: runtime error: stack overflow: recursion too deep in 'down'

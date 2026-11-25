@@ -17,6 +17,15 @@ namespace kex::interpreter {
 struct Value;
 using ValuePtr = std::shared_ptr<Value>;
 
+// A failure of the program being run, not of the compiler: a value it may
+// not use, a limit it went past, a range it cannot step. Reported as the
+// error it is (`Error: ...`), never as an internal error with a bug report;
+// an exception of any other type while a program runs is the compiler's.
+class ProgramError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 // Thrown when compile-time evaluation tries to USE a PlaceholderValue rather
 // than just carry it around. Not a user-facing error: chain collapse catches
 // it and keeps the runtime form, which is always correct — the builder simply
@@ -315,6 +324,20 @@ struct Value {
         PlaceholderValue>
         data;
 
+    Value() = default;
+    // From any alternative, as `Value{IntValue{v}}` was written when this was an
+    // aggregate.
+    template <typename T, typename = std::enable_if_t<!std::is_same_v<std::decay_t<T>, Value>>>
+    Value(T&& alternative)
+        : data(std::forward<T>(alternative)) {} // NOLINT(google-explicit-constructor)
+    Value(const Value&) = default;
+    Value(Value&&) noexcept = default;
+    auto operator=(const Value&) -> Value& = default;
+    auto operator=(Value&&) noexcept -> Value& = default;
+    // Iterative: a list nested a million deep, which a loop builds, is freed
+    // without recursing once per level (src/common/stack_guard.hxx).
+    ~Value();
+
     static auto none() -> ValuePtr;
     static auto unit() -> ValuePtr;
     static auto integer(int64_t v) -> ValuePtr;
@@ -368,6 +391,10 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
 auto rangeLength(const RangeValue& range) -> int64_t;
 // Its elements, in order. A Float range is not enumerable and throws.
 auto rangeElements(const RangeValue& range) -> std::vector<ValuePtr>;
+// A run-time error when the stack is nearly spent (src/common/stack_guard.hxx):
+// called once per level by whatever walks a value, which a loop can nest a
+// million deep (printing, comparing, ordering, hashing it). +what+ names it.
+auto ensureStackFor(const char* what) -> void;
 
 // The method-dispatch type name for a value — the name used for UFCS resolution
 // (e.g. "Integer" for both IntValue/BigIntValue, "Process" for ProcessValue).

@@ -1832,5 +1832,51 @@ int main() {
            []() { assertFalse(parseFails("using Lib.Columns, as: Columns\n")); });
     });
 
+    // Every pass recurses once per level: past the limit a program is
+    // refused with a diagnostic, not a stack overflow (kexhq/kex#709).
+    describe("nesting limit", []() {
+        const auto repeated = [](const std::string& text, int times) {
+            std::string out;
+            for (int i = 0; i < times; ++i) {
+                out += text;
+            }
+            return out;
+        };
+        const auto refusedAsTooDeep = [](const std::string& source) {
+            Lexer lexer(source);
+            Parser parser(lexer.tokenizeAll());
+            parser.parseProgram();
+            for (const auto& diagnostic : parser.diagnostics()) {
+                if (diagnostic.code == diag::Code::NestedTooDeep) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto deep = [&](const std::string& open, const std::string& close, int depth) {
+            return "let x = " + repeated(open, depth) + "1" + repeated(close, depth) + "\n";
+        };
+        it("takes nesting up to the limit", [&]() {
+            assertFalse(parseFails(deep("(", ")", 250)));
+            assertFalse(parseFails(deep("[", "]", 250)));
+            assertFalse(parseFails("let x = " + repeated("1 + ", 250) + "1\n"));
+            assertFalse(parseFails("let x = " + repeated("- ", 250) + "1\n"));
+        });
+        it("refuses parentheses, lists, blocks and types nested past it", [&]() {
+            assertTrue(refusedAsTooDeep(deep("(", ")", 5000)));
+            assertTrue(refusedAsTooDeep(deep("[", "]", 5000)));
+            assertTrue(refusedAsTooDeep(
+                "main do\n" + repeated("if true\n", 5000) + "1\n" + repeated("end\n", 5000) +
+                "end\n"));
+            assertTrue(refusedAsTooDeep(
+                "let x: " + repeated("[", 5000) + "Integer" + repeated("]", 5000) + " = 1\n"));
+        });
+        it("refuses an operator chain as deep as it is long", [&]() {
+            assertTrue(refusedAsTooDeep("let x = " + repeated("1 + ", 5000) + "1\n"));
+            assertTrue(refusedAsTooDeep("let x = " + repeated("2 ^ ", 5000) + "2\n"));
+            assertTrue(refusedAsTooDeep("let x = " + repeated("- ", 5000) + "1\n"));
+        });
+    });
+
     return runAll();
 }

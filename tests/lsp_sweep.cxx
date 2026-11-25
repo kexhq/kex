@@ -21,6 +21,9 @@
 //               reports
 //   definition  go-to-definition lands somewhere that does not spell the name
 //   crash       the session died, hung, or answered a request with an error
+//   garbage     the document edited into nonsense again and again, asked at
+//               random places: the server must answer every request, never
+//               with an internal error, and reach shutdown
 //
 //   lsp_sweep --kex build/kex --out /tmp/sweep [--checks hover,recall,...]
 //             [--sample N] [--seed S] [--timeout SECONDS] FILE...
@@ -54,8 +57,8 @@ namespace {
 struct Options {
     std::string kex = "./build/kex";
     std::string outDir = "/tmp/kex-lsp-sweep";
-    std::set<std::string> checks{"hover",       "recall",     "soundness",
-                                 "diagnostics", "definition", "crash"};
+    std::set<std::string> checks{"hover",      "recall", "soundness", "diagnostics",
+                                 "definition", "crash",  "garbage"};
     std::size_t sample = 3;
     std::size_t maxSitesPerFile = 40;
     unsigned seed = 1;
@@ -918,6 +921,100 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
     }
 }
 
+// The garbage check (kexhq/kex#709): one session per file, the document
+// opened, then edited into nonsense again and again (cut short, a chunk
+// dropped or doubled, bytes spliced in that no editor writes), with hover,
+// completion, definition and signature help asked at random places after
+// each edit, past the end of a line or of the file too. The server must
+// answer every request, never with an internal error, and reach shutdown.
+auto garbled(const std::string& text, std::mt19937& rng) -> std::string {
+    static const std::vector<std::string> splices{"\xff\xc0", std::string(1, '\0'),
+                                                  "((((((",   "]]]",
+                                                  "do do do", "\"${",
+                                                  "${",       "\"never closed",
+                                                  "let",      "end end",
+                                                  ".try?.",   "@",
+                                                  "~",        "=>"};
+    const auto at = [&](std::size_t size) {
+        return size == 0 ? std::size_t{0}
+                         : std::uniform_int_distribution<std::size_t>(0, size)(rng);
+    };
+    const auto cut = at(text.size());
+    const auto width = std::min<std::size_t>(at(200), text.size() - cut);
+    switch (std::uniform_int_distribution<int>(0, 3)(rng)) {
+        case 0: return text.substr(0, cut);
+        case 1: return text.substr(0, cut) + text.substr(cut + width);
+        case 2: return text.substr(0, cut + width) + text.substr(cut);
+        default: return text.substr(0, cut) + splices[at(splices.size() - 1)] + text.substr(cut);
+    }
+}
+
+auto garbageSweep(const Options& options, const std::string& path, std::mt19937& rng) -> void {
+    const auto absolute = fs::absolute(path).lexically_normal().string();
+    const auto original = readFile(absolute);
+    const auto workDir = options.outDir + "/work";
+    fs::create_directories(workDir);
+    Session session;
+    session.uri = "file://" + absolute;
+    static const std::vector<std::string> methods{
+        "hover", "completion", "definition", "signatureHelp"};
+    std::vector<std::string> versions;
+    auto text = original;
+    for (int version = 2; version < 2 + 8; ++version) {
+        // From the last version or the original, so damage piles up or not.
+        text = garbled(std::uniform_int_distribution<int>(0, 1)(rng) ? text : original, rng);
+        versions.push_back(text);
+        session.requests += frame(
+            R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":)" +
+            jsonString(session.uri) + R"(,"version":)" + std::to_string(version) +
+            R"(},"contentChanges":[{"text":)" + jsonString(text) + "}]}}");
+        const auto lines = splitLines(text);
+        for (std::size_t i = 0; i < options.sample * 2; ++i) {
+            Token token;
+            token.line =
+                std::uniform_int_distribution<int>(0, static_cast<int>(lines.size()) + 1)(rng);
+            const auto width =
+                token.line < static_cast<int>(lines.size()) ? lines[token.line].size() : 0;
+            token.column = std::uniform_int_distribution<int>(0, static_cast<int>(width) + 3)(rng);
+            token.text = "<garbage v" + std::to_string(version) + ">";
+            const auto& method =
+                methods[std::uniform_int_distribution<std::size_t>(0, methods.size() - 1)(rng)];
+            session.ask(method, token.line, token.column, token, "garbage");
+        }
+    }
+    const auto result = runSession(options, session, original, workDir);
+    const auto keep = [&](const std::string& why) {
+        // The versions that led there, for replaying by hand.
+        const auto saved = options.outDir + "/garbage_" + fs::path(path).stem().string();
+        fs::create_directories(saved);
+        for (std::size_t i = 0; i < versions.size(); ++i) {
+            writeFile(saved + "/v" + std::to_string(i + 2) + ".kex", versions[i]);
+        }
+        report("garbage", path, 0, 0, why + " (edits in " + saved + ")");
+    };
+    for (const std::string marker :
+         {"Internal error", "N3kex", "Assertion failed", "libc++abi", "terminate called",
+          "AddressSanitizer", "UndefinedBehaviorSanitizer"}) {
+        if (result.stderrTail.find(marker) != std::string::npos) {
+            keep("the server printed `" + marker + "`: " + result.stderrTail);
+            return;
+        }
+    }
+    if (!result.completed) {
+        keep("the session did not reach shutdown: " + result.stderrTail);
+        return;
+    }
+    for (const auto& [id, error] : result.errors) {
+        if (error.find("-32603") != std::string::npos) {
+            keep(
+                session.methodOf[id] + " at " + std::to_string(session.tokenOf[id].line + 1) + ":" +
+                std::to_string(session.tokenOf[id].column + 1) + " of " + session.tokenOf[id].text +
+                " answered an internal error: " + error);
+            return;
+        }
+    }
+}
+
 auto parseOptions(int argc, char** argv) -> std::optional<Options> {
     Options options;
     for (int i = 1; i < argc; ++i) {
@@ -960,7 +1057,7 @@ auto main(int argc, char** argv) -> int {
     const auto options = parseOptions(argc, argv);
     if (!options) {
         std::cerr << "usage: lsp_sweep [--kex PATH] [--out DIR] [--checks hover,recall,"
-                     "soundness,diagnostics,definition,crash] [--sample N] [--sites N] "
+                     "soundness,diagnostics,definition,crash,garbage] [--sample N] [--sites N] "
                      "[--seed S] [--timeout SECONDS] FILE...\n";
         return 2;
     }
@@ -968,7 +1065,12 @@ auto main(int argc, char** argv) -> int {
     fs::create_directories(options->outDir);
     for (const auto& file : options->files) {
         const auto before = findings.size();
-        sweepFile(*options, file, rng);
+        if (options->checks.size() != 1 || !options->checks.count("garbage")) {
+            sweepFile(*options, file, rng);
+        }
+        if (options->checks.count("garbage")) {
+            garbageSweep(*options, file, rng);
+        }
         std::cerr << file << ": " << findings.size() - before << " finding(s)\n";
     }
     std::sort(findings.begin(), findings.end(), [](const Finding& a, const Finding& b) {

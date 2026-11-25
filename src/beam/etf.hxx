@@ -15,6 +15,11 @@ struct EtfError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+// Throws EtfError when the stack is nearly spent (src/common/stack_guard.hxx):
+// called once per level by whatever decodes a term, so a file nested past
+// what the stack holds reads as the corrupt file it is.
+auto ensureStackForDecoding() -> void;
+
 struct Term;
 using TermPtr = std::shared_ptr<Term>;
 

@@ -1,4 +1,5 @@
 #include "etf.hxx"
+#include "../common/stack_guard.hxx"
 #include <cstring>
 
 namespace kex::beam {
@@ -312,6 +313,7 @@ struct Decoder {
     }
 
     auto decodeTerm() -> TermPtr {
+        ensureStackForDecoding();
         uint8_t tag = read8();
         switch (tag) {
             case SMALL_INTEGER_EXT: return Term::integer(read8());
@@ -570,6 +572,16 @@ auto SaxReader::nextIsAtom() const -> bool {
     const uint8_t tag = dec.data[dec.pos];
     return tag == ATOM_EXT || tag == SMALL_ATOM_EXT || tag == ATOM_UTF8_EXT ||
            tag == SMALL_ATOM_UTF8_EXT;
+}
+
+} // namespace kex::beam
+
+namespace kex::beam {
+
+auto ensureStackForDecoding() -> void {
+    if (kex::stack::nearEnd()) {
+        throw EtfError("nested too deeply to decode");
+    }
 }
 
 } // namespace kex::beam
