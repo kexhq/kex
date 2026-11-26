@@ -1,0 +1,15 @@
+# The key-function list operations take a range as `max` and `filter` do,
+# with no `.items` in between.
+main do
+  IO.printLine((1..10).maxBy { |n| n % 7 })
+  IO.printLine((1..10).minBy { |n| (n - 4).abs })
+  IO.printLine((1..6).sortBy { |n| n % 3 })
+  let byParity = (1..6).groupBy { |n| n.even? }
+  IO.printLine(byParity.inspected)
+  IO.printLine((1..5).maxBy { |n| -n })
+  IO.printLine(('a'..'e').maxBy(&.codepoint))
+  let none = (1..0).maxBy { |n| n }
+  IO.printLine(none.inspected)
+  let stepped = (1..10).by(3).sortBy { |n| -n }
+  IO.printLine(stepped.inspected)
+end

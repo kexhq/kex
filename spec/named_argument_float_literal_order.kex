@@ -1,0 +1,13 @@
+# Named arguments written in another order than their parameters: the
+# integer literal a Float parameter takes is the one passed to it. The
+# checker read the literals in written order against the parameters in
+# declared order, so `f(y: 1, x: 2)` made `x` the float 2.0 and left `y` the
+# integer 1.
+
+let f(x: Integer = 0, y: Float = 0.0) -> String = "${x} ${y} ${Type.of(x)} ${Type.of(y)}"
+
+main do
+  IO.printLine(f(y: 1, x: 2))
+  IO.printLine(f(x: 2, y: 1))
+  IO.printLine(f(y: 3))
+end

@@ -1,0 +1,14 @@
+# `atom?` answers for every value, so it works where the static type is
+# `Any`. A Bool, `None` and a constructor are values of their own types on
+# both backends, though the BEAM spells each of them as an atom.
+type Color = Red | Green
+
+main do
+  IO.printLine(:ok.atom?)
+  IO.printLine("ok".atom?)
+  IO.printLine(1.atom?)
+  IO.printLine(true.atom?)
+  IO.printLine(Red.atom?)
+  let values: [Any] = [:ok, "ok", 1, true, None, Red, Just(:ok), [:ok], (:a, :b)]
+  IO.printLine(values.map { |v| v.atom? })
+end

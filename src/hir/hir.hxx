@@ -149,6 +149,9 @@ public:
     // Whether an integer literal is a Float (`let x: Float = 1`, decision 2):
     // both backends emit it as a float.
     auto literalIsFloat(const ast::Expr& literal) const -> bool;
+    // Whether an argument is passed as `Just(value)`: a plain `T` given for
+    // a defaulted `T?` parameter (kexhq/kex#446). Both backends wrap it.
+    auto passedAsJust(const ast::Expr& argument) const -> bool;
     // §12 step 7: the letters a function takes its types for (`A` in
     // `total(A is Monoid => …)` when its body says `A.identity`), the types a
     // call of one passes, and the letter a call goes through.
@@ -269,6 +272,7 @@ public:
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
     auto literalIsFloat(const ast::Expr& literal) const -> bool;
+    auto passedAsJust(const ast::Expr& argument) const -> bool;
     auto typeArgumentsOf(const ast::Expr& call) const -> const std::vector<semantic::TypeArgument>*;
     auto typeVariableReceiverOf(const ast::Expr& call) const -> std::string;
     auto typeOfAnswer(const ast::MethodCall& call) const -> const semantic::StaticTypeAnswer*;

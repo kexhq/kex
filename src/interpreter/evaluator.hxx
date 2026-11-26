@@ -523,6 +523,9 @@ private:
     // `A` in `total(A is Monoid => …)` called with a `[Purse]` is Purse's type
     // value, which `A.identity` dispatches on (§12 step 7).
     std::vector<std::unordered_map<std::string, ValuePtr>> m_typeFrames;
+    // The argument eval() is evaluating unwrapped, to pass as `Just(value)`
+    // (hir::ProgramSet::passedAsJust): consumed as eval() enters it again.
+    const ast::Expr* m_justUnwrapped = nullptr;
     auto typeArgumentValue(const semantic::TypeArgument& argument) -> ValuePtr;
     const semantic::ImportedInterfaces* m_interfaces = nullptr;
     // Every module this evaluator loaded at run time, checked (kept alive for

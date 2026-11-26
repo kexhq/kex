@@ -385,6 +385,73 @@ int main() {
         });
     });
 
+    // kexhq/kex#730: `kex --help` in `tey --help`'s palette, on stdout.
+    describe("Color CLI — kex --help", []() {
+        it("is colored with --colors: bold headings, cyan flags", []() {
+            auto help = runKexStreams({"--help"});
+            assertTrue(hasAnsi(help.out), "no ANSI escapes in: " + help.out);
+            assertTrue(
+                contains(help.out, "\x1b[1mOptions:\x1b[0m"), "Options: not bold: " + help.out);
+            assertTrue(
+                contains(help.out, "\x1b[36m-r, --run\x1b[0m"), "flags not cyan: " + help.out);
+            assertTrue(
+                contains(help.out, "\x1b[36m-e, --eval <code>\x1b[0m"),
+                "a flag's argument not cyan: " + help.out);
+        });
+
+        it("goes to stdout, and leaves stderr empty", []() {
+            auto help = runKexStreams({"--help"});
+            assertTrue(contains(help.out, "Usage:"), "no usage on stdout: " + help.out);
+            assertEqual(help.err, std::string(""));
+        });
+
+        it("is plain with --no-colors before --help", []() {
+            auto help = runKexStreams({"--no-colors", "--help"});
+            assertFalse(hasAnsi(help.out), "unexpected ANSI escapes in: " + help.out);
+            assertTrue(contains(help.out, "  -r, --run         Run on BEAM"), help.out);
+        });
+
+        it("is plain when piped, unless asked for colors", []() {
+            std::string out;
+            FILE* pipe = popen((std::string(KEX_BINARY_PATH) + " --help 2>&1").c_str(), "r");
+            if (pipe) {
+                std::array<char, 4096> buf;
+                size_t n;
+                while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
+                    out.append(buf.data(), n);
+                }
+                pclose(pipe);
+            }
+            assertTrue(contains(out, "Options:"), out);
+            assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
+        });
+
+        it("still prints the usage to stderr for a bad flag", []() {
+            auto bad = runKexStreams({"--no-such-flag"});
+            assertTrue(contains(bad.err, "Usage:"), "no usage on stderr: " + bad.err);
+            assertFalse(contains(bad.out, "Usage:"), "usage on stdout: " + bad.out);
+        });
+    });
+
+    // kexhq/kex#730: `kex -s` highlights the Kex it shows.
+    describe("Color CLI — kex -s", []() {
+        it("highlights a signature, an example and a doc tag's type", []() {
+            auto help = runKexStreams({"-s", "List.first"});
+            // `X` in `first :> X?` is a type: cyan.
+            assertTrue(contains(help.out, "\x1b[36mX\x1b[0m"), "signature plain: " + help.out);
+            // An example's `# => ...` is a comment: gray.
+            assertTrue(contains(help.out, "\x1b[90m# =>"), "example comment plain: " + help.out);
+            assertTrue(contains(help.out, "\x1b[1mReturns:"), "@return not rendered: " + help.out);
+            assertFalse(contains(help.out, "@return"), "raw doc tag in: " + help.out);
+        });
+
+        it("is plain with --no-colors", []() {
+            auto help = runKexStreams({"--no-colors", "-s", "List.first"});
+            assertFalse(hasAnsi(help.out), "unexpected ANSI escapes in: " + help.out);
+            assertTrue(contains(help.out, "first :> X?"), help.out);
+        });
+    });
+
     describe("Color CLI — spec reporter", []() {
         const std::string source = "it(\"passes\") do\n"
                                    "  assert(true)\n"
