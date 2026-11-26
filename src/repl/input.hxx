@@ -77,6 +77,8 @@ auto replBlockDepth(const std::string& source) -> int;
 auto replClauseHead(const std::string& source) -> std::optional<std::string>;
 auto replDefinitionName(const std::string& source) -> std::string;
 auto replTrimLeadingIndent(std::string source) -> std::string;
+auto replInputIsBlank(const std::string& source) -> bool;
+auto replWithoutTrailingComment(const std::string& source) -> std::string;
 // `prepare` readies the probe program as the session readies its own (expanding
 // it and merging the modules loaded from source roots), so a type one of
 // those declares (`Shop.Cart.Cart`) is known there too.

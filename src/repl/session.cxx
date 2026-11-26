@@ -1059,7 +1059,7 @@ auto BeamReplSession::run() -> int {
             break;
         }
         std::string input = replTrimLeadingIndent(std::move(read));
-        if (input.empty()) {
+        if (input.empty() || replInputIsBlank(input)) {
             continue;
         }
         if (kex::isReplExit(input)) {
@@ -1208,6 +1208,10 @@ auto BeamReplSession::run() -> int {
         if (auto body = replUnwrapMain(source)) {
             source = std::move(*body);
         }
+        // The input is spliced into generated source, `IO.inspect(<input>)`
+        // among it: a comment closing the input would take the rest of its
+        // line with it.
+        source = replWithoutTrailingComment(source);
         // Clauses of one function are NOT gathered by reading ahead here. That
         // is what made a complete line hang on `...>`: after `let fact(0) = 1`
         // the REPL blocked waiting to see whether the next line was another
@@ -1696,7 +1700,7 @@ auto WalkerReplSession::run() -> int {
         }
         const auto command = kex::parseReplCommand(line);
         using Command = kex::ReplCommandKind;
-        if (line.empty()) {
+        if (line.empty() || replInputIsBlank(line)) {
             continue;
         }
 

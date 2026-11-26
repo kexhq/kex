@@ -96,6 +96,14 @@ struct SandboxLimits {
     std::vector<std::string> allow;
 };
 
+// `kex --eval-etf <request>`: `Evaluator.run` and `runExpression` for a BEAM
+// program (runtime/src/kex_intrinsic_evaluator.erl), which has no evaluator of
+// its own. The request is an ETF map (source, expression, allow, maxSteps,
+// maxDepth, output); the `Ok(value)` or `Error(message)` the walker would
+// answer is written to `output` as ETF, in the value representation BEAM
+// programs use. What the evaluated code prints goes to standard output.
+auto runEvaluatorRequest(const std::string& requestPath) -> int;
+
 class Evaluator {
     // Scheduler needs direct access to eval/evalBody/matchPattern/
     // pushEnv/popEnv/m_env to run process bodies and implement
@@ -180,6 +188,19 @@ public:
     // is not imported.
     auto typeModules() const -> const std::unordered_map<std::string, std::string>& {
         return m_typeModules;
+    }
+
+    // The fields of the record type `typeName` in declaration order, empty
+    // when it declares none here: the order a record has on BEAM.
+    auto recordFieldNames(const std::string& typeName) const -> std::vector<std::string> {
+        std::vector<std::string> names;
+        if (const auto def = m_recordDefs.find(typeName);
+            def != m_recordDefs.end() && def->second) {
+            for (const auto& field : def->second->fields) {
+                names.push_back(field.name);
+            }
+        }
+        return names;
     }
 
     // Puts this evaluator under `limits` from now on. Called once its prelude

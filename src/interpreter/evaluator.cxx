@@ -3312,6 +3312,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             resolver.resolve(upperIdent->name, m_currentModule).has_value();
                         if (existing && std::holds_alternative<ModuleValue>(existing->data)) {
                             namespaceName = std::get<ModuleValue>(existing->data).name;
+                            // A module a `using` bound under this name gives way
+                            // to the module the name spells when only that one
+                            // has the function, as in the checker
+                            // (TypeChecker::resolveImportedModulePath): after
+                            // `using Mock`, `IO` is `Mock.IO`, yet
+                            // `IO.printLine` is the prelude's, and calling
+                            // `Mock.IO.printLine` failed at run time.
+                            if (namespaceName != upperIdent->name &&
+                                !m_env->get(kex::mangle::qualify(namespaceName, node.method)) &&
+                                m_env->get(kex::mangle::qualify(upperIdent->name, node.method))) {
+                                namespaceName = upperIdent->name;
+                            }
                             isNamespaceCall = true;
                         } else if (
                             (m_moduleRegistry.contains(upperIdent->name) || sourceModuleExists) &&
