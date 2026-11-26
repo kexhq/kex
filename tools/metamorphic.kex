@@ -1296,10 +1296,13 @@ let typeCrash?(Ok(value)) do
 end
 let typeCrash?(Error(_))  = false
 
-# A failing `assert` of the program itself: a mutation can make one fail
-# (`Just(None)` as `None`), which says nothing about the checker. It prints
-# as "Error: assertion failed" on both backends.
-let ownFailure?(text: String) -> Bool = text.contains?("assertion failed")
+# A failure of the program itself, which says nothing about the checker: a
+# failing `assert` (a mutation can make one fail, `Just(None)` as `None`),
+# printed as "Error: assertion failed" on both backends; a division by zero
+# (`number as 0` makes a divisor 0, and no type rules that out).
+let ownFailureMarkers -> [String] = ["assertion failed", "division by zero"]
+
+let ownFailure?(text: String) -> Bool = ownFailureMarkers.any? { |marker| text.contains?(marker) }
 
 let crashText?(text: String) -> Bool = typeCrashMarkers.any? { |marker| text.contains?(marker) }
 
