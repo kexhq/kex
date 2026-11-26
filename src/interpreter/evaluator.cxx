@@ -2661,6 +2661,12 @@ auto Evaluator::evalConversion(const ast::Expr& receiver, const std::string& tar
             return Value::atom(text->value);
         }
     }
+    // `(1, 2).as(List)`: the checker admits only a tuple literal.
+    if (target == kex::names::kListType) {
+        if (const auto* tuple = std::get_if<TupleValue>(&value->data)) {
+            return Value::list(tuple->elements);
+        }
+    }
     return value;
 }
 

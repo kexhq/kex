@@ -85,6 +85,7 @@ KEX_DIAGNOSTIC(SpawnPassesType, "KEXET-0177", "`Process.spawn({name})` passes th
 KEX_DIAGNOSTIC(AsNeedsTypeName, "KEXET-0178", "`.as` needs a type name as its target")
 KEX_DIAGNOSTIC(AsAtomNeedsLiteral, "KEXET-0179", "`.as(Atom)` needs a string literal; for text known only at run time use `Atom.from(text)`, or `text.to(Atom)` to find an existing atom")
 KEX_DIAGNOSTIC(AsCannotConvert, "KEXET-0180", "cannot convert {source} to {target} with `.as`")
+KEX_DIAGNOSTIC(AsListNeedsTupleLiteral, "KEXET-0522", "`.as(List)` needs a tuple literal; for a tuple known only at run time use `.items`, or `.to(List)`")
 KEX_DIAGNOSTIC(AsNarrowsToByte, "KEXET-0181", "unchecked narrowing to Byte is not allowed; use `.to(Byte)`")
 KEX_DIAGNOSTIC(MakeContractUndefined, "KEXET-0182", "`{name}` is declared in this `make` block but nothing defines it. A method the runtime provides is declared with `:>`, which makes the receiver implicit")
 KEX_DIAGNOSTIC(MakeSignatureUndefined, "KEXET-0187", "`{name}` is declared here but never defined: give it a body, `let {name}(...) = ...`")
