@@ -6,6 +6,7 @@ struct KexReplSession;
 extern "C" {
 auto kex_repl_create() -> KexReplSession*;
 auto kex_repl_destroy(KexReplSession* session) -> void;
+auto kex_repl_set_inspect(KexReplSession* session, int inspect) -> void;
 auto kex_repl_eval(KexReplSession* session, const char* source) -> void;
 auto kex_repl_last_result(KexReplSession* session) -> const char*;
 auto kex_repl_complete(KexReplSession* session, const char* line, int start, const char* text)
@@ -35,6 +36,20 @@ auto importsUnitsSi(KexReplSession* session) -> void {
 } // namespace
 
 int main() {
+    // kexhq/kex#89: the browser's `--no-inspect`.
+    describe("Wasm REPL without the value echo", []() {
+        it("prints what the program prints, and no value", []() {
+            auto* session = kex_repl_create();
+            kex_repl_set_inspect(session, 0);
+            const auto value = eval(session, "1 + 1");
+            const auto printed = eval(session, "IO.printLine(\"hi\")");
+            kex_repl_destroy(session);
+            assertEqual(value, std::string(""));
+            assertTrue(printed.find("hi") != std::string::npos, printed);
+            assertTrue(printed.find("=> ") == std::string::npos, printed);
+        });
+    });
+
     describe("Wasm REPL session", []() {
         it("resolves embedded standard-library modules", []() {
             auto* session = kex_repl_create();
