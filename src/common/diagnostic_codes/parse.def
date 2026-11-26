@@ -108,7 +108,8 @@ KEX_DIAGNOSTIC(ExpectedEndToCloseSpawn, "KEXEP-0106", "expected 'end' to close s
 KEX_DIAGNOSTIC(ExpectedEqualsAfterTheCapabilityNameInWith, "KEXEP-0107", "expected '=' after the capability name in 'with', got {found}")
 KEX_DIAGNOSTIC(ExpectedDoAfterTheWithReplacement, "KEXEP-0108", "expected 'do' after the 'with' replacement, got {found}")
 KEX_DIAGNOSTIC(ExpectedEndToCloseWith, "KEXEP-0109", "expected 'end' to close with, got {found}")
-KEX_DIAGNOSTIC(ExpectedRParenInTupleParam, "KEXEP-0110", "expected ')' in tuple param, got {found}")
+// A tuple block parameter is parsed as a pattern now, which reports its own errors.
+KEX_RETIRED_DIAGNOSTIC("KEXEP-0110")
 KEX_DIAGNOSTIC(ExpectedParamName, "KEXEP-0111", "expected param name, got {found}")
 KEX_DIAGNOSTIC(ExpectedPipeToCloseParams, "KEXEP-0112", "expected '|' to close params, got {found}")
 KEX_DIAGNOSTIC(ExpectedTokenToCloseLambda, "KEXEP-0113", "expected {expected} to close lambda, got {found}")

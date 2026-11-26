@@ -108,3 +108,4 @@ KEX_DIAGNOSTIC(MatchArmsAllGuarded, "KEXET-0518", "every arm of this `match` has
 KEX_DIAGNOSTIC(BlockResultMismatch, "KEXET-0519", "the block given to `{name}` must return {expected}, but it returns {actual}")
 KEX_DIAGNOSTIC(RecordCalledLikeFunction, "KEXET-0520", "`{name}` is a record, not a function: build one by writing its fields in braces after the name")
 KEX_DIAGNOSTIC(NestedTooDeepToCheck, "KEXET-0521", "this is nested too deeply to check: give an inner part a name with `let`, and use the name")
+KEX_DIAGNOSTIC(TuplePatternNeverMatches, "KEXET-0523", "a tuple pattern never matches a value of type `{type}`")

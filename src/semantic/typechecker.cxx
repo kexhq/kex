@@ -5943,6 +5943,17 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
                          {"given", std::to_string(node.elements.size())},
                          {"type", typeToString(expected)}});
                 }
+                // `let (a, b) = 1`, or `{ |(a, b)| a }` over a list of Integers,
+                // was accepted and failed only when it ran: the walker with an
+                // undefined `a`, BEAM with a badmatch.
+                if (expected && (std::holds_alternative<PrimitiveType>(expected->kind) ||
+                                 std::holds_alternative<ListType>(expected->kind) ||
+                                 std::holds_alternative<MapType>(expected->kind) ||
+                                 std::holds_alternative<FuncType>(expected->kind))) {
+                    error(
+                        diag::Code::TuplePatternNeverMatches, pat.location,
+                        {{"type", typeToString(expected)}});
+                }
                 for (size_t i = 0; i < node.elements.size(); ++i) {
                     if (node.elements[i]) {
                         bindPatternVars(

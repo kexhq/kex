@@ -474,9 +474,20 @@ next_expr  = NEXT ;
 (* ===== Lambdas ===== *)
 
 lambda
-  = LBRACE PIPE params PIPE expr RBRACE           (* inline lambda *)
+  = LBRACE PIPE block_params PIPE expr RBRACE     (* inline lambda *)
   | LBRACE expr RBRACE                            (* zero-arg lambda *)
-  | DO PIPE params PIPE body rescue_block? END    (* multi-line lambda *)
+  | DO PIPE block_params PIPE body rescue_block? END (* multi-line lambda *)
+  ;
+
+(* A block parameter is a name, `_`, or a tuple pattern that destructures its
+   argument: `{ |(a, b)| a + b }`, `xs.reduce((0, 0)) { |(s, n), x| ... }`.
+   Several names, `|a, b|`, still auto-spread one tuple argument. *)
+block_params = block_param ( COMMA block_param )* ;
+
+block_param
+  = LOWER_IDENT
+  | UNDERSCORE
+  | LPAREN pattern ( COMMA pattern )* RPAREN      (* tuple pattern *)
   ;
 
 (* `&` is receiver shorthand only, and the method is always an identifier.
