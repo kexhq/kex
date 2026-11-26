@@ -1,5 +1,5 @@
-ok App.Models.User { admin?: false, email: ada@example.com, id: u1, nickname: None, tags: [new] }
-ok App.Models.User { admin?: true, email: b@x, id: u2, nickname: Just(bee), tags: [new] }
+ok App.Models.User { id: u1, email: ada@example.com, admin?: false, nickname: None, tags: [new] }
+ok App.Models.User { id: u2, email: b@x, admin?: true, nickname: Just(bee), tags: [new] }
 error: missing field "email" for App.Models.User
 error: unknown field "mail" for App.Models.User
 error: field "id" of App.Models.User expects String, got Integer

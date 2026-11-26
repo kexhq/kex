@@ -1455,6 +1455,14 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def, const std::string& moduleSc
 
 auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& moduleScope) -> void {
     const auto typeName = moduleScope.empty() ? def.name : moduleScope + "." + def.name;
+    {
+        std::vector<std::string> order;
+        order.reserve(def.fields.size());
+        for (const auto& field : def.fields) {
+            order.push_back(field.name);
+        }
+        registerRecordFieldOrder(typeName, std::move(order));
+    }
     if (moduleScope.empty()) {
         m_env->define(def.name, Value::record(typeName, {}));
         m_recordDefs[def.name] = &def;

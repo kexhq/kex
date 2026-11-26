@@ -6,7 +6,7 @@ spec/error_type_splice_not_a_type.kex:7:30: [KEXEC-0059]: Error, `integer` is no
   |
 7 |     let %{name + "Of"}(item: %{element}) -> Integer = 1
   |                              ^^^^^^^^^^
-spec/error_type_splice_not_a_type.kex:7:30: [KEXEC-0059]: Error, `[Type { args: [], name: String, pure?: true }]` is not a type: splice a type name (`Quantity.Length`) or a String that spells one
+spec/error_type_splice_not_a_type.kex:7:30: [KEXEC-0059]: Error, `[Type { name: String, args: [], pure?: true }]` is not a type: splice a type name (`Quantity.Length`) or a String that spells one
   |
 7 |     let %{name + "Of"}(item: %{element}) -> Integer = 1
   |                              ^^^^^^^^^^

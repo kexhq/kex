@@ -8,6 +8,6 @@ ok
 ok Direct
 ok Channel
 error: expected Kind, got "nope"
-ok App.Models.Conversation { archived?: false, id: c1, kind: Group, members: 3, topic: Just(kex) }
-ok App.Models.Conversation { archived?: true, id: c2, kind: Direct, members: 2, topic: None }
+ok App.Models.Conversation { id: c1, kind: Group, members: 3, archived?: false, topic: Just(kex) }
+ok App.Models.Conversation { id: c2, kind: Direct, members: 2, archived?: true, topic: None }
 error: field "members": expected Integer, got "many"

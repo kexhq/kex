@@ -1,0 +1,46 @@
+# `.inspected` and `IO.inspect` write a value as a Kex literal where one
+# exists, the same on the walker and on BEAM.
+using FS
+
+record Point do
+  y : Integer
+  x : Integer
+  label : String
+end
+
+main do
+  # Strings are escaped as a literal writes them, nested ones too.
+  IO.printLine("a\"b".inspected)
+  IO.printLine("line\nnext\ttab \\ end".inspected)
+  IO.printLine("\${not} \$ a hole".inspected)
+  IO.printLine(["say \"hi\""].inspected)
+  IO.printLine(Error("unknown field \"mail\" for User").inspected)
+  IO.printLine('\''.inspected)
+  IO.printLine('\n'.inspected)
+
+  # An empty map is `{}`.
+  IO.printLine({}.inspected)
+  IO.printLine([{}].inspected)
+
+  # An atom a bare `:name` cannot spell is quoted.
+  IO.printLine(:"two words".inspected)
+  IO.printLine(Atom.from("app@host").inspected)
+  IO.printLine(Atom.from("say\"").inspected)
+  IO.printLine(:plain.inspected)
+
+  # Record fields in declaration order.
+  IO.printLine(Point { x: 1, y: 2, label: "p" }.inspected)
+  IO.printLine("${Point { x: 1, y: 2, label: "q" }}")
+  IO.printLine(Type.of(42).inspected)
+
+  # A Void inside a value is `()`.
+  let path = "/tmp/kex_spec_inspect_literals.txt"
+  IO.printLine(FS.File.write(path, "x").inspected)
+  let _ = FS.File.delete(path)
+
+  # A mixed list's type is the union the checker writes for its literal.
+  IO.inspect(["x", 1])
+  IO.inspect([1, "x", 2, :a])
+  IO.inspect([Just(1), None])
+  IO.inspect([[1], ["a"]])
+end
