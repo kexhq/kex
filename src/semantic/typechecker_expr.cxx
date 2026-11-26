@@ -5809,6 +5809,19 @@ auto TypeChecker::recordCalledLikeFunction(const std::string& name) const -> boo
         return false;
     }
     // Unless something callable has that name: a constructor, a function.
+    // Inside a module, `type Node = Tag(Tag)` keeps its constructor under the
+    // module, so the bare `Tag(...)` there is looked up in each enclosing one.
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        if (const auto module = m_moduleConstructors.find(scope);
+            module != m_moduleConstructors.end() && module->second.contains(name)) {
+            return false;
+        }
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) {
+            break;
+        }
+        scope.resize(dot);
+    }
     return !m_adtOfConstructor.contains(name) && !m_userSignatures.contains(name) &&
            importedCandidates(name).empty();
 }
