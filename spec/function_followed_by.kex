@@ -1,0 +1,20 @@
+# `f.followedBy(g)` composes two functions in the order they run.
+let inc(n: Integer) -> Integer = n + 1
+let double(n: Integer) -> Integer = n * 2
+let exclaim(s: String) -> String = s + "!"
+
+main do
+  IO.printLine((~inc).followedBy(~double)(3).inspected)
+  IO.printLine((~double).followedBy(~inc)(3).inspected)
+  IO.printLine(followedBy(~inc, ~double)(10).inspected)
+
+  # A block as the second step, and a change of type along the way.
+  let label = (~double).followedBy { |n| "n=${n}" }
+  IO.printLine(label(4))
+
+  # Three steps, and a composed step passed to map.
+  let three = (~inc).followedBy(~double).followedBy(~inc)
+  IO.printLine(three(1).inspected)
+  IO.printLine([1, 2, 3].map((~inc).followedBy(~double)).inspected)
+  IO.printLine(["a", "b"].map((~exclaim).followedBy(~exclaim)).inspected)
+end
