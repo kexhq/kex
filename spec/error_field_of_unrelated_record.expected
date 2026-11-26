@@ -1,12 +1,12 @@
-spec/error_field_of_unrelated_record.kex:15:22: [KEXET-0101]: Error, undefined method `zork` for `Integer`
+spec/error_field_of_unrelated_record.kex:15:22: [KEXET-0101]: Error, undefined function `zork` for `Integer`
    |
 15 |   IO.printLine(3.zork)
    |                ^^^^^^
-spec/error_field_of_unrelated_record.kex:16:27: [KEXET-0101]: Error, undefined method `major` for `Color`
+spec/error_field_of_unrelated_record.kex:16:27: [KEXET-0101]: Error, undefined function `major` for `Color`
    |
 16 |   IO.printLine(color.major)
    |                ^^^^^^^^^^^
-spec/error_field_of_unrelated_record.kex:17:33: [KEXET-0101]: Error, undefined method `major` for `Kex.Backend`
+spec/error_field_of_unrelated_record.kex:17:33: [KEXET-0101]: Error, undefined function `major` for `Kex.Backend`
    |
 17 |   IO.printLine(Kex.BACKEND.major)
    |                ^^^^^^^^^^^^^^^^^

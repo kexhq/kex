@@ -132,8 +132,8 @@ trait_param = UPPER_IDENT ( LESS_THAN UNDERSCORE ( COMMA UNDERSCORE )* GREATER_T
 trait_body = trait_item* ;
 
 trait_item
-  = type_annotation               (* required pure method: `name : type` *)
-  | FOUL type_annotation          (* required foul method: `foul name : type` *)
+  = type_annotation               (* required pure function: `name : type` *)
+  | FOUL type_annotation          (* required foul function: `foul name : type` *)
   | function_def                  (* default implementation (optional for implementors) *)
   ;
 
@@ -282,12 +282,12 @@ expr
   | UPPER_IDENT
   | THIS
   | AT LOWER_IDENT                               (* @field shorthand for this.field, inside make/record functions *)
-  | AT LOWER_IDENT LPAREN args RPAREN            (* @method(args) shorthand for this.method(args) *)
-  | expr DOT LOWER_IDENT                         (* UFCS method call *)
-  | expr DOT LOWER_IDENT LPAREN args RPAREN      (* UFCS method call with args *)
-  | expr DOT LOWER_IDENT block                   (* UFCS method call with block *)
-  | expr DOT LOWER_IDENT LPAREN args RPAREN block (* UFCS method call with args and block *)
-  | expr DOT LOWER_IDENT BANG                    (* mutating call: x.method!() — reassigns var *)
+  | AT LOWER_IDENT LPAREN args RPAREN            (* @name(args) shorthand for this.name(args) *)
+  | expr DOT LOWER_IDENT                         (* UFCS call *)
+  | expr DOT LOWER_IDENT LPAREN args RPAREN      (* UFCS call with args *)
+  | expr DOT LOWER_IDENT block                   (* UFCS call with block *)
+  | expr DOT LOWER_IDENT LPAREN args RPAREN block (* UFCS call with args and block *)
+  | expr DOT LOWER_IDENT BANG                    (* mutating call: x.name!() — reassigns var *)
   | expr DOT LOWER_IDENT BANG LPAREN args RPAREN (* mutating call with args *)
   | expr DOT LOWER_IDENT BANG block              (* mutating call with block *)
   | expr DOT LOWER_IDENT BANG LPAREN args RPAREN block (* mutating call with args and block *)
@@ -479,12 +479,12 @@ lambda
   | DO PIPE params PIPE body rescue_block? END    (* multi-line lambda *)
   ;
 
-(* `&` is receiver shorthand only, and the method is always an identifier.
+(* `&` is receiver shorthand only, and the function is always an identifier.
    Capturing a named function or an operator is spelled with `~` — see
    curry_expr. *)
 shorthand_lambda
-  = AMP DOT LOWER_IDENT                           (* &.method *)
-  | AMP DOT LOWER_IDENT LPAREN args RPAREN        (* &.method(args) *)
+  = AMP DOT LOWER_IDENT                           (* &.name *)
+  | AMP DOT LOWER_IDENT LPAREN args RPAREN        (* &.name(args) *)
   ;
 
 (* `~f` captures a named function; every trailing (args) group partially

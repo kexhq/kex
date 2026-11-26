@@ -1,4 +1,4 @@
-spec/error_this_outside_make.kex:20:19: [KEXET-0461]: Error, 'this' has no receiver here: it is only bound inside a `make` block method
+spec/error_this_outside_make.kex:20:19: [KEXET-0461]: Error, 'this' has no receiver here: it is only bound inside a function of a `make` block
    |
 20 |     let doubled = this.count * 100
    |                   ^^^^

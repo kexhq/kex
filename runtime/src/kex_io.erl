@@ -129,7 +129,7 @@ call_field_or_fail(Receiver, Field, _Args, LocPrefix) ->
 
 undefined_method(Receiver, Field, LocPrefix) ->
     erlang:error(iolist_to_binary(
-        [LocPrefix, <<"runtime error: undefined method: ">>, Field,
+        [LocPrefix, <<"runtime error: undefined function: ">>, Field,
          <<" for ">>, value_type_name(Receiver)])).
 
 index_of(_Wanted, [], _N) -> error;

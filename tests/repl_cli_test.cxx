@@ -633,7 +633,7 @@ int main() {
             const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
             for (const auto& out : {walker, beam}) {
                 assertTrue(
-                    out.find("undefined method: iso for Result<Date, ?>") != std::string::npos,
+                    out.find("undefined function: iso for Result<Date, ?>") != std::string::npos,
                     out);
                 assertTrue(out.find("if_clause") == std::string::npos, out);
             }
@@ -704,7 +704,7 @@ int main() {
                 "end\n"
                 "stash(\"kept\")\n");
             assertTrue(out.find("=> \"kept\" : String") != std::string::npos, out);
-            assertTrue(out.find("undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined function") == std::string::npos, out);
         });
 
         it("runs an input on the checker's decisions", []() {
@@ -713,7 +713,7 @@ int main() {
                 "site.put(\"hi\")\n"
                 "site.get\n");
             assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos, out);
-            assertTrue(out.find("undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined function") == std::string::npos, out);
         });
 
         it("persists var bindings, reassignment, and ! mutation", []() {
@@ -993,7 +993,7 @@ int main() {
             auto out = runRepl(std::string("/load ") + sourcePath + "\nstash(\"loaded\")\n");
             std::remove(sourcePath);
             assertTrue(out.find("=> \"loaded\" : String") != std::string::npos, out);
-            assertTrue(out.find("undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined function") == std::string::npos, out);
         });
 
         it("keeps a loaded module's AST alive for later bindings", []() {
@@ -1130,7 +1130,7 @@ int main() {
             assertTrue(
                 out.find("Ok(Just(\"kex\")) : Result<String?, CallError>") != std::string::npos,
                 out);
-            assertTrue(out.find("undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined function") == std::string::npos, out);
         });
 
         // Both REPLs complete through the editor's analysis: the receiver is
@@ -1803,7 +1803,7 @@ int main() {
             // >= 2 params, so the no-argument postfix form `x.inspect` failed
             // with "Undefined method: inspect" on BEAM only.
             auto beam = runBeamRepl("[1, 2].inspect\n");
-            assertTrue(beam.find("undefined method") == std::string::npos, beam);
+            assertTrue(beam.find("undefined function") == std::string::npos, beam);
             assertTrue(beam.find("[1, 2]") != std::string::npos, beam);
         });
 

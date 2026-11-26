@@ -1,6 +1,6 @@
 # kex: no-check
 # TCP chat server — sketch of a `serving` construct: a process whose
-# message-handling methods are declared with `slot`, typed. There's no
+# message-handling functions are declared with `slot`, typed. There's no
 # hand-written message ADT — each slot's name and parameter types
 # generate one constructor of the process's message type. Return type
 # decides call (returns (State, Reply)) vs cast (returns State), with

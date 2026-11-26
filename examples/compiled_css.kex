@@ -6,7 +6,7 @@
 # gone before codegen, as is the first `.rule("*", ...)`.
 #
 # The rest still builds at runtime: `textColor` is a runtime binding, and a
-# method dispatched on it needs its value (`kex --collapse-report` says so).
+# function dispatched on it needs its value (`kex --collapse-report` says so).
 # Validation of property names, unit checking, dead-style elimination and
 # vendor prefixing are all aspirational.
 

@@ -1,5 +1,5 @@
 # kex: no-check
-# An undefined method names the RECEIVER'S TYPE and the call site. BEAM used
+# An undefined function names the RECEIVER'S TYPE and the call site. BEAM used
 # to report the method alone, with no type and (for a dispatcher) no location.
 record Box do
   size : Integer

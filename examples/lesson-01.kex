@@ -1,5 +1,5 @@
 # UFCS: value.f(arg) is the same as f(value, arg).
-# That means plain functions chain like methods.
+# That means plain functions chain: `x.f.g` is `g(f(x))`.
 
 main do
   let nums = [1, 2, 3, 4, 5, 6]

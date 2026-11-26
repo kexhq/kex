@@ -56,7 +56,7 @@ describe("Units.SI") do
     assert(1.watt.to(String, in: Kilo(Watt * Hour)) == None)
   end
 
-  it("exposes prefix Unit methods to callers outside the module") do
+  it("exposes prefix Unit functions to callers outside the module") do
     # SIPrefix's `make` body reads module-private display helpers. Those are
     # reachable from a call site outside Units.SI, not just from within it.
     let target = Kilo(Watt * Hour)

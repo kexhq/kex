@@ -126,7 +126,7 @@ describe("Kex.AST") do
           NamedType("String", []), NamedType("Integer", [])
         ]))
       end
-      _ => assert(false, "method target type or call flags differ")
+      _ => assert(false, "call target type or call flags differ")
     end
     let receiveExpression = Kex.AST.parseExpression(`
       receive do |sender|

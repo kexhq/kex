@@ -63,7 +63,7 @@ describe("Evaluator.runExpression") do
     end
   end
 
-  it("evaluates a method chain") do
+  it("evaluates a call chain") do
     match Evaluator.runExpression("\"hello world\".split(\" \").length") do
       Ok(result) => assert(result == 2)
       Error(msg) => assert(false, "Evaluator.runExpression failed: ${msg}")

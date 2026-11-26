@@ -5,7 +5,7 @@
 # a method also called `routes` — on a completely different type — captures the
 # field read:
 #
-#   runtime error: undefined method: routes for Net.HTTP.Router
+#   runtime error: undefined function: routes for Net.HTTP.Router
 #
 # The two types need share nothing: naming ours `Site` rather than `Router`
 # makes no difference, so it is the method NAME alone, not a type collision.

@@ -1263,7 +1263,7 @@ let output(Error(_))  = ""
 let typeCrashMarkers -> [String] = [
   "badfun", "badarith", "badarg", "badmatch", "badmap", "badrecord",
   "case_clause", "function_clause", "if_clause", "try_clause", "undef",
-  "no matching clause", "No matching clause", "undefined method",
+  "no matching clause", "No matching clause", "undefined function",
   "undefined function", "undefined variable", "cannot add", "cannot subtract",
   "cannot multiply", "cannot divide", "cannot compare", "cannot call",
   "Internal error", "runtime error", "pattern mismatch",

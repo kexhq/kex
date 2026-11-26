@@ -6,7 +6,7 @@
 # invisible: the interpreter stored `zebra:` on a record with no such field and
 # `.zebra` read it straight back, so callers kept "working" against a field that
 # no longer existed. BEAM only failed at runtime, and then complained about the
-# accessor ("Undefined method: zebra") rather than the construction.
+# accessor ("Undefined function: zebra") rather than the construction.
 #
 # Declaration order here is deliberately NOT alphabetical, so the message's
 # field list is exercised as a sorted rendering rather than an echo of the

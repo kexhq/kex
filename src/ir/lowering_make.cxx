@@ -317,7 +317,7 @@ auto Lowering::lowerMakeGroup(
                 "erlang", "iolist_to_binary", 1,
                 one(makeListOf(
                     lit(LitKind::String,
-                        "runtime error: undefined method: " + first.name + " for "),
+                        "runtime error: undefined function: " + first.name + " for "),
                     callE("kex_io", "value_type_name", 1, one(var("_noReceiver0"))))));
             fallback.body = callE("erlang", "error", 1, one(std::move(message)));
         }

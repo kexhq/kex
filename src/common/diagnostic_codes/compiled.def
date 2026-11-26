@@ -1,6 +1,6 @@
 // compiled diagnostics. See all.def.
-KEX_DIAGNOSTIC(MakeBodyGeneratesNonMethod, "KEXEC-0001", "a `make` body holds methods, so only `let %name(...)` can be generated inside one. An ordinary `make` follows the same rule")
-KEX_DIAGNOSTIC(GeneratedMethodEmptyName, "KEXEC-0002", "generated method has an empty name")
+KEX_DIAGNOSTIC(MakeBodyGeneratesNonMethod, "KEXEC-0001", "a `make` body holds functions, so only `let %name(...)` can be generated inside one. An ordinary `make` follows the same rule")
+KEX_DIAGNOSTIC(GeneratedMethodEmptyName, "KEXEC-0002", "generated function has an empty name")
 KEX_DIAGNOSTIC(EmbedArity, "KEXEC-0003", "Kex.embed takes exactly one argument: the path of the file to embed")
 KEX_DIAGNOSTIC(EmbedArgumentNotLiteral, "KEXEC-0004", "Kex.embed's argument must be a plain string literal naming the file to embed. The path has to be known to the compiler, not only to the running program")
 KEX_DIAGNOSTIC(EmbedArgumentInterpolated, "KEXEC-0005", "Kex.embed's argument must be a plain string literal naming the file to embed, not an interpolated one. The path has to be known to the compiler, not only to the running program. A hole may name a `compiled do` loop variable, or a String parameter of the enclosing function, which then gets one clause per matching file")

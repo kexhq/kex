@@ -4,7 +4,7 @@
 # parallel to the real one. Nothing matched it except the hand-written clauses
 # in kex_file.erl, so it worked only while no generated dispatcher existed for
 # those method names — the moment one did, `handle.write(...)` fell through
-# every clause and died with "Undefined method: write for Tuple". It is now a
+# every clause and died with "Undefined function: write for Tuple". It is now a
 # `FileHandle` whose device is `mock`, so one type answers everywhere.
 
 using FS
