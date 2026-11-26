@@ -404,3 +404,23 @@ let inspected(value: Inspectable) = value.inspectValue(Console.enabled?)
 #   # => [6, 12]
 inspect : A -> A
 let inspect(value) = IO.inspect(value)
+
+# Returns +true+ when +value+ is an atom, such as +:ok+. Universal:
+# reachable on every type through UFCS, so it answers where the static type
+# is +Any+. A +Bool+, +None+ and a constructor such as +Red+ are values of
+# their own types, not atoms.
+#
+# On the BEAM a constructor is spelled as an atom of its name, so an atom
+# written like one of the program's constructors or type names (+:Red+ next
+# to +type Color = Red | Green+) answers as that constructor or type would,
+# just as +Type.of+ does. Lower-case atoms never collide.
+#
+# @param value [A] any value
+# @return [Bool] whether the value is an atom
+#
+# @example
+#   :ok.atom?      # => true
+#   "ok".atom?     # => false
+#   true.atom?     # => false
+atom? : A -> Bool
+let atom?(value) = Kex.Intrinsic.Type.ofValue(value).name == "Atom"

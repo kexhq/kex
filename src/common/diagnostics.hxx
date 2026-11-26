@@ -30,6 +30,14 @@ auto jsonEscape(const std::string& s) -> std::string;
 // Extract the "did you mean `X`?" portion from a diagnostic message, if any.
 auto extractHint(const std::string& msg) -> std::string;
 
+// Kex source, syntax-highlighted as a diagnostic's snippet is: keywords,
+// types, literals, strings and comments. Plain when kex::color is off.
+auto highlightKex(const std::string& code) -> std::string;
+
+// Prose with each `backtick` span highlighted as Kex and the rest left plain:
+// documentation, where capitalised words are English rather than types.
+auto highlightCodeSpans(const std::string& text) -> std::string;
+
 // Syntax-highlight a diagnostic message body.
 auto colorizeMessage(const std::string& msg) -> std::string;
 

@@ -276,6 +276,10 @@ auto Program::literalIsFloat(const ast::Expr& literal) const -> bool {
     return m_analysis && m_analysis->literalIsFloat(literal);
 }
 
+auto Program::passedAsJust(const ast::Expr& argument) const -> bool {
+    return m_analysis && m_analysis->passedAsJust(argument);
+}
+
 auto Program::typeParametersOf(const ast::FunctionDef& def) const -> std::vector<std::string> {
     return m_analysis ? m_analysis->typeParametersOf(def) : std::vector<std::string>{};
 }
@@ -491,6 +495,12 @@ auto ProgramSet::literalIsFloat(const ast::Expr& literal) const -> bool {
     return newestAnswer<bool>(
         m_owners, &literal, m_base, false,
         [&](const Program& p) { return p.literalIsFloat(literal); }, [](bool f) { return f; });
+}
+
+auto ProgramSet::passedAsJust(const ast::Expr& argument) const -> bool {
+    return newestAnswer<bool>(
+        m_owners, &argument, m_base, false,
+        [&](const Program& p) { return p.passedAsJust(argument); }, [](bool f) { return f; });
 }
 
 auto ProgramSet::typeArgumentsOf(const ast::Expr& call) const

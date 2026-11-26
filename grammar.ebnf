@@ -198,6 +198,9 @@ function_clause
 
 return_annotation = ARROW type_expr ;
 
+(* The expression after `=` starts on the `=` line: a body on its own line goes
+   in `do ... end`. A clause takes no `when` guard (a match_clause does). The
+   parser reports either with its own error and keeps the clause's body. *)
 clause_body
   = EQUALS expr
   | DO body rescue_block? END
@@ -474,9 +477,20 @@ next_expr  = NEXT ;
 (* ===== Lambdas ===== *)
 
 lambda
-  = LBRACE PIPE params PIPE expr RBRACE           (* inline lambda *)
+  = LBRACE PIPE block_params PIPE expr RBRACE     (* inline lambda *)
   | LBRACE expr RBRACE                            (* zero-arg lambda *)
-  | DO PIPE params PIPE body rescue_block? END    (* multi-line lambda *)
+  | DO PIPE block_params PIPE body rescue_block? END (* multi-line lambda *)
+  ;
+
+(* A block parameter is a name, `_`, or a tuple pattern that destructures its
+   argument: `{ |(a, b)| a + b }`, `xs.reduce((0, 0)) { |(s, n), x| ... }`.
+   Several names, `|a, b|`, still auto-spread one tuple argument. *)
+block_params = block_param ( COMMA block_param )* ;
+
+block_param
+  = LOWER_IDENT
+  | UNDERSCORE
+  | LPAREN pattern ( COMMA pattern )* RPAREN      (* tuple pattern *)
   ;
 
 (* `&` is receiver shorthand only, and the method is always an identifier.

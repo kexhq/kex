@@ -17,6 +17,8 @@
 #include "hir/repl_input.hxx"
 #include "common/repl_commands.hxx"
 #include "common/version.hxx"
+#include "help/api_help.hxx"
+#include "help/describe.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "compiled/expand.hxx"
@@ -34,6 +36,7 @@
 #include <memory>
 #include <new> // IWYU pragma: keep (the standard declares placement new here)
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -62,6 +65,9 @@ struct KexReplSession {
     // completed so `x.` is typed by analysis (see kex_repl_complete).
     std::string replBindings;
     std::string lastCompletions;
+    // Whether a value is echoed as `=> value : Type`; off is the browser's
+    // `kex --no-inspect` (kex_repl_set_inspect).
+    bool inspect = true;
 };
 
 extern "C" {
@@ -110,6 +116,13 @@ KexReplSession* kex_repl_create() {
 EMSCRIPTEN_KEEPALIVE
 void kex_repl_destroy(KexReplSession* session) {
     delete session;
+}
+
+// `--no-inspect` for the browser REPL: with 0, an input's value is not
+// echoed, so only what the program prints itself is shown.
+EMSCRIPTEN_KEEPALIVE
+void kex_repl_set_inspect(KexReplSession* session, int inspect) {
+    session->inspect = inspect != 0;
 }
 
 namespace {
@@ -167,6 +180,52 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
     const auto command = kex::parseReplCommand(source);
     if (command.kind == Command::Exit) {
         session->lastResult = "";
+        return;
+    }
+    // `/type <expr>` and `/help <name>`: the input checked in the session and
+    // not run, answered as the native REPLs answer (help/describe.hxx).
+    if (command.kind == Command::Type ||
+        (command.kind == Command::Help && !command.argument.empty())) {
+        std::ostringstream out;
+        try {
+            Lexer lexer(
+                session->replAccumSource + "main do\n" + session->replBindings + command.argument +
+                    "\nend\n",
+                "<repl>");
+            Parser parser(lexer.tokenizeAll(), "<repl>");
+            auto program = std::make_unique<ast::Program>(parser.parseProgram());
+            if (!parser.diagnostics().empty()) {
+                throw std::runtime_error(parser.diagnostics().front().message);
+            }
+            semantic::Analyzer analyzer(&preludeSemanticInterfaces(""));
+            analyzer.setIndexesNames(true);
+            analyzer.analyze(*program);
+            const ast::Expr* expr = nullptr;
+            for (const auto& item : program->items) {
+                if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
+                    main && *main && !(*main)->body.empty()) {
+                    expr = (*main)->body.back().get();
+                }
+            }
+            if (!expr) {
+                session->lastResult = "  /type takes an expression: /type List.first\n";
+                return;
+            }
+            if (command.kind == Command::Type) {
+                help::printReplType(command.argument, analyzer, *expr, out, out);
+            } else {
+                help::ApiIndex own;
+                try {
+                    own.addSource("<repl>", session->replAccumSource, "");
+                } catch (...) {}
+                help::printReplNameHelp(
+                    command.argument, analyzer, *expr, {&own, &help::standardLibraryIndex()}, out,
+                    out);
+            }
+        } catch (const std::exception& e) {
+            out << "  " << kex::diagnostics::formatBriefException(e, "  ") << "\n";
+        }
+        session->lastResult = out.str();
         return;
     }
     if (command.kind == Command::Help) {
@@ -262,7 +321,8 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         // and ":", plain value, cyan type — showTypes defaults to on there
         // too), so the two look identical once rendered through a real
         // terminal instead of a plain-text diff.
-        if (!isDef && value && !std::holds_alternative<UnitValue>(value->data)) {
+        if (session->inspect && !isDef && value &&
+            !std::holds_alternative<UnitValue>(value->data)) {
             result += std::string(color::apply(color::gray)) + "=> " + color::apply(color::reset) +
                       value->inspect() + " " + color::apply(color::gray) + ":" +
                       color::apply(color::reset) + " " + color::apply(color::cyan) +

@@ -177,6 +177,17 @@ auto collapseReportFor(const std::string& source) -> std::string {
     return out;
 }
 
+// A transcript with the REPLs' prompts taken out, so the two REPLs' answers
+// compare equal.
+auto withoutPrompts(std::string text) -> std::string {
+    for (const std::string prompt : {"kex(beam)> ", "kex> "}) {
+        for (auto at = text.find(prompt); at != std::string::npos; at = text.find(prompt, at)) {
+            text.erase(at, prompt.size());
+        }
+    }
+    return text;
+}
+
 auto runBeamFile(const std::string& source, const std::string& argument, bool noCheck = false)
     -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
@@ -1951,6 +1962,81 @@ int main() {
                         out.find("typed") == std::string::npos,
                     "the session went on after a failed boot: " + out);
             }
+        });
+
+        // kexhq/kex#89: only what the program prints itself.
+        it("echoes no values with --no-inspect, in both REPLs", [kex]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "printf '1 + 1\\nIO.printLine(\"twice: ${x * 2}\")\\nIO.inspect(x)\\n' | " +
+                    kex + repl + " --no-inspect -e 'let x = 21' -e 'let half(n) = n / 2' 2>&1");
+                assertTrue(out.find("twice: 42") != std::string::npos, "lost printLine: " + out);
+                assertTrue(out.find("21 : Integer") != std::string::npos, "lost inspect: " + out);
+                assertTrue(out.find("=> ") == std::string::npos, "echoed a value: " + out);
+            }
+        });
+
+        // kexhq/kex#728: the checker's type, and nothing run.
+        it("/type answers from the checker, the same in both REPLs", [kex]() {
+            std::vector<std::string> outputs;
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "printf '/type List.first\\n/type [1, 2].first\\n/type inc\\n/type xs\\n"
+                    "/type 1 / 0\\n/type IO.readLine()\\n/type List\\n/type nope\\n"
+                    "IO.printLine(\"still here\")\\n' | " +
+                    kex + repl +
+                    " -e 'let inc(n: Integer) -> Integer = n + 1' -e 'let xs = [1, 2]' 2>&1");
+                const auto has = [&](const std::string& part) {
+                    assertTrue(out.find(part) != std::string::npos, "missing " + part + ": " + out);
+                };
+                has("\nList.first : [A] -> A?\n");
+                has("\nInteger?\n");
+                has("\ninc : Integer -> Integer\n");
+                has("\nxs : [Integer]\n");
+                // Checked, not run: no division by zero, and no line read.
+                has("\nInteger\n");
+                has("\nResult<String?, ReadError>\n");
+                has("still here");
+                has("`List` is a module or a type, not a value");
+                has("nope");
+                // The boot lines are echoed; nothing after them is.
+                assertTrue(
+                    out.find("=> ", out.find("/type List.first")) == std::string::npos,
+                    "evaluated an input: " + out);
+                assertTrue(out.find("unexpected token: /") == std::string::npos, out);
+                // From the first answer on: the banners differ.
+                const auto from = out.find("List.first :");
+                outputs.push_back(
+                    withoutPrompts(out.substr(from, out.find("/help\n", from) - from)));
+            }
+            assertEqual(outputs[0], outputs[1]);
+        });
+
+        // kexhq/kex#729: `/type`'s answer plus the documentation.
+        it("/help <name> shows the type and the docs, the same in both REPLs", [kex]() {
+            std::vector<std::string> outputs;
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "printf '/help List.first\\n/help xs\\n/help List\\n/help double\\n"
+                    "/help nope\\n/help\\n' | " +
+                    kex + repl + " -e 'let xs = [1, 2]' -e 'let double(n: Integer) = n * 2' 2>&1");
+                const auto has = [&](const std::string& part) {
+                    assertTrue(out.find(part) != std::string::npos, "missing " + part + ": " + out);
+                };
+                has("List.first : [A] -> A?\n\nList.first  (make [X])\n  first :> X?\n");
+                has("Returns: X?");
+                has("  [1, 2, 3].first   # => Just(1)");
+                has("xs : [Integer]");
+                has("type List<X> = [X]");
+                has("double : Integer -> Integer");
+                has("no help for `nope`");
+                // Bare `/help` still lists the commands.
+                has("/type <expr>");
+                const auto from = out.find("List.first :");
+                outputs.push_back(
+                    withoutPrompts(out.substr(from, out.find("/help\n", from) - from)));
+            }
+            assertEqual(outputs[0], outputs[1]);
         });
 
         it("refuses a file", [kex]() {

@@ -1,6 +1,6 @@
-spec/error_named_retry_option.kex:6:12: [KEXET-0491]: Error, `Control.Retry.Retry.run` expects argument 3 to be Integer, but got String
+spec/error_named_retry_option.kex:6:36: [KEXET-0491]: Error, `Control.Retry.Retry.run` expects argument 3 to be Integer, but got String
 
 Control.Retry.Retry.run : (Block<A>) -> Control.Retry.Retry.Schedule -> Integer -> Measure<Quantity.Time> -> Float -> Measure<Quantity.Time> -> Float -> Measure<Quantity.Time>? -> (Measure<Quantity.Time> -> Void) -> (Block<Float>) -> (Control.Retry.Retry.Info<A> -> Void) -> A
   |
 6 |   Retry.run(jitter: 0.0, attempts: "three") do
-  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |                                    ^^^^^^^ this has type String

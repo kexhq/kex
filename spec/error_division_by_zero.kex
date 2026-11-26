@@ -1,5 +1,7 @@
-# Division by zero is a runtime error.
+# Division by zero is a runtime error. A divisor the checker knows is 0 is
+# also warned about before the program runs (kexhq/kex#702). Nothing is
+# printed before the error: the warning is on stderr, which the BEAM spec
+# runner reads after stdout, so a line of output would order differently.
 main do
-  IO.printLine("before")
   IO.printLine(1 / 0)
 end

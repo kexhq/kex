@@ -8,10 +8,12 @@
 # body. `parseParam` already routed `@`, `{` and `[` to the pattern parser (which
 # has handled tuples all along, hence `match`); `(` was simply missing.
 #
-# Deliberately NOT added, because each already has a working spelling and a
+# Deliberately NOT added, because it already has a working spelling and a
 # second one buys nothing:
 #   let a, b = (1, 2)        — `let (a, b) = (1, 2)` does this
-#   [(1,2)].each { |(k,v)| } — `|k, v|` auto-spreads over a tuple already
+#
+# A block takes the same tuple pattern, `{ |(k, v)| ... }`: see
+# block_tuple_param.kex. `|k, v|` auto-spreads, but not in every position.
 
 let pair((a, b)) -> String do
   "${a}+${b}"
