@@ -11,7 +11,7 @@ modulo(A, B) when is_integer(A), is_integer(B) -> ((A rem B) + B) rem B;
 %% only because the call had a single owner and needed no dispatcher. Report it
 %% the way the walker does instead of failing with `badarith`.
 modulo(A, _B) ->
-    erlang:error(iolist_to_binary(["runtime error: undefined method: modulo for ",
+    erlang:error(iolist_to_binary(["runtime error: undefined function: modulo for ",
                                    kex_io:value_type_name(A)])).
 %% n.times { |i| block(i) } — call block with 0..n-1. A parameterless
 %% `do ... end` block (a `Block<Void>` overload) ignores the index rather

@@ -84,4 +84,41 @@ inline auto join(
     return result;
 }
 
+// `text` as the body of a Kex literal quoted by `quote` (`"` for a String,
+// `'` for a Char), using the lexer's escape set (Lexer::lexEscape): the
+// quote, a backslash and the control characters are escaped, and so is the
+// `$` that would open an interpolation, so the result reads back as `text`.
+// runtime/src/kex_io.erl's escape_literal/2 is the BEAM copy.
+inline auto escapedLiteral(std::string_view text, char quote) -> std::string {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string result;
+    result.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        switch (c) {
+            case '\\': result += "\\\\"; break;
+            case '\n': result += "\\n"; break;
+            case '\r': result += "\\r"; break;
+            case '\t': result += "\\t"; break;
+            case '\x1b': result += "\\e"; break;
+            case '\0': result += "\\0"; break;
+            default:
+                if (c == quote) {
+                    result += '\\';
+                    result += c;
+                } else if (c == '$' && quote == '"' && i + 1 < text.size() && text[i + 1] == '{') {
+                    result += "\\$";
+                } else if (static_cast<unsigned char>(c) < 0x20 || c == '\x7f') {
+                    const auto byte = static_cast<unsigned char>(c);
+                    result += "\\x";
+                    result += kHex[byte >> 4];
+                    result += kHex[byte & 0xF];
+                } else {
+                    result += c;
+                }
+        }
+    }
+    return result;
+}
+
 } // namespace kex

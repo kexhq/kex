@@ -1455,6 +1455,14 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def, const std::string& moduleSc
 
 auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& moduleScope) -> void {
     const auto typeName = moduleScope.empty() ? def.name : moduleScope + "." + def.name;
+    {
+        std::vector<std::string> order;
+        order.reserve(def.fields.size());
+        for (const auto& field : def.fields) {
+            order.push_back(field.name);
+        }
+        registerRecordFieldOrder(typeName, std::move(order));
+    }
     if (moduleScope.empty()) {
         m_env->define(def.name, Value::record(typeName, {}));
         m_recordDefs[def.name] = &def;
@@ -2913,7 +2921,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
                 auto val = m_env->get("this");
                 if (!val) {
-                    throw RuntimeError("'this' used outside of a method context", expr.location);
+                    throw RuntimeError("'this' used outside of a `make` function", expr.location);
                 }
                 return val;
             } else if constexpr (std::is_same_v<T, ast::Identifier>) {
@@ -3599,7 +3607,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (const auto& target = m_programs.targetOf(node);
                     target.kind == hir::TargetKind::Hidden) {
                     auto message =
-                        "undefined method: " + node.method + " for " + receiver->typeName();
+                        "undefined function: " + node.method + " for " + receiver->typeName();
                     if (!target.owner.empty() && !node.namedArgs.empty()) {
                         message += " — `" + target.owner + "` defines a matching `" + node.method +
                                    "`; add `using " + target.owner + "`";
@@ -3688,7 +3696,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     !m_env->get(mangledName) && !m_functionDefs.count(mangledName) &&
                     !dispatchTypeName(receiver).empty()) {
                     throw RuntimeError(
-                        "undefined method: " + node.method + " for " + receiver->typeName(),
+                        "undefined function: " + node.method + " for " + receiver->typeName(),
                         expr.location);
                 }
                 try {
@@ -3722,7 +3730,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         throw;
                     }
                     throw RuntimeError(
-                        "undefined method: " + sourceName(mangledName) + " for " +
+                        "undefined function: " + sourceName(mangledName) + " for " +
                             receiver->typeName(),
                         expr.location);
                 }

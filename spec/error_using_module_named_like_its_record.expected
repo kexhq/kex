@@ -1,4 +1,4 @@
-spec/error_using_module_named_like_its_record.kex:10:26: [KEXET-0101]: Error, undefined method `conjugat` for `Complex.Complex`
+spec/error_using_module_named_like_its_record.kex:10:26: [KEXET-0101]: Error, undefined function `conjugat` for `Complex.Complex`
    |
 10 |   IO.printLine(z.conjugat)
    |                ^^^^^^^^^^

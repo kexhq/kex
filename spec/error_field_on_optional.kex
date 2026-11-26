@@ -1,6 +1,6 @@
 # `.field` on an optional — `xs.maxBy { |b| b.id }.id` — used to pass the
 # checker and then break three different ways at run time: a crash on BEAM,
-# "Undefined method: id for Optional<M.Book>" in the interpreter, and (worst,
+# "Undefined function: id for Optional<M.Book>" in the interpreter, and (worst,
 # on 0.4.0-beta.2 BEAM) the whole record silently interpolated where the
 # field was asked for. A plain record literal does not coerce to `X?`, so
 # chaining off optional-returning methods is the spelling users reach for —

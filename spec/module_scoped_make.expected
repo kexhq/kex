@@ -1,4 +1,4 @@
 in!!!
 lexical!!!
 6
-Error: spec/module_scoped_make.kex:44:31: runtime error: undefined method: shout for String
+Error: spec/module_scoped_make.kex:44:31: runtime error: undefined function: shout for String

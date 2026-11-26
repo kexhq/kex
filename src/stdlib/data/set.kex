@@ -1,52 +1,50 @@
 # Immutable collections of distinct elements.
 #
-# Opt-in: nothing here is in scope until `using Data.Set`, which brings both
-# flavours below into scope at once.
+# Nothing here is in scope until `using Data.Set`, which brings in both kinds
+# of set:
 #
 #   using Data.Set
 #
-# Membership is decided by structural equality: the same equality +==+ and
-# map keys use, so records and tuples are compared by value, not identity.
-# Updates return a new set; the +!+ forms (+add!+, +delete!+) build
-# a new set and rebind the receiver variable rather than modifying anything in
-# place.
+# Membership uses the same structural equality as +==+ and map keys, so
+# records and tuples are compared by value. Updates return a new set. The +!+
+# forms (+add!+, +delete!+) rebind the variable they are called on to the new
+# set.
 #
 #   let tags = Set.from(["kex", "beam", "kex"])
 #   tags.count                     # => 2
 #   tags.contains?("beam")         # => true
 #   tags.add("erlang").items       # => ["beam", "erlang", "kex"]
 #
-# There are two flavours, differing only in how they store their elements:
+# The two kinds differ in how they store their elements:
 #
-#   Set           sorted, so iteration is in ascending element order and the
+#   Set           kept sorted, so iteration is in ascending order and the
 #                 elements must be +Comparable+.
-#   UnorderedSet  hash-backed, so membership does not pay for ordering and
-#                 the elements need only support equality. Iteration order
-#                 is unspecified: never write a test against it.
+#   UnorderedSet  hash-based, so +contains?+ is a map lookup and the elements
+#                 need only support equality. Iteration order is unspecified,
+#                 so don't write a test that depends on it.
 #
-# Reach for +Set+ when you will read the elements back out, and for
-# +UnorderedSet+ when the set exists to answer +contains?+ quickly.
+# Use +Set+ when you will read the elements back out, and +UnorderedSet+ when
+# the set is mostly asked +contains?+.
 #
-# Sets compare by their elements. Use +items+ to obtain a list;
-# +UnorderedSet.items+ has no guaranteed order.
+# Two sets are equal when they have the same elements. +items+ returns the
+# elements as a list, in no particular order for an +UnorderedSet+.
 module Data
 
-# A set whose elements are kept sorted and duplicate free.
+# A set whose elements are kept sorted and free of duplicates.
 #
-# Build one with +Set.from+ rather than by hand: the record literal does no
-# deduplication and no sorting, and every function here relies on both. Reading
-# +items+ back is the field itself, so handing a set's elements to list code
-# costs nothing.
+# Build one with +Set.from+. A +Set { items: ... }+ literal neither sorts nor
+# removes duplicates, and every function here assumes both. +items+ is the
+# stored list, so reading it costs nothing.
 #
 #   Set.from([3, 1, 2]).items   # => [1, 2, 3]
 record Set<A> do
   items : [A] = []
 end
 
-# A set backed by a map from each member to +true+; its keys ARE the elements.
+# A set stored as a map from each element to +true+.
 #
-# Build one with +UnorderedSet.from+. Iteration order is whatever the map
-# hands back, so use +items.sort+ when you need a stable order.
+# Build one with +UnorderedSet.from+. Iteration follows the map's internal
+# order, so use +items.sort+ when you need a stable order.
 #
 #   UnorderedSet.from([3, 1, 2]).contains?(2)   # => true
 record UnorderedSet<A> do
@@ -56,11 +54,6 @@ end
 # Constructors for the sorted +Set+.
 module Set do
   # Builds a sorted set from a list, discarding duplicates.
-  #
-  # This is the normal way to make a +Set+. Deduplication goes through a map
-  # rather than +List.uniq+: map keys are unique under exactly the structural
-  # equality a set wants, and each element costs one insertion instead of a
-  # scan of everything kept so far.
   #
   # @param items [[A]] the elements, in any order and with any duplicates
   # @return [Set<A>] the distinct elements, sorted
@@ -76,8 +69,8 @@ module Set do
     return Set { items: unique.keys.sort }
   end
 
-  # The set with no elements. Also the +Monoid+ identity, so
-  # +s.combine(Set.empty)+ is +s+.
+  # Returns the empty set, the +Monoid+ identity: +s.combine(Set.empty)+ is
+  # +s+.
   #
   # @return [Set<A>] the empty set
   #
@@ -91,8 +84,7 @@ end
 module UnorderedSet do
   # Builds an unordered set from a list, discarding duplicates.
   #
-  # Nothing is sorted, so unlike +Set.from+ this does not require the elements
-  # to be +Comparable+.
+  # Unlike +Set.from+, this does not need the elements to be +Comparable+.
   #
   # @param items [[A]] the elements, in any order and with any duplicates
   # @return [UnorderedSet<A>] the distinct elements
@@ -107,7 +99,7 @@ module UnorderedSet do
     return UnorderedSet { slots: Kex.Intrinsic.Map.fromEntries(items.map { |x| (x, true) }) }
   end
 
-  # The unordered set with no elements. Also the +Monoid+ identity.
+  # Returns the empty unordered set, the +Monoid+ identity.
   #
   # @return [UnorderedSet<A>] the empty set
   #
@@ -119,9 +111,9 @@ end
 make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   # Folds over the elements in ascending order.
   #
-  # This is +Set+'s +Enumerable+ primitive; +each+, +find+, +any?+ and the
-  # rest are built on it. The collection-returning operations are overridden
-  # below, because +Enumerable+'s defaults answer with a list.
+  # +each+, +find+, +any?+ and the rest of +Enumerable+ are built on it.
+  # +map+, +filter+ and +reject+ are defined below to return a +Set+; the
+  # other +Enumerable+ functions that build a collection return a list.
   #
   # @param acc [A] the initial accumulator
   # @param f [B -> A -> B] combines the accumulator with each element
@@ -132,14 +124,13 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @items.reduce(acc, f)
 
-  # The empty set: the +Monoid+ identity, since union with nothing changes
-  # nothing.
+  # Returns the empty set, the +Monoid+ identity for union.
   #
   # @return [Set<A>] the empty set
   identity :> Set<A>
   let identity = Set { items: [] }
 
-  # Combines two sets by union. The +Monoid+ operation.
+  # Returns the union of the two sets. This is the +Monoid+ operation.
   #
   # @param other [Set<A>] the set to combine with
   # @return [Set<A>] every element of either set
@@ -162,13 +153,12 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   #
   # @example Filtering a list against an allow-list
   #   let allowed = Set.from(["get", "post"])
-  #   methods.filter { |m| allowed.contains?(m.lowerCase) }
+  #   verbs.filter { |v| allowed.contains?(v.lowerCase) }
   contains? :> A -> Bool
   let contains?(value) = @items.contains?(value)
 
-  # Returns the number of distinct elements. Duplicates in the source list
-  # were already discarded, so this is the size of the set, not of what it was
-  # built from.
+  # Returns the number of elements. Duplicates in the list the set was built
+  # from are not counted.
   #
   # @return [Integer] the number of elements
   #
@@ -190,10 +180,10 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   empty? :> Bool
   let empty? = @items.empty?
 
-  # Returns a new set with +value+ added. Adding an element that is already a
-  # member changes nothing: that is what makes a set a set.
+  # Returns a new set with +value+ added. Adding an existing member changes
+  # nothing.
   #
-  # Use +add!+ to rebind the receiver variable.
+  # +add!+ rebinds the variable instead.
   #
   # @param value [A] the element to add
   # @return [Set<A>] a set including +value+
@@ -208,10 +198,9 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   add :> A -> Set<A>
   let add(value) = this.contains?(value) then this else Set { items: (@items + [value]).sort }
 
-  # Returns a new set without +value+. Removing something that is not a member
-  # changes nothing.
+  # Returns a new set without +value+. Removing a non-member changes nothing.
   #
-  # Use +delete!+ to rebind the receiver variable.
+  # +delete!+ rebinds the variable instead.
   #
   # @param value [A] the element to remove
   # @return [Set<A>] a set without +value+
@@ -254,8 +243,8 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 
   # Returns the elements of this set that +other+ does not have.
   #
-  # Order matters: +a.difference(b)+ and +b.difference(a)+ are different
-  # questions. Use +symmetricDifference+ when you want both answers.
+  # +a.difference(b)+ and +b.difference(a)+ differ. +symmetricDifference+
+  # gives the elements in either one.
   #
   # @param other [Set<A>] the set to subtract
   # @return [Set<A>] the elements only this set has
@@ -271,8 +260,7 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
     return Set { items: @items.reject { |x| lookup.contains?(x) } }
   end
 
-  # Returns the elements in exactly one of the two sets: everything they do
-  # not agree on.
+  # Returns the elements that are in exactly one of the two sets.
   #
   # @param other [Set<A>] the other set
   # @return [Set<A>] the symmetric difference
@@ -303,8 +291,8 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
     return @items.all? { |x| lookup.contains?(x) }
   end
 
-  # Returns +true+ when this set has every element of +other+. The mirror
-  # image of +subset?+.
+  # Returns +true+ when this set has every element of +other+; the reverse of
+  # +subset?+.
   #
   # @param other [Set<A>] the candidate subset
   # @return [Bool] +true+ when this set contains all of +other+
@@ -332,10 +320,9 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
     return !@items.any? { |x| lookup.contains?(x) }
   end
 
-  # Unions with another set, or with a plain list.
+  # Returns the union with another set or with a list.
   #
-  # The list form is the everyday way to add one element without naming a
-  # function: +s + [x]+.
+  # The list form is a short way to add elements: +s + [x]+.
   #
   # @param other [Set<A> | [A]] the elements to add
   # @return [Set<A>] the union
@@ -348,7 +335,7 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   + :> [A] -> Set<A>
   let +(other: [A]) -> Set<A> = Set.from(@items + other)
 
-  # Removes another set's elements, or a plain list's.
+  # Returns this set without the elements of another set or of a list.
   #
   # @param other [Set<A> | [A]] the elements to remove
   # @return [Set<A>] the difference
@@ -363,9 +350,8 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 
   # Applies +f+ to every element and returns a set of the results.
   #
-  # Mapping a set may collapse elements: if +f+ sends two members to the same
-  # value, the result has one. That is not a loss of information so much as
-  # the point of a set: +Set.from([1, -1]).map(~abs)+ has one member.
+  # If +f+ sends two elements to the same value, the result has it once, so
+  # the result can be smaller than the set.
   #
   # @param f [A -> B] applied to each element
   # @return [Set<B>] the distinct results
@@ -389,8 +375,7 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   filter :> (A -> Bool) -> Set<A>
   let filter(pred) = Set { items: @items.filter(pred) }
 
-  # Returns a new set without the elements +pred+ accepts. The complement of
-  # +filter+.
+  # Returns a new set without the elements +pred+ accepts.
   #
   # @param pred [A -> Bool] the test applied to each element
   # @return [Set<A>] the elements that failed the predicate
@@ -400,8 +385,7 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   reject :> (A -> Bool) -> Set<A>
   let reject(pred) = Set { items: @items.reject(pred) }
 
-  # Renders the set as +Set(...)+ in element order, rather than exposing the
-  # record layout behind it.
+  # Renders the set as +Set(...)+, with the elements in order.
   #
   # @return [String] the rendered set
   #
@@ -412,8 +396,8 @@ make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 end
 
 make Set<A>, implement: Blankable do
-  # Returns +true+ when the set has no elements. The +Blankable+ view of
-  # +empty?+, so generic code can test a set the same way it tests a string.
+  # Returns +true+ when the set has no elements, as +empty?+ does. This makes
+  # a set +Blankable+, so code that tests strings with +blank?+ can test sets.
   #
   # @return [Bool] +true+ for the empty set
   #
@@ -425,10 +409,9 @@ make Set<A>, implement: Blankable do
 end
 
 make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
-  # Folds over the elements.
+  # Folds over the elements in unspecified order.
   #
-  # The order is whatever the underlying map hands back: unspecified, and not
-  # to be relied on. Use a +Set+ when the order of the fold matters.
+  # Use a +Set+ when the order of the fold matters.
   #
   # @param acc [B] the initial accumulator
   # @param f [B -> A -> B] combines the accumulator with each element
@@ -439,13 +422,13 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = @slots.keys.reduce(acc, f)
 
-  # The empty unordered set: the +Monoid+ identity.
+  # Returns the empty unordered set, the +Monoid+ identity for union.
   #
   # @return [UnorderedSet<A>] the empty set
   identity :> UnorderedSet<A>
   let identity = UnorderedSet { slots: {} }
 
-  # Combines two sets by union. The +Monoid+ operation.
+  # Returns the union of the two sets. This is the +Monoid+ operation.
   #
   # @param other [UnorderedSet<A>] the set to combine with
   # @return [UnorderedSet<A>] every element of either set
@@ -454,8 +437,7 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 
   # Returns +true+ when +value+ is a member.
   #
-  # This is the operation the flavour exists for: a map lookup, with no
-  # ordering to maintain.
+  # This is a map lookup.
   #
   # @param value [A] the element to look for
   # @return [Bool] +true+ when it is present
@@ -486,8 +468,7 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 
   # Returns the elements as a list, in unspecified order.
   #
-  # Sort the result when the order has to be stable: a test, a rendering, a
-  # comparison.
+  # Sort the result when you need a stable order, as in a test.
   #
   # @return [[A]] the elements
   #
@@ -595,7 +576,7 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   disjoint? :> UnorderedSet<A> -> Bool
   let disjoint?(other) = !@slots.keys.any? { |x| other.contains?(x) }
 
-  # Unions with another unordered set, or with a plain list.
+  # Returns the union with another unordered set or with a list.
   #
   # @param other [UnorderedSet<A> | [A]] the elements to add
   # @return [UnorderedSet<A>] the union
@@ -607,7 +588,8 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   + :> [A] -> UnorderedSet<A>
   let +(other: [A]) -> UnorderedSet<A> = this.union(UnorderedSet.from(other))
 
-  # Removes another unordered set's elements, or a plain list's.
+  # Returns this set without the elements of another unordered set or of a
+  # list.
   #
   # @param other [UnorderedSet<A> | [A]] the elements to remove
   # @return [UnorderedSet<A>] the difference
@@ -652,8 +634,7 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 
   # Renders the set as +UnorderedSet(...)+.
   #
-  # The elements are printed in sorted order where they allow it, so the
-  # rendering of a value is not at the mercy of map internals.
+  # The elements are printed sorted, so the same set always prints the same.
   #
   # @return [String] the rendered set
   #
@@ -665,8 +646,7 @@ make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 end
 
 make UnorderedSet<A>, implement: Blankable do
-  # Returns +true+ when the set has no elements. The +Blankable+ view of
-  # +empty?+.
+  # Returns +true+ when the set has no elements, as +empty?+ does.
   #
   # @return [Bool] +true+ for the empty set
   #

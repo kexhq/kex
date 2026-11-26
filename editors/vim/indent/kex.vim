@@ -218,7 +218,7 @@ function GetKexIndent() abort
     let l:opens = 1
   endif
   " `after timeout: …` heads the receive branch that follows it. Only that
-  " form: `after : Block<Void> -> Void` is a method declaration.
+  " form: `after : Block<Void> -> Void` is a function declaration.
   if !l:opens && l:prev =~# '^\s*after\s\+timeout\s*:'
     let l:opens = 1
   endif

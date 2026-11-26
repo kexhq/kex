@@ -134,7 +134,7 @@ A label binds to the parameter of that name, wherever it sits, so labels may
 name any subset of the defaulted parameters. Positional arguments fill the
 parameters left over, in order, and a defaulted parameter that receives
 neither takes its declared default. The same holds for a free function, a
-`make` method and a function reached through `using`, on both backends:
+`make` function and a function reached through `using`, on both backends:
 
 ```kex
 make TableBuilder do

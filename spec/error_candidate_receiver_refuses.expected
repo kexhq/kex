@@ -1,4 +1,4 @@
-spec/error_candidate_receiver_refuses.kex:14:26: [KEXET-0101]: Error, undefined method `read` for `Layer`
+spec/error_candidate_receiver_refuses.kex:14:26: [KEXET-0101]: Error, undefined function `read` for `Layer`
    |
 14 |   IO.printLine(layer.read(1))
    |                ^^^^^^^^^^^^^

@@ -1,17 +1,16 @@
-# +Errorable+: the trait for values that describe a failure.
+# +Errorable+: the trait for error values that carry a message.
 #
-# Implemented by error types that carry a human-readable message, so a generic
-# handler can display or log any error without knowing its concrete type or
-# its structured fields.
+# An error type implements it by supplying +message+. A handler that only
+# needs to show or log the error can then take any +Errorable+.
 #
 #   foul report(e: Errorable) -> Void do
 #     IO.printError("error: ${e.message}")
 #   end
 trait Errorable do
-  # A human-readable description of what went wrong.
+  # Returns a description of what went wrong, written for a person to read.
   #
-  # Written for a person reading output, not for a program to match on:
-  # branch on the error's own type or fields for that.
+  # To decide what to do about an error, match on its type or fields; the
+  # wording of the message may change.
   #
   # @return [String] the failure message
   #
@@ -20,9 +19,9 @@ trait Errorable do
   message :> String
 end
 
-# Why +Integer.parse+, +Float.parse+ or +Number.parse+ could not read a
-# number: one case per reason, so a caller matches on the reason instead of
-# reading a message. Positions count characters from the start of the text.
+# The reason +Integer.parse+, +Float.parse+ or +Number.parse+ could not read
+# a number, with one case per reason. Positions count characters from the
+# start of the text.
 #
 #   match Integer.parse(text) do
 #     Ok(n) => Money(n, Currency.DEFAULT)
@@ -31,11 +30,10 @@ end
 #     Error(e) => die(e.message)
 #   end
 #
-# Reach for +parse+ over +to(Integer)+ exactly when the reason matters: +to+
-# answers a plain +None+.
+# Use +parse+ when the reason matters. +to(Integer)+ only returns +None+.
 type ParseError<T> =
-  # Nothing numeric where a digit was expected, at this position: +""+,
-  # +"-"+ and +"abc"+ (all at 0, +"-"+ at 1).
+  # No digit where one was expected, at this position. +""+ and +"abc"+ give
+  # +NoDigits(0)+; +"-"+ gives +NoDigits(1)+.
   | NoDigits(Integer)
   # A number, then text it does not belong to: +"10 USD"+ is
   # +Trailing(10, " USD")+, and +"1.5"+ read as an Integer is
@@ -53,10 +51,10 @@ type ParseError<T> =
   | BadCulture
 
 make ParseError<T>, implement: Errorable do
-  # The failure as a sentence for a person: what +Errorable+ asks for.
+  # Returns the failure as a sentence for a person to read.
   #
   # @example
-  #   Integer.parse("12 USD").mapError(~message)   # => Error("unexpected \" USD\" after the number")
+  #   Integer.parse("abc").mapError(~message)   # => Error("expected a digit at 0")
   let message(@NoDigits(at)) -> String = "expected a digit at ${at}"
   let message(@Trailing(_, rest)) -> String = "unexpected \"${rest}\" after the number"
   let message(@BadGrouping(at)) -> String = "digit group out of place at ${at}"
@@ -65,9 +63,9 @@ make ParseError<T>, implement: Errorable do
   let message(@BadCulture) -> String = "the culture's number settings are unusable"
 end
 
-# Where a format pattern known only at run time goes wrong:
-# +NumberFormat.parse+ and +DateFormat.parse+. Written for the pattern's
-# author, who reads the message; the position is a character index.
+# The error +NumberFormat.parse+ and +DateFormat.parse+ return for a pattern
+# they cannot read. It says where the pattern goes wrong and why, for the
+# pattern's author to fix.
 record PatternError do
   # The character index of the first problem.
   position : Integer

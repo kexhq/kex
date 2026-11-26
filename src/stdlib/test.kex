@@ -1,8 +1,8 @@
-# The built-in testing DSL: +describe+, +it+, +before+, +after+, and
-# assertion helpers.
+# The built-in test functions: +describe+, +it+, +before+, +after+ and the
+# assertions.
 #
-# Everything here is always in scope: no import, and no separate test
-# runner. Write a test file and run it with +kex+:
+# They are always in scope and need no separate runner. Write a test file and
+# run it with +kex+:
 #
 #   describe "arithmetic" do
 #     it "adds numbers" do
@@ -19,16 +19,18 @@
 #     ✓ adds numbers
 #     ✓ multiplies numbers
 #
-# Output uses ✓ / ✗ markers and nests by +describe+ depth. A failing +assert+
-# marks its test failed and moves on; the rest of the suite still runs.
+#   2 passed, 0 failed
 #
-# A file named +<name>.spec.kex+ automatically loads the declarations of
-# +<name>.kex+ beside it, so a spec needs no import and no +main+ wrapper.
+# Output is indented by +describe+ depth. The first failing assertion ends its
+# test and marks it failed; the other tests still run.
+#
+# A file named +<name>.spec.kex+ loads the declarations of +<name>.kex+ beside
+# it, so a spec needs no import.
 
-# Groups related test cases under a label, and runs them.
+# Groups related test cases under a label and runs them.
 #
-# The block is called immediately. +describe+ blocks nest, and the output is
-# indented to match. This is a foul function: it prints.
+# The block runs at once. +describe+ blocks nest, and the output is indented
+# to match.
 #
 # @param label [String] what this group is about
 # @param block [Block] the tests, and any nested groups
@@ -44,13 +46,11 @@
 #   end
 describe : String -> Block<Result<Void, Any>> -> Void
 
-# Defines a single test case, and runs it.
+# Defines a single test case and runs it.
 #
-# The block runs, and anything thrown inside it: typically a failed +assert+:
-# marks the test failed without aborting the rest of the suite. A
-# failing +.try+ in the block is its result, and fails the test the same way:
-# the body needs no +Ok+ or +rescue+ of its own. This is a foul
-# function: it prints.
+# A failed assertion, or anything else that fails inside the block, marks the
+# test failed and the rest of the suite carries on. A +.try+ that fails in
+# the block fails the test too, so the body needs no +Ok+ or +rescue+.
 #
 # @param label [String] what this case establishes, phrased as a claim
 # @param block [Block] the case body
@@ -62,7 +62,7 @@ describe : String -> Block<Result<Void, Any>> -> Void
 #     assert(!3.even?)
 #   end
 #
-# @example One behaviour per case reads better than one big case
+# @example One behaviour per case
 #   it "trims leading whitespace" do
 #     Assert.equal("  hi".trim, "hi")
 #   end
@@ -84,7 +84,7 @@ it : String -> Block<Result<Void, Any>> -> Void
 # @example
 #   describe "the parser" do
 #     before do
-#       Mock.FS.file("input.txt", "one\ntwo\n")
+#       Mock.FS.File("input.txt", "one\ntwo\n")
 #     end
 #
 #     it "reads two lines" do
@@ -96,8 +96,8 @@ before : Block<Result<Void, Any>> -> Void
 # Registers setup with an explicit scope: +:each+ before every test in the
 # group, +:all+ once before the first.
 #
-# Use +:all+ for setup that is expensive and that the tests do not change,
-# and +:each+ for anything a test might leave in a different state.
+# Use +:all+ for expensive setup that the tests do not change, and +:each+ for
+# anything a test might change.
 #
 # @param scope [Atom] +:each+ or +:all+
 # @param block [Block] the setup to run
@@ -109,14 +109,14 @@ before : Block<Result<Void, Any>> -> Void
 #   end
 #
 #   before(:each) do
-#     counter = 0
+#     Mock.ENV.clear()
 #   end
 before : Atom -> Block<Result<Void, Any>> -> Void
 
 # Registers cleanup to run after the current group's tests.
 #
-# Defaults to +:each+. Cleanup is unconditional: it runs whether the test
-# passed or failed, and inner per-test hooks run before outer hooks.
+# Runs after every test, whether it passed or failed. Inner groups' hooks run
+# before outer ones.
 #
 # @param block [Block] the cleanup to run
 # @return [Void]
@@ -140,11 +140,10 @@ after : Block<Result<Void, Any>> -> Void
 #   end
 after : Atom -> Block<Result<Void, Any>> -> Void
 
-# Fails the enclosing +it+ when +value+ is falsy.
+# Fails the enclosing +it+ when +value+ is +false+.
 #
-# The primitive every other assertion is built on. Prefer the +Assert+ helpers
-# where one fits: they report what was expected and what arrived, which a
-# bare +assert+ cannot.
+# The +Assert+ functions are built on it. Prefer them where one fits, since
+# their failure message shows the values involved.
 #
 # @param value [Bool] the condition that must hold
 # @return [Bool] the value, when it held
@@ -154,11 +153,10 @@ after : Atom -> Block<Result<Void, Any>> -> Void
 #   assert("hello".count == 5)
 assert : Bool -> Bool
 
-# Fails the enclosing +it+ when +value+ is falsy, showing +message+ in the
+# Fails the enclosing +it+ when +value+ is +false+, showing +message+ in the
 # failure output.
 #
-# Say what should have been true, not what went wrong: the runner already
-# reports that the assertion failed.
+# Phrase the message as what should have been true.
 #
 # @param value [Bool] the condition that must hold
 # @param message [String] what the failure output should say
@@ -169,10 +167,8 @@ assert : Bool -> Bool
 #   assert(users.any?(~admin?), "at least one user should be an admin")
 assert : Bool -> String -> Bool
 
-# Focused assertions, each reporting what was expected and what arrived.
-#
-# These are ordinary Kex stdlib functions layered on the primitive +assert+,
-# so adding another helper does not require compiler or runtime work.
+# Assertions whose failure message shows what was expected and what arrived.
+# They are written in Kex on top of +assert+.
 #
 #   Assert.equal("hi".upperCase, "HI")
 #   Assert.some(users.first)
@@ -180,8 +176,8 @@ assert : Bool -> String -> Bool
 module Assert do
   # Fails unless +actual+ equals +expected+, reporting both.
   #
-  # The assertion to reach for by default: a failure tells you what arrived,
-  # which +assert(a == b)+ does not.
+  # Use it by default for comparisons: unlike +assert(a == b)+, a failure
+  # shows both values.
   #
   # @param actual [A] the value produced
   # @param expected [A] the value it should equal
@@ -203,10 +199,9 @@ module Assert do
   #   Assert.notEqual(newId, oldId)
   let notEqual(actual: A, expected: A) -> Bool = assert(actual != expected, "expected values to differ, both were ${actual}")
 
-  # Fails unless +value+ is truthy: anything except +false+, +None+ and
-  # +()+.
+  # Fails unless +value+ is truthy: anything except +false+ and +None+.
   #
-  # @param value [A] the value to test
+  # @param value [Truthyable] the value to test
   # @return [Bool] +true+ when the value is truthy
   #
   # @example
@@ -215,7 +210,7 @@ module Assert do
 
   # Fails unless +value+ is falsy: +false+, +None+ or +()+.
   #
-  # @param value [A] the value to test
+  # @param value [Truthyable] the value to test
   # @return [Bool] +true+ when the value is falsy
   #
   # @example

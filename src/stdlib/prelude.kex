@@ -1,21 +1,19 @@
-# The standard-library surface automatically visible to every Kex source file.
+# The standard-library modules every Kex source file sees without a +using+.
 #
-# Prelude names require no `using` at the call site. This includes everyday
-# values and operations (`List`, `Map`, `String`, `Math`, `IO`), language-level
-# protocols (`Enumerable`, `Truthyable`, `Errorable`), and core runtime services
-# such as processes and time. For example, `.map`, conditions, and `.try` work
-# without importing the traits that define them.
+# The prelude holds everyday values and operations (+List+, +Map+, +String+,
+# +Math+, +IO+), the protocols the language itself relies on (+Enumerable+,
+# +Truthyable+, +Errorable+), and core runtime services such as processes and
+# time. That is why +.map+, conditions and +.try+ work without importing the
+# traits that define them.
 #
-# Being useful is not enough for inclusion. Every prelude name occupies global
-# scope in every program, so a module belongs here only when ordinary Kex code
-# needs it pervasively or the language model depends on it.
-#
-# Modules stay opt-in when they expose a capability that should be visible in a
-# file's dependencies, or when most programs do not need their vocabulary.
-# Examples include the filesystem (`FS`), regular expressions (`Regex`), JSON,
-# parser combinators (`Parsing`), bit operations (`Bits`), data structures such
-# as `Data.Set`, hashing (`Digest`), command-line parsing (`OptionParser`), and
-# the sandboxed evaluator (`Evaluator`).
+# Every prelude name is in scope in every program, so a module belongs here
+# only when most code needs it or the language depends on it. A module stays
+# opt-in when it grants a capability that should show up in a file's imports,
+# or when most programs have no use for its names. The filesystem (+FS+),
+# regular expressions (+Regex+), JSON, parser combinators (+Parsing+), bit
+# operations (+Bits+), data structures such as +Data.Set+, hashing (+Digest+),
+# command-line parsing (+OptionParser+) and the sandboxed evaluator
+# (+Evaluator+) are all opt-in.
 #
 #   using FS
 #
@@ -24,10 +22,10 @@
 #     IO.printLine(config)
 #   end
 #
-# Keep this file declarative. Each bare `using` names a sibling stdlib source;
-# the toolchain expands those sources in order when it builds or loads the
-# prelude. Put documentation for an individual type or operation beside its
-# declaration in that source file, not here.
+# This file only lists modules. Each bare +using+ names a sibling stdlib
+# source, and the toolchain expands them in order when it builds or loads the
+# prelude. Document a type or function next to its declaration in that source,
+# not here.
 
 using Algebra
 using Atom

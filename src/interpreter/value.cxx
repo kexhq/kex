@@ -3,10 +3,12 @@
 #include "../common/well_known.hxx"
 #include "../common/color.hxx"
 #include "../common/name_case.hxx"
+#include "../common/string_utils.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <mutex>
 #include <optional>
 
 namespace kex::interpreter {
@@ -338,6 +340,77 @@ auto Value::isTrue() const -> bool {
         data);
 }
 
+namespace {
+
+struct RecordFieldOrders {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::vector<std::string>> byType;
+};
+
+auto recordFieldOrders() -> RecordFieldOrders& {
+    static RecordFieldOrders orders;
+    return orders;
+}
+
+} // namespace
+
+auto registerRecordFieldOrder(const std::string& typeName, std::vector<std::string> fields)
+    -> void {
+    auto& orders = recordFieldOrders();
+    const std::lock_guard lock(orders.mutex);
+    orders.byType[typeName] = std::move(fields);
+}
+
+auto recordFieldOrder(const RecordValue& record) -> std::vector<std::string> {
+    std::vector<std::string> keys;
+    keys.reserve(record.fields.size());
+    {
+        auto& orders = recordFieldOrders();
+        const std::lock_guard lock(orders.mutex);
+        if (const auto declared = orders.byType.find(record.typeName);
+            declared != orders.byType.end()) {
+            for (const auto& name : declared->second) {
+                if (record.fields.contains(name)) {
+                    keys.push_back(name);
+                }
+            }
+        }
+    }
+    if (keys.size() == record.fields.size()) {
+        return keys;
+    }
+    std::vector<std::string> rest;
+    for (const auto& [key, _] : record.fields) {
+        if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+            rest.push_back(key);
+        }
+    }
+    std::sort(rest.begin(), rest.end());
+    keys.insert(keys.end(), rest.begin(), rest.end());
+    return keys;
+}
+
+// An atom as it is written: bare when `:name` can spell it, else quoted
+// (`:"two words"`), the lexer's lexAtom / lexQuotedAtom. A lowercase letter
+// outside ASCII spells one too (`:árvíz`), as the lexer reads it, and so does
+// an `@` inside the name (`:app@host`), which a node name needs. BEAM's
+// kex_io:atom_literal/1 applies the same rule.
+static auto atomLiteral(const std::string& name) -> std::string {
+    const auto codepoints = utf8::decode(name);
+    const bool bare = kex::startsLowercase(name) && name[0] != '_' && name.back() != '@' &&
+                      name.find("@@") == std::string::npos &&
+                      std::all_of(codepoints.begin(), codepoints.end(), [](char32_t c) {
+                          if (c >= 0x80) {
+                              return utf8::categories::inRanges(utf8::categories::letterRanges, c);
+                          }
+                          return std::isalnum(static_cast<int>(c)) || c == '_' || c == '@';
+                      });
+    if (bare) {
+        return ":" + name;
+    }
+    return ":\"" + kex::escapedLiteral(name, '"') + "\"";
+}
+
 // A map literal writes an atom key bare — `{ a: 1 }` — so the key's own colon
 // must not be doubled onto the `key: value` separator. Rendering it as `:a:`
 // produced text the parser rejects, which defeats the point of `inspect`
@@ -376,30 +449,7 @@ auto Value::toString() const -> std::string {
             } else if constexpr (std::is_same_v<T, BoolValue>) {
                 return v.value ? "true" : "false";
             } else if constexpr (std::is_same_v<T, AtomValue>) {
-                // Printed as written: bare when `:name` can spell it, else quoted.
-                // A lowercase letter outside ASCII spells one too (`:árvíz`), as
-                // the lexer reads it.
-                const auto codepoints = utf8::decode(v.name);
-                const bool bare =
-                    kex::startsLowercase(v.name) && v.name[0] != '_' && v.name.back() != '@' &&
-                    v.name.find("@@") == std::string::npos &&
-                    std::all_of(codepoints.begin(), codepoints.end(), [](char32_t c) {
-                        if (c >= 0x80) {
-                            return utf8::categories::inRanges(utf8::categories::letterRanges, c);
-                        }
-                        return std::isalnum(static_cast<int>(c)) || c == '_' || c == '@';
-                    });
-                if (bare) {
-                    return ":" + v.name;
-                }
-                std::string quoted = ":\"";
-                for (char c : v.name) {
-                    if (c == '"' || c == '\\') {
-                        quoted += '\\';
-                    }
-                    quoted += c;
-                }
-                return quoted + "\"";
+                return atomLiteral(v.name);
             } else if constexpr (std::is_same_v<T, VariantValue>) {
                 if (v.args.empty()) {
                     return v.tag;
@@ -445,6 +495,9 @@ auto Value::toString() const -> std::string {
                 std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
                     return a.first->toString() < b.first->toString();
                 });
+                if (entries.empty()) {
+                    return "{}";
+                }
                 std::string result = "{ ";
                 for (size_t i = 0; i < entries.size(); i++) {
                     if (i > 0) {
@@ -494,14 +547,8 @@ auto Value::toString() const -> std::string {
                     }
                     return result + ")";
                 }
-                // Sorted field order: deterministic, and reproducible by the
-                // BEAM backend (the unordered_map's hash order isn't).
-                std::vector<std::string> keys;
-                keys.reserve(v.fields.size());
-                for (const auto& [key, _] : v.fields) {
-                    keys.push_back(key);
-                }
-                std::sort(keys.begin(), keys.end());
+                // Declaration order, as BEAM lays a record out.
+                const auto keys = recordFieldOrder(v);
                 std::string result = v.typeName + " { ";
                 bool first = true;
                 for (const auto& key : keys) {
@@ -628,6 +675,32 @@ auto Value::toRepr() const -> std::string {
         data);
 }
 
+// A list's element type as the checker writes a list literal's: the distinct
+// element types in the order they first appear, joined into a union
+// (`["x", 1]` is a `[String | Integer]`), and `?` for an empty list, whose
+// elements nothing shows. Two that differ only in what one element could
+// show of a generic type's arguments (`Just(1)` and `None`) are one type,
+// the first that shows arguments. BEAM's kex_io:list_type_name/1 is the same.
+static auto elementTypeName(const std::vector<ValuePtr>& elements) -> std::string {
+    if (elements.empty()) {
+        return "?";
+    }
+    const auto base = [](const std::string& name) { return name.substr(0, name.find('<')); };
+    std::vector<std::string> names;
+    for (const auto& element : elements) {
+        auto name = element->typeName();
+        const auto same = std::find_if(names.begin(), names.end(), [&](const std::string& seen) {
+            return base(seen) == base(name);
+        });
+        if (same == names.end()) {
+            names.push_back(std::move(name));
+        } else if (same->find('<') == std::string::npos) {
+            *same = std::move(name);
+        }
+    }
+    return kex::join(names, " | ");
+}
+
 auto Value::typeName() const -> std::string {
     ensureStackFor("name its type");
     return std::visit(
@@ -689,10 +762,7 @@ auto Value::typeName() const -> std::string {
             } else if constexpr (std::is_same_v<T, ServerValue>) {
                 return "Server";
             } else if constexpr (std::is_same_v<T, ListValue>) {
-                if (v.elements.empty()) {
-                    return "List";
-                }
-                return "[" + v.elements.front()->typeName() + "]";
+                return "[" + elementTypeName(v.elements) + "]";
             } else if constexpr (std::is_same_v<T, TupleValue>) {
                 return "Tuple";
             } else if constexpr (std::is_same_v<T, MapValue>) {
@@ -989,16 +1059,20 @@ auto Value::inspect() const -> std::string {
                 } else if constexpr (std::is_same_v<T, FloatValue>) {
                     return std::string(c(yellow)) + formatFloat(node.value) + c(reset);
                 } else if constexpr (std::is_same_v<T, StringValue>) {
-                    return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
+                    // Escaped as a literal is written, so the text reads back
+                    // as this String: `"a\"b"`, not `"a"b"`.
+                    return std::string(c(green)) + "\"" + kex::escapedLiteral(node.value, '"') +
+                           "\"" + c(reset);
                 } else if constexpr (std::is_same_v<T, BinaryValue>) {
                     return std::string(c(gray)) + "#Binary<" + std::to_string(node.bytes.size()) +
                            " bytes>" + c(reset);
                 } else if constexpr (std::is_same_v<T, CharValue>) {
-                    return std::string(c(green)) + "'" + utf8::encode(node.value) + "'" + c(reset);
+                    return std::string(c(green)) + "'" +
+                           kex::escapedLiteral(utf8::encode(node.value), '\'') + "'" + c(reset);
                 } else if constexpr (std::is_same_v<T, BoolValue>) {
                     return std::string(c(magenta)) + (node.value ? "true" : "false") + c(reset);
                 } else if constexpr (std::is_same_v<T, AtomValue>) {
-                    return std::string(c(purple)) + ":" + node.name + c(reset);
+                    return std::string(c(purple)) + atomLiteral(node.name) + c(reset);
                 } else if constexpr (std::is_same_v<T, VariantValue>) {
                     if (node.args.empty()) {
                         return std::string(c(cyan)) + node.tag + c(reset);
@@ -1041,6 +1115,9 @@ auto Value::inspect() const -> std::string {
                     }
                     return result + ")";
                 } else if constexpr (std::is_same_v<T, MapValue>) {
+                    if (node.entries.empty()) {
+                        return "{}";
+                    }
                     std::string result = "{ ";
                     for (size_t i = 0; i < node.entries.size(); i++) {
                         if (i > 0) {
@@ -1075,7 +1152,8 @@ auto Value::inspect() const -> std::string {
                            (node.state && node.state->spent ? "<Feed: spent>" : "<Feed>") +
                            c(reset);
                 } else if constexpr (std::is_same_v<T, FileHandleValue>) {
-                    return std::string(c(gray)) + "<FileHandle: \"" + node.path + "\">" + c(reset);
+                    return std::string(c(gray)) + "<FileHandle: \"" +
+                           kex::escapedLiteral(node.path, '"') + "\">" + c(reset);
                 } else if constexpr (std::is_same_v<T, RecordValue>) {
                     bool positional = !node.fields.empty();
                     for (size_t i = 0; positional && i < node.fields.size(); i++) {
@@ -1095,11 +1173,11 @@ auto Value::inspect() const -> std::string {
                     }
                     std::string result = std::string(c(cyan)) + node.typeName + c(reset) + " { ";
                     bool first = true;
-                    for (const auto& [key, val] : node.fields) {
+                    for (const auto& key : recordFieldOrder(node)) {
                         if (!first) {
                             result += ", ";
                         }
-                        result += key + ": " + rec(*val);
+                        result += key + ": " + rec(*node.fields.at(key));
                         first = false;
                     }
                     return result + " }";
@@ -1121,7 +1199,7 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         [](const auto& d) -> std::string {
             using T = std::decay_t<decltype(d)>;
             if constexpr (std::is_same_v<T, PlaceholderValue>) {
-                throw PlaceholderMisuse(d.name, "dispatching a method on it");
+                throw PlaceholderMisuse(d.name, "dispatching a function on it");
             } else if constexpr (std::is_same_v<T, RecordValue>) {
                 return d.typeName;
             } else if constexpr (std::is_same_v<T, VariantValue>) {

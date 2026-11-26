@@ -18,7 +18,7 @@ end
 
 main do
   let box = Box { size: 2 }
-  IO.printLine(box.doubled)          # a make method — fine
+  IO.printLine(box.doubled)          # a make function — fine
   IO.printLine(box.size)             # a field — fine
   IO.printLine("hi".upperCase)       # the prelude — fine
   IO.printLine(box.nosuchMethod)

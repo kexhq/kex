@@ -17,9 +17,11 @@ record Invocation do
   environment : {String: String} = {}
 end
 
-# The host-to-child half of protocol version 1. It is deliberately ordinary
-# JSON rather than Kex source: a plugin receives data and cannot make Tey
-# evaluate declarations smuggled into its context.
+# Encodes an invocation as the message Tey sends a plugin process in version
+# 1 of the plugin protocol: one line of JSON.
+#
+# The message is JSON, not Kex source, so a plugin only ever receives data,
+# and nothing in its context can make Tey evaluate a declaration.
 let encodeInvocation(invocation: Invocation) -> String do
   let graph = invocation.graph.map do |dependency|
     {
@@ -65,6 +67,10 @@ let encodeInvocation(invocation: Invocation) -> String do
   }) + "\n"
 end
 
+# Converts options supplied as text to the types +operation+
+# declares for them (+String+, +Integer+, +Float+ or +Bool+). Returns an
+# error for an option the operation does not declare, or a value that does
+# not parse as its type.
 let typedOptions(operation: Tey.Manifest.PluginOperation,
                  supplied: {String: String}) -> {String: Any} or! String do
   return Tey.PluginHost.coerceOptions(operation, supplied.entries, {})

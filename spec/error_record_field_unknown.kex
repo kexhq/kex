@@ -2,7 +2,7 @@
 # An unknown field on a record is a COMPILE error.
 #
 # From the type-system audit: field access used to consult no record layout at
-# all, so `u.nonexistent` was a runtime "Undefined method" — the checker had
+# all, so `u.nonexistent` was a runtime "Undefined function" — the checker had
 # nothing to say about a typo in a field name.
 record User do
   name : String

@@ -1,12 +1,12 @@
-[CreateTable(:pets, [Dsl.Migration.Col { fallback: :none, label: :name, nullable?: true }])]
-[CreateTable(:toys, [Dsl.Migration.Col { fallback: :none, label: :id, nullable?: true }])]
+[CreateTable(:pets, [Dsl.Migration.Col { label: :name, nullable?: true, fallback: :none }])]
+[CreateTable(:toys, [Dsl.Migration.Col { label: :id, nullable?: true, fallback: :none }])]
 :add_owners
 :create_sessions
-CreateTable(:owners, [Dsl.Migration.Col { fallback: :null, label: :name, nullable?: true }, Dsl.Migration.Col { fallback: :none, label: :id, nullable?: true }])
+CreateTable(:owners, [Dsl.Migration.Col { label: :name, nullable?: true, fallback: :null }, Dsl.Migration.Col { label: :id, nullable?: true, fallback: :none }])
 AddIndex(:owners, [:name], false)
 AddIndex(:owners, [:id], true)
-Dsl.Migration.Col { fallback: :none, label: :email, nullable?: false }
-Dsl.Migration.Col { fallback: :none, label: :email, nullable?: true }
+Dsl.Migration.Col { label: :email, nullable?: false, fallback: :none }
+Dsl.Migration.Col { label: :email, nullable?: true, fallback: :none }
 :users(id, email)
 [AddIndex(:owners, [:name], false)]
 AddIndex(:owners, [:id], false)

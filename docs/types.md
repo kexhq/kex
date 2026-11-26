@@ -416,7 +416,7 @@ labelled `format:` after `in:`:
 The time units' `to(String, in:)` is in the prelude; each unit module supplies
 it for its own units, so `in: Kilo(Meter)` needs `using Units.SI` —
 qualifying the arguments alone is not enough. Without it the call is an
-undefined method that names the module to import.
+undefined function that names the module to import.
 
 Note that `Hour` in that example is *not* an `Units.SI` name. The time units
 (`Nanosecond` through `Week`) are prelude-global, because every unit module

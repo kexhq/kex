@@ -17,9 +17,9 @@ using namespace test;
 namespace {
 
 const char* const EXPECTED =
-    "[Nest.Leaf { name: a }, Nest.Group { children: [Nest.Leaf { name: b }, Nest.Leaf "
-    "{ name: c }], prefix: /g }]\n"
-    "[Nest.Group { children: [Nest.Leaf { name: d }, Nest.Leaf { name: e }], prefix: /h }]\n"
+    "[Nest.Leaf { name: a }, Nest.Group { prefix: /g, children: [Nest.Leaf { name: b }, "
+    "Nest.Leaf { name: c }] }]\n"
+    "[Nest.Group { prefix: /h, children: [Nest.Leaf { name: d }, Nest.Leaf { name: e }] }]\n"
     "[Nest.Leaf { name: f }]\n"
     "[1, 2]\n";
 

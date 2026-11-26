@@ -1,5 +1,6 @@
-# Model records → Markdown pages (LLM-friendly: stable headings, fenced
-# kex signatures, frontmatter with the entity index).
+# Renders documentation pages as Markdown for language models to read: stable
+# headings, fenced Kex signatures, and frontmatter listing the page's
+# entities.
 
 module Tey.Docgen.Markdown do
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, Doc, Return, Example, SourcePage, PackageModel, kindOf, nameOf, memberAnchorOf, baseTypeOf]
@@ -35,8 +36,8 @@ module Tey.Docgen.Markdown do
     return "# ${page.title}\n\n${intro}${sections}\n"
   end
 
-  # The same layout as the HTML: a type's make blocks on its own page are
-  # folded into the type's section.
+  # Lays out the page as the HTML does: a type's make blocks on the same page
+  # go into the type's section.
   let entitiesMd(entities: [Entity], page: SourcePage, model: PackageModel) -> String do
     let owners = Tey.Docgen.Html.declaredTypeNames(entities) + Tey.Docgen.Html.declaredTraitNames(entities)
     return entities.map { |e|
@@ -61,9 +62,9 @@ module Tey.Docgen.Markdown do
     end
   end
 
-  # Cross-links in Markdown resolve against the same package index the HTML
-  # renderer uses — one resolution rule, two renderings. Targets are the .md
-  # siblings of this page.
+  # Links +name+ to its documentation, resolved against the same package index
+  # as the HTML pages but pointing at the +.md+ pages. A name that does not
+  # resolve stays plain text.
   let linkMd(model: PackageModel, fromPath: String, name: String) -> String do
     match Tey.Docgen.Nav.resolve(model.links, name) do
       Just(entry) => "[${name}](${hrefMd(fromPath, entry.urlPath, entry.anchor)})"
@@ -243,7 +244,7 @@ module Tey.Docgen.Markdown do
     return "## constant \`${e.name}\`${typePart}\n\n${entityDocMd(e.doc)}"
   end
 
-  # One heading per name; overloads listed under it.
+  # Renders one heading per function name, with its overloads under it.
   let functionsMd(functions: [FunctionEntry], owner: String, level: Integer, implements: [String],
                    page: SourcePage, model: PackageModel) -> String do
     let names = functions.map { |f| f.name }.uniq
@@ -255,8 +256,8 @@ module Tey.Docgen.Markdown do
     }.join("\n\n")
   end
 
-  # Beside the name, as the HTML chip is: purity is part of what a caller
-  # has to know before calling.
+  # Returns the " (foul)" tag shown beside a function's name, as the HTML
+  # page shows a chip.
   let foulMd(isFoul: Bool) -> String do
     return isFoul then " (foul)" else ""
   end

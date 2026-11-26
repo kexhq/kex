@@ -383,7 +383,7 @@ struct CompanionForwardsPass : pass::PassInfoMixin<CompanionForwardsPass> {
 struct ReceiverForwardsPass : pass::PassInfoMixin<ReceiverForwardsPass> {
     static constexpr std::string_view kName = "receiver-forwards";
     static constexpr std::string_view kDescription =
-        "give a receiver method its advertised plain entry point";
+        "give a receiver function its advertised plain entry point";
     auto run(Unit& unit, UnitAnalysisManager& analyses) -> pass::PreservedAnalyses;
 };
 

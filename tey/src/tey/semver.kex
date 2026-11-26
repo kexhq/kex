@@ -1,17 +1,19 @@
 module Tey.Semver
 
+# A parsed version number: +major.minor.patch+ and an optional pre-release.
 record SemanticVersion do
   major : Integer
   minor : Integer
   patch : Integer
-  # "" for a release, otherwise the channel and its number: "rc.1", "beta",
-  # "prealpha.2". A release always outranks its own pre-releases.
+  # Empty for a release, otherwise the channel and its number, such as
+  # "rc.1", "beta" or "prealpha.2". A release ranks above its own
+  # pre-releases.
   preRelease : String = ""
 end
 
-# SemanticVersion is Comparable, so `a.compare(b)` answers Less/Equal/Greater
-# like every other ordered type in the stdlib, and ordering reads as an
-# ordering rather than as sign arithmetic on -1/0/1.
+# Orders versions by number, then by pre-release: a release ranks above its
+# pre-releases, and pre-releases are ordered by channel (+prealpha+, +alpha+,
+# +beta+, +rc+) and then by number.
 make SemanticVersion, implement: Comparable do
   let compare(other: SemanticVersion) -> Ordering do
     return Less if this.major < other.major
@@ -28,6 +30,9 @@ make SemanticVersion, implement: Comparable do
   end
 end
 
+# Parses a version such as +0.4.0+, +v0.4.0-rc.1+ or +1.2+, or returns
+# +None+. A leading +v+ and build metadata after a plus sign are ignored, and a
+# missing minor or patch number counts as 0.
 let parseVersion(text: String) -> SemanticVersion? do
   let unprefixed = text.startsWith?("v") then text.drop(1) else text
   # Build metadata (`+deadbeef`) says nothing about precedence, so it is
@@ -45,8 +50,8 @@ let parseVersion(text: String) -> SemanticVersion? do
   end
 end
 
-# The release a version belongs to: `0.4.0-rc.1` → `0.4.0`. Used where a
-# pre-release should count as its eventual release.
+# Returns the release a version belongs to, so +0.4.0-rc.1+ gives +0.4.0+.
+# Text that is not a version is returned unchanged.
 let release(text: String) -> String do
   match Tey.Semver.parseVersion(text) do
     Just(version) => return "${version.major}.${version.minor}.${version.patch}"
@@ -54,8 +59,7 @@ let release(text: String) -> String do
   end
 end
 
-# Whether a version is a full release rather than a pre-release. This is the
-# question a download page asks: "what is the current stable Kex?".
+# Returns +true+ when the text is a version without a pre-release part.
 let stable?(text: String) -> Bool do
   match Tey.Semver.parseVersion(text) do
     Just(version) => return version.preRelease == ""
@@ -63,6 +67,13 @@ let stable?(text: String) -> Bool do
   end
 end
 
+# Returns +true+ when the version meets every space- or comma-separated
+# clause of +requirement+ (+>=+, +<=+, +>+, +<+, +=+, +^+, +~>+ or a bare
+# version). An empty requirement or +*+ accepts any version.
+#
+# +~> 0.3+ accepts +0.3.x+ and +^0.3+ accepts +0.x+ from +0.3+ on. A
+# pre-release meets a requirement only when some clause names a pre-release,
+# so +~> 0.4+ does not accept +0.4.0-rc.1+.
 let satisfies?(versionText: String, requirement: String) -> Bool do
   let parsed = Tey.Semver.parseVersion(versionText)
   return false if parsed == None
@@ -78,29 +89,23 @@ let satisfies?(versionText: String, requirement: String) -> Bool do
     .replace("= ", "=")
   return true if req == "" || req == "*"
   let clauses = req.split(" ").filter { |part| part != "" }
-  # A pre-release answers a range only when the range asks for one. `~> 0.3`
-  # means "a released 0.3.x", and resolving it to `0.4.0-rc.1` because the
-  # numbers fit is how a package manager ships an untested compiler to
-  # someone who never opted in.
+  # A pre-release meets a range only when the range asks for one, so nobody
+  # gets an untested pre-release without opting in.
   if version.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
     return false
   end
   clauses.all? { |clause| satisfiesClause?(version, clause) }
 end
 
-# The requirement satisfied only by versions satisfying BOTH, for when two
-# packages in one graph each ask for the same dependency.
+# Returns a requirement met only by versions that meet both +a+ and +b+, for
+# when two packages in one graph depend on the same package.
 #
-# Concatenation, because `satisfies?` already reads a requirement as a list of
-# space-separated clauses that must ALL hold: `~> 0.1` and `>= 0.1.5` intersect
-# to `~> 0.1 >= 0.1.5`, which is exactly the question "satisfies both". No
-# interval arithmetic, no second implementation of the operators to keep in
-# step with the first.
+# The result joins the two with a space, since +satisfies?+ requires every
+# clause to hold: +~> 0.1+ and +>= 0.1.5+ give +~> 0.1 >= 0.1.5+. An empty or
+# +*+ side is dropped.
 #
-# An empty intersection is not detected here, and deliberately: `~> 0.1 ~> 0.2`
-# is perfectly well formed and simply matches nothing. Emptiness is a fact
-# about the versions a repository actually publishes, so it is discovered where
-# the tags are (`highest`), where the error can also say what WAS available.
+# A requirement that nothing can meet, such as +~> 0.1 ~> 0.2+, is not
+# detected here. +highest+ finds it, by returning +None+.
 let intersect(a: String, b: String) -> String do
   let left = a.trim
   let right = b.trim
@@ -110,17 +115,19 @@ let intersect(a: String, b: String) -> String do
   return "${left} ${right}"
 end
 
-# Every constraint at once. `[]` and `[""]` both mean "no opinion", which is
-# what a package with no version requirement expresses.
+# Returns the intersection of all the requirements, as +intersect+ does for
+# two. +[]+ and +[""]+ both give +""+, which accepts any version.
 let intersectAll(requirements: [String]) -> String do
   return requirements.reduce("") do |combined, requirement|
     Tey.Semver.intersect(combined, requirement)
   end
 end
 
-# The version inside a resolved ref: `refs/tags/v0.1.1` and `v0.1.1` both
-# give `0.1.1`. A ref that carries no version (a branch name, a bare commit)
-# gives "", which satisfies nothing and so never claims to meet a range.
+# Returns the version tag inside a resolved ref: +refs/tags/v0.1.1+,
+# +v0.1.1+ and +pkg-v0.1.1+ all give +v0.1.1+.
+#
+# A ref without a version, such as a branch name or a commit, gives +""+,
+# which meets no requirement.
 let versionOf(ref: String) -> String do
   let last = ref.split("/").last.or(ref)
   return last if Tey.Semver.parseVersion(last).set?
@@ -128,9 +135,11 @@ let versionOf(ref: String) -> String do
   return Tey.Semver.parseVersion(scoped).set? then "v${scoped}" else ""
 end
 
-# Channel precedence, lowest first: prealpha < alpha < beta < rc < release.
-# Plain semver would order these alphabetically — putting `beta` BEFORE
-# `prealpha` — which is not what the words mean, so the ranking is explicit.
+# Returns the rank of a pre-release channel: +prealpha+ 1, +alpha+ 2, +beta+ 3,
+# +rc+ 4, and 0 for any other name.
+#
+# Plain semver would order the channels alphabetically, putting +beta+ before
+# +prealpha+.
 channelRank : String -> Integer
 let channelRank("prealpha") = 1
 let channelRank("alpha")    = 2
@@ -138,18 +147,16 @@ let channelRank("beta")     = 3
 let channelRank("rc")       = 4
 let channelRank(_)          = 0
 
-# Whether a requested tag is a RANGE rather than one exact tag. `v1.2.0` is a
-# name to look up; `~> 1.2` is a question to answer against everything the
-# repository has.
+# Returns +true+ when a requested tag is a version range, such as +~> 1.2+,
+# and +false+ for an exact tag such as +v1.2.0+.
 let range?(requested: String) -> Bool do
   let text = requested.trim
   return true if text == "*" || text.contains?(" ")
   return ["<=", ">=", "~>", "^", "<", ">", "="].any? { |op| text.startsWith?(op) }
 end
 
-# Descending semantic order, for picking the newest of anything. A tag that is
-# not a version sorts after every tag that is, so a stray `nightly` can never
-# displace a release.
+# Returns +true+ when +a+ is a newer version than +b+. A tag that is not a
+# version counts as older than any that is, so a stray +nightly+ never wins.
 let newer?(a: String, b: String) -> Bool do
   match (Tey.Semver.parseVersion(a), Tey.Semver.parseVersion(b)) do
     (Just(left), Just(right)) => return left.compare(right) == Greater
@@ -159,14 +166,16 @@ let newer?(a: String, b: String) -> Bool do
   end
 end
 
+# Returns the versions without duplicates, newest first, with tags that are
+# not versions at the end.
 let newestFirst(versions: [String]) -> [String] do
   return versions.uniq.sort do |a, b|
     Tey.Semver.newer?(a, b)
   end
 end
 
-# The highest tag that satisfies the requirement — the whole point of writing
-# a range instead of a version. None when nothing does.
+# Returns the newest tag that meets the requirement, or +None+ when none
+# does.
 let highest(tags: [String], requirement: String) -> String? do
   let matching = tags.filter { |tag| Tey.Semver.satisfies?(tag, requirement) }
   return None if matching.empty?

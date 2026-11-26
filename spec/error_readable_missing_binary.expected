@@ -1,4 +1,4 @@
-spec/error_readable_missing_binary.kex:3:1: [KEXET-0131]: Error, make TextReader, implement: Readable. Missing required method 'readBytes'
+spec/error_readable_missing_binary.kex:3:1: [KEXET-0131]: Error, make TextReader, implement: Readable. Missing required function 'readBytes'
   |
 3 | make TextReader, implement: Readable do
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -79,7 +79,7 @@ syn match kexBound /\%(\<[A-Z]\s\+\)\@<=is\>\%(\s\+[A-Z]\)\@=/
 " ===== Keywords and types =====
 syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return slot spawn then timeout try trying using var when while with
 syn keyword kexConstant true false None
-" `new` is an ordinary, shadowable binding, but make methods supply it as a
+" `new` is an ordinary, shadowable binding, but make functions supply it as a
 " language-level receiver copy. Highlight it alongside `this`, not as Keyword.
 syn keyword kexThis this new
 syn keyword kexModifier distinct
@@ -90,7 +90,7 @@ syn match kexType /\<[A-Z][A-Za-z0-9_]*\>/
 " Keep this after kexType so the more specific match wins.
 syn match kexUpdateConstructor /\<\%(New\|This\)\>\ze\s*{/
 
-" `-> T or! E` / `-> T or E` is type syntax, not the .or(…) method.
+" `-> T or! E` / `-> T or E` is type syntax, not the .or(…) function.
 syn match kexOr /\%([.A-Za-z0-9_]\)\@<!or!\=\%([A-Za-z0-9_(]\)\@!/
 
 " ===== Literals and operators =====

@@ -49,7 +49,7 @@ Common modules are the shared type contract between frontend and backend. The bu
 ### Key Desugaring (AST → IR)
 
 - UFCS resolved: `x.foo(y)` → `Call(foo, [x, y])`
-- Field access: `x.field` (zero-arg method call on record) → `FieldGet(x, field)`
+- Field access: `x.field` (zero-arg call on a record) → `FieldGet(x, field)`
 - Message send: `process.send(msg)` → `Call(send, [process, msg])` (not a special form, just UFCS)
 - If/elif/trailing-if → `Match` on booleans
 - Operators → `Intrinsic(op, [a, b])`

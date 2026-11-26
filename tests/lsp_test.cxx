@@ -368,7 +368,7 @@ int main() {
             const auto list = askAt("file:///tmp/kex-lsp-let-hover.kex", text, "hover", 2, 6);
             assertTrue(list.find("list : [Integer]") != std::string::npos, list);
             assertTrue(
-                list.find("Lists the names") == std::string::npos,
+                list.find("Returns the names of the files and directories") == std::string::npos,
                 "the binding took FS.Directory.list's documentation: " + list);
         });
 
@@ -1030,7 +1030,7 @@ int main() {
                 result.find("branch type mismatch") == std::string::npos,
                 "literal text did not count as a branch's output: " + result);
             assertTrue(
-                result.find("undefined method `missing`") != std::string::npos,
+                result.find("undefined function `missing`") != std::string::npos,
                 "an error inside a <%= %> hole was dropped: " + result);
             assertTrue(
                 result.find("\"line\":5") != std::string::npos,
@@ -1540,7 +1540,7 @@ int main() {
                 occurrences(result, "Selected overload"), size_t{2},
                 "interpolated Optional.or lost its selected overload");
             assertTrue(
-                result.find("Bitwise OR") == std::string::npos &&
+                result.find("bitwise OR of") == std::string::npos &&
                     result.find("Bits.or") == std::string::npos,
                 "Optional.or hover used Bits.or documentation");
         });

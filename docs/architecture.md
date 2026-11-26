@@ -104,7 +104,7 @@ a `DecidedCall` of kind `Constructor`, `FieldRead`, `ModuleReference`,
 `Builtin`, `Operator`, `OwnMethod` or `ModuleFunction`.
 
 `TypeChecker::ownerOfCall` and `ownTypeAnswers` are the one rule for who owns
-a method call:
+a receiver call:
 - the receiver's own type, through its `make` block, an inherited trait
   default, or its home module's function over it;
 - the run-time value, when the receiver is erased and providers compete;
@@ -125,7 +125,7 @@ symbols and analyze nothing themselves.
 - `targetOf(call)` gives a `Target` with a kind, module, function, arity,
   owner, and `servingCast`.
 - `typeOf(expr)` gives an expression's type.
-- `receiverTypeOf(call)` gives the nominal type a method call was decided on.
+- `receiverTypeOf(call)` gives the nominal type a receiver call was decided on.
 - `callSites()` lists every call site.
 
 `--dump-hir` prints every call site's target, and `--verify-hir` lists the
@@ -143,7 +143,7 @@ its own.
   - The stdlib prelude is lowered with checker answers, as user code is.
 - **Walker** (`src/interpreter/`): evaluates the same AST with the same
   `hir::Program` (`Evaluator::setProgram`). That covers operators and own
-  methods of distinct types, slot casts, and `Type.of` answers. Under
+  `make` functions of distinct types, slot casts, and `Type.of` answers. Under
   `--no-check` the analysis still runs, silently, on both backends.
 - Every walker entry point runs on a checked program: a file run, each REPL
   input (`keepChecked`, the wasm REPL too) and compile-time evaluation

@@ -1,6 +1,8 @@
-# The build driver: scan → extract → PackageModel, then emit everything
-# derived from it — model.json, search.json, Markdown pages, manifest,
-# versions, llms.txt/llms-full.txt, robots.txt and sitemap.xml.
+# The +tey docs build+ driver. It scans and extracts the sources into a
+# +PackageModel+, then writes everything derived from it: model.json,
+# search.json, the Markdown pages, and either the HTML site (with its
+# manifests, versions.json, llms.txt, llms-full.txt, robots.txt and
+# sitemap.xml) or, with +--format fragments+, HTML fragments for a host site.
 
 module Tey.Docgen.Index do
   using Tey.Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, LinkEntry, kindOf, nameOf, lineOf]
@@ -86,11 +88,15 @@ module Tey.Docgen.Index do
     return 0
   end
 
-  # Names another unit documents, so this one's signatures and prose can
-  # link to them: the Tey reference links `String` and `FS.Path` into the
-  # standard library's. Each model.json says which unit it is; its pages sit
-  # at ../../<package>/<version>/ from this unit's version directory. A file
-  # that cannot be read is reported and skipped — links are an extra.
+  # Returns the names documented by other units, read from the comma-separated
+  # model.json files in +paths+, so this unit's signatures and prose can link
+  # to them.
+  #
+  # The Tey reference uses this to link +String+ and +FS.Path+ to the standard
+  # library. Each model.json names its package and version, and its pages are
+  # linked at ../../<package>/<version>/ from this unit's version directory. A
+  # file that cannot be read or is not JSON is reported as a warning and
+  # skipped.
   foul externalLinks(paths: String) -> [LinkEntry] do
     return paths.split(",").map { |p| p.trim }.reject { |p| p.empty? }.into { |path|
       match FS.File.read(path) do
@@ -121,9 +127,9 @@ module Tey.Docgen.Index do
     }
   end
 
-  # The unit's own index files — its manifest and the shared versions.json —
-  # without the site-level ones (landing pages, llms.txt, sitemap), which a
-  # host site that frames fragments owns.
+  # Writes this unit's version manifest and the shared versions.json, but none
+  # of the site-wide files (landing pages, llms.txt, sitemap), which belong to
+  # the host site that embeds the fragments.
   foul writeUnitIndexFiles(pages: [SourcePage], model: PackageModel, out: String) -> () do
     let versions = accumulateVersions(out, model)
     let versionDir = FS.Path.join(FS.Path.join(out, model.package), model.version)
@@ -132,10 +138,11 @@ module Tey.Docgen.Index do
     return ()
   end
 
-  # A @return tag that names a different type than the signature declares
-  # is a doc comment that has drifted from its code (`min : X?` documented as
-  # returning `Number?`). The page shows the signature's type; this says
-  # where the tag disagrees so the comment can be fixed.
+  # Prints a note for each +@return+ tag whose type differs from the
+  # signature's, such as +min : X?+ documented as returning +Number?+.
+  #
+  # The page shows the signature's type either way; the note says which
+  # comment has fallen behind its code.
   foul reportDocDrift(pages: [SourcePage]) -> () do
     let drifts = pages.into { |page|
       Tey.Docgen.Relations.allFunctions(page.entities).into { |f|
@@ -160,13 +167,12 @@ module Tey.Docgen.Index do
     return value.or("")
   end
 
-  # A source tree with a `prelude.kex` has a subset that is visible without an
-  # import, and the reader wants to know which. The file is declarative by
-  # convention — an opening comment, then one bare `using <Module>` per line —
-  # so reading it is enough. A package without one gets empties, and nothing
-  # in the output mentions a prelude at all.
+  # Returns the prelude of the source tree at +source+: the file name, the
+  # modules it makes visible, and its opening comment.
   #
-  # Returns (the file, the modules it makes visible, its opening comment).
+  # A +prelude.kex+ is an opening comment followed by one bare
+  # +using <Module>+ per line, so reading the lines is enough. Without one the
+  # result is +("", [], "")+ and the output never mentions a prelude.
   foul preludeInfo(source: String) -> (String, [String], String) do
     match FS.File.readLines(FS.Path.join(source, "prelude.kex")) do
       Error(_) => ("", [], "")
@@ -177,8 +183,8 @@ module Tey.Docgen.Index do
     end
   end
 
-  # The file's opening comment block, `#` markers stripped, ready for the same
-  # Rdoc parse every other doc comment goes through.
+  # Returns the comment lines at the top of +lines+ with their +#+ markers
+  # removed, ready for the same parse as any other doc comment.
   let leadingComment(lines: [String]) -> String do
     return lines.takeWhile { |line| line.startsWith?("#") }.map { |line| commentBody(line) }.join("\n")
   end
@@ -188,9 +194,12 @@ module Tey.Docgen.Index do
     return line.drop(1)
   end
 
-  # The file's opening comment, when it is its own block: a blank line
-  # after it, not a declaration. A comment that runs straight into a
-  # declaration is that declaration's doc, and the page gets no intro.
+  # Returns the file's opening comment when a blank line follows it, and +""+
+  # otherwise.
+  #
+  # A comment that runs straight into a declaration is that declaration's doc,
+  # and the page gets no introduction. A +#!+ line does not count as a
+  # comment.
   let fileHeader(lines: [String]) -> String do
     let comment = lines.takeWhile { |line| line.trim.startsWith?("#") && !line.startsWith?("#!") }
     return "" if comment.empty?
@@ -199,27 +208,27 @@ module Tey.Docgen.Index do
     return comment.map { |line| commentBody(line.trim) }.join("\n")
   end
 
-  # "using List" -> "List"; anything else (a comment, a blank line, an
-  # `only:` list) -> "".
+  # Returns the module a +using+ line names (+"using List"+ gives +"List"+),
+  # or +""+ for any other line.
   let usingName(line: String) -> String do
     return "" if !line.startsWith?("using ")
     return line.drop(6).split(",").first.or("").trim
   end
 
-  # `src/` when it is standing there, else the flag as given (an empty one is
-  # reported by the scan: "no .kex files found in").
+  # Returns +given+ when it is not empty, else +"src"+ when the current
+  # directory has one, else +""+, which the scan reports as having no .kex
+  # files.
   foul defaultSource(given: String) -> String do
     return given if !given.empty?
     return "src" if FS.File.directory?("src")
     return ""
   end
 
-  # The manifest's name when the CWD is a package — the identity docgen
-  # should not have to be told. Outside one, "": the caller has to say, and
-  # buildCommand refuses rather than inventing a name. Docgen used to answer
-  # "prelude" here, which meant a build with a swallowed or forgotten
-  # --package filed its pages under whatever the CWD's package.kex said (the
-  # stdlib was published as "kex" for exactly that reason, kexhq/kex#287).
+  # Returns +given+ when it is not empty, else the name in the current
+  # directory's package.kex, else +""+.
+  #
+  # With +""+, +buildCommand+ stops with an error and asks for +--package+;
+  # it does not invent a name (kexhq/kex#287).
   foul defaultPackage(given: String) -> String do
     return given if !given.empty?
     match manifestVersion() do
@@ -231,10 +240,12 @@ module Tey.Docgen.Index do
     end
   end
 
-  # The version of the thing being documented: a package's own release when
-  # standing in one. What a package's versions ARE differs per package — a
-  # library's own releases, the stdlib's Kex releases — so outside a package
-  # this is the caller's to state (--release) rather than docgen's to guess.
+  # Returns +given+ when it is not empty, else the version in the current
+  # directory's package.kex, else +""+.
+  #
+  # Outside a package the caller must pass +--release+: what a version means
+  # differs between units, such as a library's releases and the standard
+  # library's Kex releases.
   foul defaultVersion(given: String) -> String do
     return given if !given.empty?
     match manifestVersion() do
@@ -246,8 +257,8 @@ module Tey.Docgen.Index do
     end
   end
 
-  # (name, version) of the package.kex in the CWD, if there is a readable
-  # one. Both defaults read it; one read, one parse.
+  # Returns the name and version from the current directory's package.kex,
+  # or +None+ when there is none or it does not parse.
   foul manifestVersion() -> (String, String)? do
     match FS.File.read("package.kex") do
       Error(_) => None
@@ -293,8 +304,9 @@ module Tey.Docgen.Index do
     return count
   end
 
-  # HTML mirrors the Markdown layout: one page per source file, plus the
-  # version landing page, the site-root redirect and the shared stylesheet.
+  # Writes the HTML site for one version: a page per source file, the
+  # version's index.html and search.html, and the shared assets/style.css and
+  # assets/site.js.
   foul writeHtml(pages: [SourcePage], versionDir: String, out: String, model: PackageModel) -> () do
     let _ = pages.reduce(0, { |n, page|
       let outPath = FS.Path.join(versionDir, page.urlPath + ".html")
@@ -311,7 +323,8 @@ module Tey.Docgen.Index do
     return ()
   end
 
-  # "kex/ast" → "kex"; "fs" → "" (already inside versionDir).
+  # Returns the directory part of a page's URL path: +"kex/ast"+ gives
+  # +"kex"+, and +"fs"+ gives +""+.
   let dirNameOf(urlPath: String) -> String do
     let parts = urlPath.split("/")
     if parts.count <= 1
@@ -357,10 +370,11 @@ module Tey.Docgen.Index do
     return ()
   end
 
-  # One version's pages, with the package and version they belong to, so a
-  # reader of the file needs nothing but the file. Page paths stay relative
-  # to the version directory — the URL prefix is `<package>/<version>/`, and
-  # whoever assembles the site is the one that knows the site root.
+  # Returns the manifest.json for one version: its package, version, label,
+  # build time and pages.
+  #
+  # Page paths are relative to the version directory, +<package>/<version>/+;
+  # whoever assembles the site adds the site root.
   let versionManifestJson(pages: [SourcePage], model: PackageModel) -> String do
     return JSON.stringify({
       package: model.package,
@@ -382,9 +396,11 @@ module Tey.Docgen.Index do
     })
   end
 
-  # The output directory is the published site, so a build must not clobber
-  # the versions other builds published: read what is there, upsert this
-  # (package, version), write the union back, newest first.
+  # Returns the versions.json entries with this build's added.
+  #
+  # The output directory is the published site, so other builds' versions are
+  # kept: the existing entries are read, this package and version replaces
+  # any earlier entry for it, and this build comes first.
   foul accumulateVersions(out: String, model: PackageModel) -> [VersionEntry] do
     let current = VersionEntry {
       id: model.version,
@@ -395,8 +411,8 @@ module Tey.Docgen.Index do
     return upsertVersion(current, readVersionEntries(out))
   end
 
-  # This build's entry first, the other packages' and versions' kept: the
-  # pure half of accumulate, so the upsert rule itself can be spec'd.
+  # Returns +existing+ with any entry for the same package and version
+  # removed and +current+ put first.
   let upsertVersion(current: VersionEntry, existing: [VersionEntry]) -> [VersionEntry] do
     let kept = existing.filter { |e|
       !(e.package == current.package && e.id == current.id)

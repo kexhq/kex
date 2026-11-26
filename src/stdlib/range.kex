@@ -1,19 +1,18 @@
 # A span between two bounds, written +(1..10)+ or +('a'..'z')+.
 #
-# A range stores its endpoints on both backends without building a list.
-# Integer and character ranges can be enumerated with both ends included.
-# Float ranges describe continuous bounds, for example +(-1.0..1.0)+ for
-# random sampling; +items+ and traversal functions cannot enumerate them.
-# A range whose lower endpoint exceeds its upper endpoint enumerates as an
-# empty list, so +(1..count).each+ does nothing for a +count+ of 0.
+# Both ends are included. A range holds only its endpoints (and a step), so a
+# large one costs nothing until you enumerate it. Integer and character ranges
+# can be enumerated. A Float range such as +(-1.0..1.0)+ is a pair of bounds,
+# useful for +contains?+ or random sampling, and cannot be enumerated. A range
+# whose lower end is above its upper end is empty, so +(1..count).each+ does
+# nothing when +count+ is 0.
 #
 #   (1..5).items          # => [1, 2, 3, 4, 5]
 #   (1..5).sum            # => 15
 #   5.in?(1..10)          # => true
 #   ('a'..'e').items      # => ['a', 'b', 'c', 'd', 'e']
 #
-# To count down, or by another step, give the range a step with +by+ (or use
-# +Integer.downTo+); it stays two endpoints and a step, built into no list:
+# To count down or by another step, use +by+ or +Integer.downTo+:
 #
 #   (1..10).by(2).items   # => [1, 3, 5, 7, 9]
 #   (10..1).by(-3).items  # => [10, 7, 4, 1]
@@ -21,19 +20,18 @@
 #   (1..4).reverse.items  # => [4, 3, 2, 1]
 #
 # A range of Integers or Chars (a +Discrete+ type) is +Enumerable+ and
-# +Foldable+, so the traversal functions work directly, and the list
-# operations below answer in list terms. A Float range is not: it has
-# +contains?+ only. Use +items+ when you want a real list to hand to something
-# else.
+# +Foldable+, and the list functions below return lists. A Float range has
+# only +contains?+. Use +items+ to get the elements as a list.
 #
 #   (1..10).items.filter(~even?)   # => [2, 4, 6, 8, 10]
 #   (1..3).items.each { |n| IO.printLine(n) }
 type Range<A>
 
-# The element types whose values can be walked one after another, so a
-# range of them can be enumerated: Integer and Char. A Float range has
-# bounds and no next value, so it has +contains?+ and none of the traversal
-# functions (+(0.0..1.0).sum+ is a type error, not a run-time one).
+# The element types with a next value, whose ranges can be enumerated:
+# Integer and Char.
+#
+# A Float range has no next value, so it has +contains?+ and none of the
+# traversal functions; +(0.0..1.0).sum+ is a type error.
 trait Discrete do
 end
 
@@ -43,14 +41,14 @@ end
 make Char, implement: Discrete do
 end
 
-# What any range answers from its endpoints alone, a Float range too.
+# Functions every range has, Float ranges included.
 make Range<A> do
   # Returns +true+ when +value+ lies between the endpoints, both included.
   #
-  # Only the endpoints are compared: nothing is enumerated, so this is cheap
-  # for a range of any size and works for a continuous +Float+ range too. A
-  # range whose lower endpoint exceeds its upper endpoint contains nothing.
-  # A stepped range contains only the values its step reaches.
+  # A range with the default step only compares +value+ with the endpoints,
+  # so this is cheap for any size of range and works for a +Float+ range. A
+  # range whose lower end is above its upper end contains nothing. A stepped
+  # range contains only the values its step reaches.
   #
   # @param value [A] the value to test
   # @return [Bool] +true+ when the value is in range
@@ -73,14 +71,12 @@ make Range<A> do
   end
 end
 
-# Walking a range takes an element type with a next value: these exist for
-# ranges of a +Discrete+ type only.
+# Functions that enumerate a range, for ranges of a +Discrete+ type only.
 make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   # Folds over the range's elements in order.
   #
-  # This is +Range+'s +Enumerable+ primitive; the traversal functions are built
-  # on it. A range stays structurally minimal, so the fold runs over its
-  # materialized items.
+  # The +Enumerable+ functions are built on it. It builds the list of
+  # elements first.
   #
   # @param acc [B] the initial accumulator
   # @param f [B -> A -> B] combines the accumulator with each element
@@ -120,7 +116,7 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
     end
   end
 
-  # Transforms each element by applying +f+, in order.
+  # Returns a list of +f+ applied to each element, in order.
   #
   # @param f [A -> B] the transformation
   # @return [[B]] the results, as a list
@@ -147,13 +143,14 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   #   (1..5).product   # => 120   (five factorial)
   let product = this.reduce(1) { |acc, n| acc * n }
 
-  # Returns the range enumerated by +step+ from its first endpoint towards
-  # its last, instead of by 1. The sign of +step+ is the direction: a
-  # negative step counts down, and a range whose end lies the other way from
-  # its start is empty. The last endpoint is included only when the step
-  # lands on it. Nothing is enumerated until the range is traversed.
+  # Returns the range counted by +step+ from its first endpoint towards its
+  # last.
   #
-  # A step of 0 is an error, as is a step on a +Float+ range.
+  # A negative step counts down, and a range whose end lies the other way from
+  # its start is empty. The last endpoint is included only when the step lands
+  # on it.
+  #
+  # A step of 0 is a run-time error. +by+ on a +Float+ range is a type error.
   #
   # @param step [Integer] the distance between consecutive elements
   # @return [Range<A>] the stepped range
@@ -168,10 +165,9 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
 
   # Returns the range's elements as a list.
   #
-  # This is where a range stops being two numbers and becomes real data, so it
-  # is also where a very large range starts to cost something.
+  # This builds the whole list, so it costs memory for a very large range.
   #
-  # @return [[A]] the elements, in ascending order
+  # @return [[A]] the elements, in the range's order
   #
   # @example
   #   (1..3).items      # => [1, 2, 3]
@@ -188,9 +184,6 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   #
   # @example
   #   (3..7).first   # => Just(3)
-  # The list operations, over the materialized items. A range is an ordered
-  # collection, so +(1..5).first+ and +(1..5).length+ operate on its
-  # materialized elements. Floating bounds do not define such a collection.
   first :> A?
   let first = this.items.first
 
@@ -240,7 +233,7 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   length :> Integer
   let length = this.items.length
 
-  # Returns how many elements the range has. The same as +length+.
+  # Returns how many elements the range has, as +length+ does.
   #
   # @return [Integer] the number of elements
   #
@@ -321,8 +314,9 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   groupBy :> (A -> K) -> {K: [A]}
   let groupBy(f) = this.items.groupBy(f)
 
-  # Returns the same elements in the opposite order, as a range: nothing is
-  # enumerated. It starts at the last element the step reaches, so
+  # Returns a range of the same elements in the opposite order.
+  #
+  # It starts at the last element the step reaches, so
   # +(1..10).by(3).reverse+ is +(10..1).by(-3)+ and +(1..9).by(3).reverse+ is
   # +(7..1).by(-3)+. An empty range stays empty.
   #
@@ -336,8 +330,7 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   reverse :> Range<A>
   let reverse = Kex.Intrinsic.Range.reverse(this)
 
-  # Returns the elements as a sorted list, ascending whatever the range's
-  # step.
+  # Returns the elements as a list in ascending order, whatever the step.
   #
   # @return [[A]] the elements, sorted
   #
@@ -356,8 +349,8 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   sort :> (A -> A -> Bool) -> [A]
   let sort(comparator) = this.items.sort(comparator)
 
-  # Returns the elements as a list with duplicates removed. A range has none,
-  # so this is the identity: it exists so that generic code can call it.
+  # Returns the elements as a list with duplicates removed. A range has no
+  # duplicates, so this is the same as +items+.
   #
   # @return [[A]] the distinct elements
   #
@@ -382,8 +375,7 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   # Returns the element at index +index+, counting from 0, or +None+ when out
   # of range.
   #
-  # Note that the index counts positions, not values: +(10..20).at(0)+ is
-  # +Just(10)+.
+  # The index counts positions, not values: +(10..20).at(0)+ is +Just(10)+.
   #
   # @param index [Integer] the 0-based position
   # @return [A?] the element, or +None+
@@ -407,11 +399,6 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   let get(index) = this.items.get(index)
 
   # Returns the element at index +index+, or +fallback+ when out of range.
-  #
-  # This is the total form: it always answers a value, never an +Optional+.
-  # +at+ and +get+ with one argument are the partial forms: the split matches
-  # +List+, +String+ and +Map+, where +at+ is always optional and only +get+
-  # takes a fallback.
   #
   # @param index [Integer] the 0-based position
   # @param fallback [A] the value to use when out of range
@@ -489,7 +476,7 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   push :> A -> [A]
   let push(value) = this.items.push(value)
 
-  # Returns the elements that do NOT satisfy +pred+, as a list.
+  # Returns the elements that fail +pred+, as a list.
   #
   # @param pred [A -> Bool] the test applied to each element
   # @return [[A]] the elements that failed the predicate

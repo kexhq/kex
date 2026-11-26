@@ -1,67 +1,76 @@
 module URI
 
-# Strict RFC 3986 URI values, hierarchical URLs, query strings, and HTML form
-# encoding. Parsing preserves caller spelling; normalization is always explicit.
+# Parses, builds and resolves URIs and URLs, and encodes query strings and
+# HTML forms.
+#
+# Parsing follows RFC 3986 strictly and keeps the text as it was written:
+# +string+ gives back the exact input. Normalizing is a separate step, done
+# by +normalize+ and +equivalent?+.
 #
 #   using URI
 #
 #   let base = URL.parse("https://example.test/a/").try
 #   let reference = URI.parse("../items?limit=10").try
-#   base.resolve(reference).try.string
+#   base.resolve(reference).try.string   # => "https://example.test/items?limit=10"
 
-# A parsed RFC 3986 URI reference. Construction is strict; use `parse` rather
-# than building this representation directly. `string` preserves the spelling
-# supplied by the caller, while `normalize` is explicit.
+# A parsed RFC 3986 URI reference: an absolute URI or a relative one.
+#
+# Make one with +URI.parse+ or +URI.fromIRI+, which check the syntax.
 record URI do
   source : String
 end
 
-# An absolute hierarchical URI with an authority component, such as an HTTP
-# URL. Unlike a general +URI+, a +URL+ always has a scheme and host, which
-# makes accessors such as +scheme+ and +host+ total.
+# An absolute URI with a host, such as an HTTP URL.
+#
+# Every +URL+ has a scheme and a host, so +scheme+ and +host+ return them
+# directly, where the +URI+ versions return optionals. Make one with
+# +URL.parse+ or +URL.build+.
 record URL do
   source : String
 end
 
-# A host's display spelling and normalized ASCII/IDNA spelling.
+# A URI's host as written, in +display+, and in lowercase ASCII (IDNA)
+# form, in +ascii+.
 record Host do
   display : String
   ascii : String
 end
 
-# Ordered URI query entries. +None+ distinguishes a bare key from +key=+.
+# The entries of a URI query string, in order.
 #
-# Order and duplicates matter in real APIs: +tag=kex&tag=beam+ must not become
-# a map with one value silently discarded.
+# Order and repeated keys are kept, since APIs rely on them:
+# +tag=kex&tag=beam+ has two entries. A value of +None+ is a bare key, as in
+# +?debug+; +Just("")+ is a key with an empty value, as in +?debug=+.
 record Query do
   entries : [(String, String?)]
 end
 
-# Ordered +application/x-www-form-urlencoded+ entries.
+# The fields of an +application/x-www-form-urlencoded+ body, in order.
 #
-# This is deliberately separate from +Query+: HTML forms encode spaces as
-# plus signs, while a generic URI query treats a plus as an ordinary +++.
+# Forms encode a space as +++. In a +Query+, +++ is a literal plus sign.
 record Form do
   entries : [(String, String?)]
 end
 
-# A typed URI parsing, conversion, or resolution failure.
+# The error returned when a URI cannot be parsed, converted or resolved: its
+# +kind+, and a message for a person to read.
 record URIError do
   kind : URIErrorKind
   message : String
   position : Integer?
 end
 
-# Stable URI failure categories.
+# What kind of problem a +URIError+ reports.
 type URIErrorKind = InvalidSyntax | InvalidEscape | InvalidAuthority | InvalidPort | NonASCII | NotAbsolute | NotHierarchical | MissingAuthority | UnsupportedScheme
 
-# Strictly parses an ASCII RFC 3986 URI reference.
+# Parses an RFC 3986 URI reference, which may be relative.
 #
-# Relative references are valid here. Use +URL.parse+ when the input must be a
-# complete hierarchical URL with a scheme and authority.
+# The text must be ASCII, with anything else already percent-encoded; use
+# +URI.fromIRI+ for text a person typed. Use +URL.parse+ when the input must
+# be a complete URL with a scheme and host.
 #
-# @param text [String] an absolute URI or relative reference
-# @return [Result<URI, URIError>] the reference or a precise syntax error
+# @param text [String] an absolute URI or a relative reference
+# @return [Result<URI, URIError>] the reference, or what is wrong with it
 #
 # @example Resolving an image link found in a document
 #   let reference = URI.parse("../images/logo.svg").try
@@ -69,120 +78,124 @@ type URIErrorKind = InvalidSyntax | InvalidEscape | InvalidAuthority | InvalidPo
 parse : String -> Result<URI, URIError>
 let parse(text) = Kex.Intrinsic.URI.parse(text)
 
-# Converts a Unicode IRI to an ASCII URI using IDNA and UTF-8 percent encoding.
+# Converts an internationalized address (an IRI) to an ASCII URI.
 #
-# Use this for human-entered international addresses. +parse+ is intentionally
-# stricter and accepts only an already encoded ASCII URI.
+# The host is converted with IDNA, and the rest of the non-ASCII text is
+# percent-encoded as UTF-8. Use it for addresses people type or paste;
+# +parse+ rejects non-ASCII text.
 #
-# @param text [String] a Unicode internationalized resource identifier
-# @return [Result<URI, URIError>] the converted URI or a conversion error
+# @param text [String] the internationalized address
+# @return [Result<URI, URIError>] the converted URI, or why it cannot be
+#   converted
 #
-# @example Turning a pasted international address into a request URI
-#   let target = URI.fromIRI("https://münich.example/straße").try
-#   HTTP.get(target.string)
+# @example
+#   URI.fromIRI("https://münich.example/straße").try.string
+#   # => "https://xn--mnich-kva.example/stra%C3%9Fe"
 fromIRI : String -> Result<URI, URIError>
 let fromIRI(text) = Kex.Intrinsic.URI.fromIRI(text)
 
 module URL do
-  # Parses an absolute hierarchical URL with an authority.
+  # Parses an absolute URL with a scheme and host.
   #
-  # Rejects relative references, opaque URIs, and values without a host, so a
-  # caller can use +scheme+ and +host+ without handling absence.
+  # A relative reference is a +NotAbsolute+ error, and a URI without a host,
+  # such as +mailto:ada@example.com+, is +MissingAuthority+.
   #
   # @param text [String] the complete URL
-  # @return [Result<URL, URIError>] the URL or a precise syntax error
+  # @return [Result<URL, URIError>] the URL, or what is wrong with it
   #
-  # @example Validating a webhook target at configuration time
+  # @example Checking a webhook URL from the configuration
   #   let webhook = URL.parse(ENV.get("WEBHOOK_URL").or("")).try
   parse : String -> Result<URL, URIError>
   let parse(text) = Kex.Intrinsic.URL.parse(text)
 
-  # Builds and validates a URL from decoded path segments and a query value.
+  # Builds a URL from a scheme, a host, path segments and a query.
   #
-  # Pass decoded values, not pre-escaped text. The builder escapes each path
-  # segment independently, so a slash inside one value cannot accidentally
-  # become another level of the path.
+  # Pass the path segments and query values unencoded. Each segment is
+  # encoded on its own, so a +/+ inside a value stays part of that segment.
+  # The scheme and host are lowercased. The host must be ASCII: an
+  # international name has to be given in its +xn--+ form.
   #
   # @param scheme [String] the URL scheme, such as +https+
-  # @param host [String] the Unicode or ASCII hostname
-  # @param path [[String]] decoded path segments
-  # @param query [Query] ordered decoded query entries
-  # @return [Result<URL, URIError>] the encoded, validated URL
+  # @param host [String] the host name, in ASCII
+  # @param path [[String]] the path segments, unencoded
+  # @param query [Query] the query entries, unencoded
+  # @return [Result<URL, URIError>] the URL, or why it is invalid
   #
-  # @example Building an API URL from an identifier supplied by a user
-  #   URL.build(
-  #     "https",
-  #     "api.example.com",
-  #     ["users", userName],
-  #     Query.from([("include", Just("profile"))])
-  #   ).try
+  # @example Building an API URL from a name a user supplied
+  #   URL.build("https", "api.example.com", ["users", "a/b c"],
+  #     Query.from([("include", Just("profile"))])).try.string
+  #   # => "https://api.example.com/users/a%2Fb%20c?include=profile"
   build : String -> String -> [String] -> Query -> Result<URL, URIError>
   let build(scheme, host, path, query) = Kex.Intrinsic.URL.build(scheme, host, path, query)
 end
 
 module Query do
-  # Builds a query while preserving order, duplicates, and bare keys.
+  # Builds a query from a list of entries, keeping their order, repeated
+  # keys and bare keys.
   #
-  # A +None+ value encodes as a bare key; +Just("")+ encodes with an equals
-  # sign. This preserves the difference between +?debug+ and +?debug=+.
+  # A +None+ value is encoded as a bare key, and +Just("")+ as a key with an
+  # equals sign, so +?debug+ and +?debug=+ stay different.
   #
-  # @param entries [[(String, String?)]] decoded key/value pairs
-  # @return [Query] the ordered query
+  # @param entries [[(String, String?)]] the keys and values, unencoded
+  # @return [Query] the query
   #
-  # @example Adding repeated filters and a bare feature flag
+  # @example Repeated filters and a bare flag
   #   Query.from([
   #     ("tag", Just("kex")),
   #     ("tag", Just("beam")),
   #     ("debug", None)
-  #   ])
+  #   ]).encode
+  #   # => "tag=kex&tag=beam&debug"
   from : [(String, String?)] -> Query
   let from(entries) = Query { entries: entries }
 
-  # Builds a query from unordered key/value pairs, for the common case where
-  # every key is used once. A `Map` cannot hold "tag" twice, so — unlike the
-  # list form above — repeating a key here does not add a second field; it
-  # silently keeps only one value for it. Reach for the ordered list form
-  # instead of this one for anything that legitimately repeats a key, such
-  # as `?tag=kex&tag=beam`.
+  # Builds a query from a map, for when every key appears once.
   #
-  # @param entries [Map<String, String?>] decoded key/value pairs, one per key
+  # A map holds each key only once, so a query that repeats a key, such as
+  # +?tag=kex&tag=beam+, needs the list form.
+  #
+  # @param entries [Map<String, String?>] the keys and values, unencoded
   # @return [Query] the query
   #
-  # @example Building filters that each use a distinct key
-  #   Query.from({ "sort": Just("name"), "debug": None })
+  # @example
+  #   Query.from({ "sort": Just("name"), "debug": None }).encode
+  #   # => "debug&sort=name"
   from : Map<String, String?> -> Query
   let from(entries: Map<String, String?>) = Query { entries: entries.entries }
 
-  # Parses generic URI query encoding; ++ remains a literal plus.
+  # Parses a query string, decoding percent escapes.
   #
-  # @param text [String] encoded query text without the leading question mark
-  # @return [Result<Query, URIError>] decoded entries or an invalid escape
+  # A +++ stays a plus sign; use +Form.parse+ for form bodies, where it means
+  # a space.
   #
-  # @example Reading repeated filters without losing their order
-  #   let filters = Query.parse("tag=kex&tag=beam&debug").try.entries
+  # @param text [String] the query, without the leading +?+
+  # @return [Result<Query, URIError>] the entries, or an +InvalidEscape+ error
+  #
+  # @example
+  #   Query.parse("tag=kex&tag=beam&debug").try.entries
+  #   # => [("tag", Just("kex")), ("tag", Just("beam")), ("debug", None)]
   parse : String -> Result<Query, URIError>
   let parse(text) = Kex.Intrinsic.URI.queryParse(text)
 end
 
 module Form do
-  # Builds a form value while preserving order and duplicates.
+  # Builds a form from a list of fields, keeping their order and repeated
+  # names.
   #
-  # @param entries [[(String, String)]] decoded form fields
-  # @return [Form] the ordered form
+  # @param entries [[(String, String)]] the field names and values, unencoded
+  # @return [Form] the form
   #
   # @example Preparing a login request body
   #   Form.from([("email", email), ("password", password)]).encode
   from : [(String, String)] -> Form
   let from(entries) = Kex.Intrinsic.URI.formFrom(entries)
 
-  # Builds a form from unordered key/value pairs, for the common case where
-  # every field name is used once. A `Map` cannot hold a name twice, so —
-  # unlike the list form above — a repeated field name here does not add a
-  # second entry; it silently keeps only one value for it. Reach for the
-  # ordered list form instead of this one for anything that legitimately
-  # repeats a field name, such as several same-named checkboxes.
+  # Builds a form from a map, for when every field name appears once.
   #
-  # @param entries [Map<String, String>] decoded form fields, one per name
+  # A map holds each name only once, so a form that repeats one, such as
+  # several checkboxes with the same name, needs the list form.
+  #
+  # @param entries [Map<String, String>] the field names and values, unencoded
   # @return [Form] the form
   #
   # @example Preparing a login request body
@@ -190,117 +203,138 @@ module Form do
   from : Map<String, String> -> Form
   let from(entries: Map<String, String>) = Kex.Intrinsic.URI.formFrom(entries.entries)
 
-  # Parses form encoding where ++ represents a space.
+  # Parses an +application/x-www-form-urlencoded+ body, where +++ means a
+  # space.
   #
-  # @param text [String] an +application/x-www-form-urlencoded+ body
-  # @return [Result<Form, URIError>] decoded fields or an invalid escape
+  # @param text [String] the encoded body
+  # @return [Result<Form, URIError>] the fields, or an +InvalidEscape+ error
   #
-  # @example Reading a search field submitted by a browser
+  # @example Reading a search field a browser submitted
   #   Form.parse("query=hello+world").try.entries
+  #   # => [("query", Just("hello world"))]
   parse : String -> Result<Form, URIError>
   let parse(text) = Kex.Intrinsic.URI.formParse(text)
 end
 
 make URI, implement: Showable, Inspectable do
-  # Returns the caller-supplied URI spelling unchanged.
+  # Returns the URI exactly as it was parsed.
   #
-  # @return [String] the original URI text
+  # @return [String] the URI text
   let string -> String = @source
-  # Returns an explicitly normalized RFC 3986 representation.
+  # Returns the URI in RFC 3986 normal form.
   #
-  # Parsing never normalizes implicitly: signatures, cache keys, and logs may
-  # depend on the exact text received. Ask for normalization where semantic
-  # comparison is what you mean.
+  # The scheme and host are lowercased, needless percent escapes are
+  # decoded, and +.+ and +..+ path segments are resolved. Parsing never does
+  # this by itself, because signatures, cache keys and logs may depend on the
+  # exact text.
   #
   # @return [URI] the normalized URI
+  #
+  # @example
+  #   URI.parse("HTTP://example.com/%7Eada").try.normalize.string
+  #   # => "http://example.com/~ada"
   let normalize -> URI = Kex.Intrinsic.URI.normalize(this)
-  # Compares normalized representations rather than original spellings.
+  # Returns +true+ when the two URIs are the same after normalizing.
+  #
+  # +==+ compares the text as written.
   #
   # @param other [URI] the URI to compare
-  # @return [Bool] whether the URIs identify the same normalized reference
+  # @return [Bool] +true+ when both normalize to the same URI
   #
-  # @example Deduplicating differently spelled links
+  # @example Spotting the same link spelled two ways
   #   URI.parse("HTTP://example.com/%7Eada").try
   #     .equivalent?(URI.parse("http://example.com/~ada").try)
+  #   # => true
   let equivalent?(other: URI) -> Bool = this.normalize.string == other.normalize.string
-  # Resolves a URI reference against this absolute base.
+  # Resolves +reference+ against this URI, as a browser resolves a link
+  # against the page it is on.
   #
   # @param reference [URI] the relative or absolute reference
-  # @return [Result<URI, URIError>] the resolved URI, or +NotAbsolute+ when
-  #   this receiver cannot serve as a base
+  # @return [Result<URI, URIError>] the resolved URI, or a +NotAbsolute+
+  #   error when this URI is relative and cannot serve as a base
   #
   # @example Following a relative link
   #   let base = URI.parse("https://example.com/docs/start").try
   #   base.resolve(URI.parse("../api").try).try.string
   #   # => "https://example.com/api"
   let resolve(reference: URI) -> Result<URI, URIError> = Kex.Intrinsic.URI.resolve(this, reference)
-  # Returns the normalized lowercase scheme, when one is present.
+  # Returns the scheme in lowercase, or +None+ for a relative reference.
   #
-  # @return [String?] the scheme, or +None+ for a relative reference
+  # @return [String?] the scheme, or +None+
   let scheme -> String? = Kex.Intrinsic.URI.scheme(this)
-  # Returns the parsed authority host, when one is present.
+  # Returns the host, or +None+ when the URI has none.
   #
-  # @return [Host?] the host, or +None+ for references without an authority
+  # @return [Host?] the host, or +None+
   let host -> Host? = Kex.Intrinsic.URI.host(this)
-  # Returns the parsed query when the reference contains +?+.
+  # Returns the query, or +None+ when the URI has no +?+.
   #
-  # +Just(Query { entries: [] })+ represents an explicitly empty query; +None+
-  # means no question mark was present at all.
+  # A URI ending in a bare +?+ has a query with no entries, which is not the
+  # same as +None+.
   #
-  # @return [Query?] the query, including an explicitly empty one
+  # @return [Query?] the query, or +None+
   let query -> Query? = Kex.Intrinsic.URI.query(this)
-  # Renders with any authority password replaced by +***+.
+  # Renders the URI with any password in it replaced by +***+.
   let showValue -> String = Kex.Intrinsic.URI.redacted(this)
-  # Structural inspection is also credential-safe.
+  # Renders the URI with any password in it replaced by +***+, as
+  # +showValue+ does.
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.URI.redacted(this)
 end
 
 make URL, implement: Showable, Inspectable do
-  # Returns the caller-supplied URL spelling unchanged.
+  # Returns the URL exactly as it was parsed.
   #
-  # @return [String] the original URL text
+  # @return [String] the URL text
   let string -> String = @source
-  # Returns an explicitly normalized URL without changing this value.
+  # Returns the URL in RFC 3986 normal form.
   #
   # @return [URL] the normalized URL
+  #
+  # @example
+  #   URL.parse("HTTPS://Example.COM/a/../b").try.normalize.string
+  #   # => "https://example.com/b"
   let normalize -> URL = Kex.Intrinsic.URL.normalize(this)
-  # Compares normalized representations rather than original spellings.
+  # Returns +true+ when the two URLs are the same after normalizing.
   #
   # @param other [URL] the URL to compare
-  # @return [Bool] whether the URLs normalize to the same value
+  # @return [Bool] +true+ when both normalize to the same URL
   let equivalent?(other: URL) -> Bool = this.normalize.string == other.normalize.string
-  # Resolves a URI reference while preserving the URL invariant.
+  # Resolves +reference+ against this URL.
+  #
+  # The result must still be a URL, so a reference without a host, such as
+  # +mailto:ada@example.com+, is a +MissingAuthority+ error.
   #
   # @param reference [URI] the relative or absolute reference
-  # @return [Result<URL, URIError>] the resolved absolute URL
+  # @return [Result<URL, URIError>] the resolved URL
   #
-  # @example Resolving an API pagination link
-  #   let next = URL.parse("https://api.example.com/v1/items").try
+  # @example Following an API's pagination link
+  #   URL.parse("https://api.example.com/v1/items").try
   #     .resolve(URI.parse("?page=2").try)
-  #     .try
+  #     .try.string
+  #   # => "https://api.example.com/v1/items?page=2"
   let resolve(reference: URI) -> Result<URL, URIError> = Kex.Intrinsic.URL.resolve(this, reference)
-  # Returns the normalized lowercase scheme.
+  # Returns the scheme in lowercase.
   #
   # @return [String] the scheme
   let scheme -> String = Kex.Intrinsic.URL.scheme(this)
-  # Returns the authority host in display and normalized ASCII forms.
+  # Returns the host.
   #
   # @return [Host] the host
   let host -> Host = Kex.Intrinsic.URL.host(this)
-  # Returns the parsed query when the URL contains +?+.
+  # Returns the query, or +None+ when the URL has no +?+.
   #
-  # @return [Query?] the query, or +None+ when absent
+  # @return [Query?] the query, or +None+
   let query -> Query? = Kex.Intrinsic.URL.query(this)
-  # Renders with any authority password replaced by +***+.
+  # Renders the URL with any password in it replaced by +***+.
   let showValue -> String = Kex.Intrinsic.URI.redacted(this)
-  # Structural inspection is also credential-safe.
+  # Renders the URL with any password in it replaced by +***+, as
+  # +showValue+ does.
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.URI.redacted(this)
 end
 
 make Query do
-  # Encodes according to generic RFC 3986 query rules.
+  # Encodes the query by RFC 3986 rules, percent-encoding a +++ in a value.
   #
-  # @return [String] encoded query text without a leading question mark
+  # @return [String] the encoded query, without a leading +?+
   #
   # @example
   #   Query.from([("q", Just("a+b"))]).encode   # => "q=a%2Bb"
@@ -308,7 +342,7 @@ make Query do
 end
 
 make Form do
-  # Encodes according to HTML form rules, including space as ++.
+  # Encodes the form by HTML form rules, which write a space as +++.
   #
   # @return [String] the +application/x-www-form-urlencoded+ body
   #

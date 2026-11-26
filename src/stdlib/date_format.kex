@@ -1,11 +1,7 @@
-# Writing dates, times of day and instants by a CLDR pattern: the +DateFormat+
-# record and module, and +to(String, format)+ on +Date+, +Time+ and
-# +DateTime+.
-
-# How +to(String, format)+ writes a date, a time of day or an instant: a
-# CLDR pattern such as +"yyyy-MM-dd HH:mm"+, described at +Date.format+.
-# Build one with the +Date.format+ tagged literal, or with +DateFormat.parse+,
-# which says where a pattern known only at run time goes wrong.
+# A CLDR pattern such as +"yyyy-MM-dd HH:mm"+ for +to(String, format)+ on a
+# date, a time of day or an instant. The patterns are described at
+# +Date.format+. Build one with the +Date.format+ tagged literal, or with
+# +DateFormat.parse+ for a pattern known only at run time.
 record DateFormat do
   # The CLDR pattern, such as +"yyyy-MM-dd"+.
   pattern : String
@@ -18,8 +14,8 @@ module DateFormat do
   # written as it stands.
   type Piece = PatternField(Char, Integer) | PatternText(String)
 
-  # Checks a pattern known only at run time. +Date.format+ describes the
-  # patterns.
+  # Checks a pattern known only at run time and returns it as a
+  # +DateFormat+. +Date.format+ describes the patterns.
   #
   # @param pattern [String] the pattern
   # @return [Result<DateFormat, PatternError>] the format, or where the
@@ -27,7 +23,7 @@ module DateFormat do
   #
   # @example
   #   DateFormat.parse("yyyy-MM-dd")   # => Ok(DateFormat { pattern: "yyyy-MM-dd" })
-  #   DateFormat.parse("yyyy-QQ")      # => Error(PatternError { position: 5, ... })
+  #   DateFormat.parse("yyyy-QQ")      # => Error(PatternError { message: "...", position: 5 })
   let parse(pattern: String) -> Result<DateFormat, PatternError> do
     match DateFormat.pieces(pattern) do
       Ok(_) => return Ok(DateFormat { pattern: pattern })
@@ -35,8 +31,8 @@ module DateFormat do
     end
   end
 
-  # Splits a pattern into its fields and its literal text. Otherwise the
-  # index of its first problem, and what that problem is.
+  # Splits a pattern into its fields and its literal text. For a bad pattern
+  # it returns the index of the first problem and a message.
   #
   # @param pattern [String] the pattern
   # @return [Result<[Piece], (Integer, String)>] the pieces, or the problem
@@ -46,12 +42,12 @@ module DateFormat do
   pieces : String -> Result<[Piece], (Integer, String)>
   let pieces(pattern) = scanPattern(pattern.chars, 0, [])
 
-  # Writes +date+, +time+ and +offset+ (whichever the value has) by the
-  # pieces of a pattern, with +culture+'s names. +None+ when the pattern
-  # asks for a field the value does not have, such as an hour of a +Date+.
+  # Writes whichever of +date+, +time+ and +offset+ are given by a pattern,
+  # with +culture+'s names. Returns +None+ for a bad pattern or when the
+  # pattern asks for a field that is missing, such as an hour of a +Date+.
   #
-  # The +to(String, format)+ functions on +Date+, +Time+ and +DateTime+ are
-  # the way to reach this.
+  # Callers normally use +to(String, format)+ on +Date+, +Time+ or
+  # +DateTime+ instead.
   #
   # @param format [DateFormat] the pattern
   # @param date [Date?] the calendar date, when the value has one
@@ -71,8 +67,9 @@ module DateFormat do
     end
   end
 
-  # The pattern a culture writes its dates in: year, month and day in its
-  # order, joined by its date separator. ISO order without a time section.
+  # Returns the pattern a culture writes dates in: year, month and day in its
+  # order, joined by its date separator. A culture without time settings
+  # gets +"yyyy-MM-dd"+.
   #
   # @param culture [Culture] the culture
   # @return [String] the pattern, such as +"dd.MM.yyyy"+
@@ -90,9 +87,10 @@ module DateFormat do
     end
   end
 
-  # The pattern a culture writes a time of day in: hours, minutes and
-  # seconds joined by its time separator, on a 12-hour clock with a day
-  # period where the culture reads time that way.
+  # Returns the pattern a culture writes a time of day in: hours, minutes and
+  # seconds joined by its time separator, with a 12-hour clock and AM/PM
+  # where the culture uses them. A culture without time settings gets
+  # +"HH:mm:ss"+.
   #
   # @param culture [Culture] the culture
   # @return [String] the pattern, such as +"HH:mm:ss"+ or +"h:mm:ss a"+
@@ -248,7 +246,7 @@ make Date do
   end
 
   # Writes the date by a CLDR pattern, with +culture+'s month and weekday
-  # names (English names for a culture that carries none).
+  # names, or English ones if the culture has none.
   #
   # @param String [Type] the target type
   # @param format [DateFormat] the pattern
@@ -263,8 +261,8 @@ make Date do
     return DateFormat.renderParts(format, Just(this), None, None, culture)
   end
 
-  # Writes the date the way +culture+ writes dates: its field order and its
-  # separator, with two-digit months and days.
+  # Writes the date in +culture+'s field order and with its separator, using
+  # two-digit months and days.
   #
   # @param String [Type] the target type
   # @param culture [Culture] the culture to write it for
@@ -306,8 +304,8 @@ make Time do
     return DateFormat.renderParts(format, None, Just(this), None, culture)
   end
 
-  # Writes the time of day the way +culture+ does: its separator, on a
-  # 12-hour clock where the culture reads time that way.
+  # Writes the time of day with +culture+'s separator, on a 12-hour clock
+  # where the culture uses one.
   #
   # @param String [Type] the target type
   # @param culture [Culture] the culture to write it for
@@ -323,7 +321,7 @@ make Time do
 end
 
 make DateTime do
-  # Writes the instant by a CLDR pattern, as read at its own offset.
+  # Writes the instant by a CLDR pattern, at its own offset.
   # Patterns are described at +Date.format+.
   #
   # @param String [Type] the target type
@@ -347,8 +345,8 @@ make DateTime do
     return DateFormat.renderParts(format, Just(this.date), Just(this.time), Just(this.offset), culture)
   end
 
-  # Writes the instant the way +culture+ writes a date and a time of day,
-  # separated by a space. The offset is not written.
+  # Writes the instant as +culture+ writes a date and a time of day,
+  # separated by a space. The offset is left out.
   #
   # @param String [Type] the target type
   # @param culture [Culture] the culture to write it for

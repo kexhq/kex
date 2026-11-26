@@ -2,10 +2,13 @@ module Tey.Generator
 
 using JSON
 
+# A change a generator plugin asks for: write a file with the given content,
+# or delete a file. Paths are relative to the workspace.
 type Operation = WriteFile(String, String) | DeleteFile(String)
 
-# Decodes the child-to-host half of the separately versioned protocol. Plugin
-# stdout is data, never Kex source evaluated in Tey's process.
+# Decodes the operations a generator plugin printed to stdout, in version 1
+# of the generator protocol (JSON). The output is only read as data, never
+# run as Kex code.
 let decode(text: String) -> [Operation] or! String do
   let root = match JSON.parse(text) do
     Error(_) => return Error("plugin returned invalid generator protocol JSON")
@@ -23,6 +26,9 @@ let decode(text: String) -> [Operation] or! String do
   return Tey.Generator.decodeOperations(JSON.items(values), [])
 end
 
+# Carries out +operations+ in order under +workspaceRoot+, printing each one.
+# Overwriting or deleting an existing file asks for confirmation unless
+# +force?+ is true. Stops at the first operation that fails.
 foul apply(operations: [Operation], workspaceRoot: String,
            force?: Bool) -> Void or! String do
   return Ok(()) if operations.empty?
@@ -50,6 +56,9 @@ foul apply(operations: [Operation], workspaceRoot: String,
   return Tey.Generator.apply(operations.drop(1), workspaceRoot, force?)
 end
 
+# Returns the full path for a generator's relative +path+, or an error when
+# the path is absolute, contains +..+, or leads out of the workspace
+# through a symlink.
 foul safePath(workspaceRoot: String, path: String) -> String or! String do
   return Error("generator path `${path}` must be relative to the workspace") if path == "" || FS.Path.absolute?(path)
   return Error("generator path `${path}` may not contain `..`") if FS.Path.segments(path).contains?("..")
