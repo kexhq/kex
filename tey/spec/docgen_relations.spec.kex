@@ -105,7 +105,7 @@ describe("Tey.Docgen signatures") do
     Assert.equal(signaturesOf(page, "repeat"), ["repeat(n: Integer) -> This"])
   end
 
-  it("types an unannotated method from its @param and @return tags") do
+  it("types an unannotated function from its @param and @return tags") do
     let page = parsePage("walkable.kex", enumerableSource())
     Assert.equal(signaturesOf(page, "each"), ["each(f: (T -> Void)) -> Void"])
   end
@@ -167,7 +167,7 @@ describe("Tey.Docgen.Relations") do
     Assert.equal(facts.implementors.map { |x| x.target }, ["Bag<X>"])
   end
 
-  it("splits a trait into required and provided methods") do
+  it("splits a trait into required and provided functions") do
     let model = modelOf([parsePage("walkable.kex", enumerableSource())])
     let entry = Tey.Docgen.Relations.traitEntries(model.pages.first.try.entities).first.try
     let (required, provided) = traitMethods(model, entry)
@@ -196,7 +196,7 @@ describe("Tey.Docgen.Html type pages") do
     assert(bagHtml().contains?("Implements <a class=\"xref\" href=\"walkable.html#trait-walkable\"><code>Walkable</code></a>"))
   end
 
-  it("lists the trait methods the type gets without writing them") do
+  it("lists the trait functions the type gets without writing them") do
     let page = bagHtml()
     assert(page.contains?("From <a class=\"xref\" href=\"walkable.html#trait-walkable\"><code>Walkable</code></a>"))
     assert(page.contains?("walkable.html#walkable-each"))
@@ -204,11 +204,11 @@ describe("Tey.Docgen.Html type pages") do
     assert(!page.contains?("walkable.html#walkable-keep\"><code>keep"))
   end
 
-  it("tags a member that fulfils a trait method") do
+  it("tags a member that fulfils a trait function") do
     assert(bagHtml().contains?("class=\"tag-trait\" href=\"walkable.html#walkable-keep\""))
   end
 
-  it("points at the other modules that add methods") do
+  it("points at the other modules that add functions") do
     let page = bagHtml()
     assert(page.contains?("Defined in other modules"))
     assert(page.contains?("extra.html#bag-shake"))

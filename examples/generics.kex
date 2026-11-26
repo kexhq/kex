@@ -7,11 +7,11 @@ type Result<A, E> = Ok(A) | Error(E)
 
 type Either<A, B> = Left(A) | Right(B)
 
-# Option/Result methods (map, into, present?, none?, ok?, error?, or) come from
+# Option/Result functions (map, into, present?, none?, ok?, error?, or) come from
 # the sealed stdlib prelude — see src/stdlib/optional.kex.
 
 # User-defined extensions on generic types still work — just not redefinitions
-# of sealed methods.
+# of sealed functions.
 make Option<A> do
   let unwrapOr(@Just(x), _: A) = x
   let unwrapOr(@Nothing, default: A) = default

@@ -10,7 +10,7 @@
 # through a capability, so on BEAM each takes the capability context as an
 # extra argument. A same-named pure function elsewhere used to make the call
 # go out without it (`undefined function seeded/1`), and the program's own
-# `table` used to replace the one Ledger imported (`Undefined method label
+# `table` used to replace the one Ledger imported (`Undefined function label
 # for Void`).
 
 using Owners.Logs, only: [Sink]

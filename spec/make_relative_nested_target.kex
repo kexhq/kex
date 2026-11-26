@@ -1,7 +1,7 @@
 # A `make` target written from its module names a nested module's record:
 # `make Tcp.Conn` inside `module Wire` is `Wire.Tcp.Conn`, as
 # `make Wire.Tcp.Conn` is. The walker read the spelling alone, found no such
-# record, and answered "Undefined method: getLine for Wire.Tcp.Conn"; imported
+# record, and answered "Undefined function: getLine for Wire.Tcp.Conn"; imported
 # from another file, the checker sent the call to the prelude's other
 # `getLine`, FileHandle's (kexhq/kex#620).
 

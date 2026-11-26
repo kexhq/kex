@@ -1121,7 +1121,7 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         [](const auto& d) -> std::string {
             using T = std::decay_t<decltype(d)>;
             if constexpr (std::is_same_v<T, PlaceholderValue>) {
-                throw PlaceholderMisuse(d.name, "dispatching a method on it");
+                throw PlaceholderMisuse(d.name, "dispatching a function on it");
             } else if constexpr (std::is_same_v<T, RecordValue>) {
                 return d.typeName;
             } else if constexpr (std::is_same_v<T, VariantValue>) {

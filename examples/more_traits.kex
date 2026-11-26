@@ -1,8 +1,8 @@
 # Traits — declare type contracts with optional default implementations.
 # `make Type, implement: Trait do ... end` satisfies the contract.
-# Default methods have access to `this` and can be overridden per type.
+# Default functions have access to `this` and can be overridden per type.
 
-# --- Shape trait with required methods and a default ---
+# --- Shape trait with required functions and a default ---
 
 trait Shape do
   area      :> Float

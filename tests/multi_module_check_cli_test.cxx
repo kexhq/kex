@@ -266,7 +266,7 @@ end
             buffer << file.rdbuf();
             const auto output = buffer.str();
             assertTrue(
-                output.find("expected method or module name after '.'") != std::string::npos,
+                output.find("expected function or module name after '.'") != std::string::npos,
                 "the syntax error was not reported: " + output);
             assertTrue(
                 output.find("name it `module Tool`") == std::string::npos,

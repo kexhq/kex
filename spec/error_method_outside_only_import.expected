@@ -1,4 +1,4 @@
-spec/error_method_outside_only_import.kex:10:70: [KEXET-0101]: Error, undefined method `localAddress` for `Net.HTTP.Server.Running`
+spec/error_method_outside_only_import.kex:10:70: [KEXET-0101]: Error, undefined function `localAddress` for `Net.HTTP.Server.Running`
    |
 10 | foul address(running: Net.HTTP.Server.Running) = running.localAddress
    |                                                  ^^^^^^^^^^^^^^^^^^^^

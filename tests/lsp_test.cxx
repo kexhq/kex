@@ -1030,7 +1030,7 @@ int main() {
                 result.find("branch type mismatch") == std::string::npos,
                 "literal text did not count as a branch's output: " + result);
             assertTrue(
-                result.find("undefined method `missing`") != std::string::npos,
+                result.find("undefined function `missing`") != std::string::npos,
                 "an error inside a <%= %> hole was dropped: " + result);
             assertTrue(
                 result.find("\"line\":5") != std::string::npos,

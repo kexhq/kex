@@ -232,7 +232,7 @@ semantics, and remove duplicate duration arithmetic in favor of shared measure
 operations. Audit formatting changes and equality across different display
 units. BEAM task and networking intrinsics currently pattern-match
 `{'Duration', Seconds}`; migrate those consumers and defaults together with
-interpreter bridges. Test specialized measure method resolution, date
+interpreter bridges. Test specialized measure function resolution, date
 arithmetic, offsets, and timers across backends. Verify that no `Duration` type,
 constructor namespace, or runtime record dependency remains. Both current
 types store floating-point seconds, so the merge itself need not change numeric

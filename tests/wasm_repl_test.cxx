@@ -69,7 +69,7 @@ int main() {
             const auto put = eval(session, "site.put(\"hi\")");
             const auto got = eval(session, "site.get");
             kex_repl_destroy(session);
-            assertTrue(put.find("undefined method") == std::string::npos, put);
+            assertTrue(put.find("undefined function") == std::string::npos, put);
             assertTrue(
                 got.find("\"hi\"") != std::string::npos &&
                     got.find("Optional<String>") != std::string::npos,

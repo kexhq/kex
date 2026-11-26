@@ -2,7 +2,7 @@
 # without a round trip (kexhq/kex#402). On the BEAM it is `persistent_term`,
 # which a program used to reach through `BEAM.persistent_term` — and got its
 # values back untyped, so a `Server<X>` stored there lost its slots
-# ("Undefined method: broadcast for Server").
+# ("Undefined function: broadcast for Server").
 
 record Site do
   title : String

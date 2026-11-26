@@ -1291,7 +1291,7 @@ int main() {
             assertTrue(hasErrorWithInterfaces(
                 "using Opt, except: [doubled]\n"
                 "main do \"wrong\".doubled end\n",
-                interfaces, "undefined method `doubled`"));
+                interfaces, "undefined function `doubled`"));
             assertFalse(hasErrorWithInterfaces(
                 "using Opt, except: [doubled]\n"
                 "main do \"wrong\".doubled end\n",

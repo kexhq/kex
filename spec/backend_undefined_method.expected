@@ -1,2 +1,2 @@
 1
-Error: spec/backend_undefined_method.kex:10:38: runtime error: undefined method: nosuchMethod for [Integer]
+Error: spec/backend_undefined_method.kex:10:38: runtime error: undefined function: nosuchMethod for [Integer]
