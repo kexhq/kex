@@ -1,4 +1,5 @@
 #include "test.hxx"
+#include "../src/common/color.hxx"
 #include <string>
 
 struct KexReplSession;
@@ -101,6 +102,21 @@ int main() {
             const std::string completed = kex_repl_complete(session, "b.si", 0, "b.si");
             assertTrue(completed.find("b.size\n") != std::string::npos, completed);
             kex_repl_destroy(session);
+        });
+
+        // kexhq/kex#728, #729: the browser answers as the native REPLs do.
+        it("answers /type and /help from the checker", []() {
+            kex::color::enabled = false;
+            auto* session = kex_repl_create();
+            eval(session, "let xs = [1, 2]");
+            const auto first = eval(session, "/type List.first");
+            const auto bound = eval(session, "/type xs");
+            const auto help = eval(session, "/help List.first");
+            kex_repl_destroy(session);
+            assertTrue(first.find("List.first : [A] -> A?") != std::string::npos, first);
+            assertTrue(bound.find("xs : [Integer]") != std::string::npos, bound);
+            assertTrue(help.find("first :> X?") != std::string::npos, help);
+            kex::color::enabled = true;
         });
     });
 

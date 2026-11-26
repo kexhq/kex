@@ -17,6 +17,8 @@
 #include "hir/repl_input.hxx"
 #include "common/repl_commands.hxx"
 #include "common/version.hxx"
+#include "help/api_help.hxx"
+#include "help/describe.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "compiled/expand.hxx"
@@ -34,6 +36,7 @@
 #include <memory>
 #include <new> // IWYU pragma: keep (the standard declares placement new here)
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -177,6 +180,52 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
     const auto command = kex::parseReplCommand(source);
     if (command.kind == Command::Exit) {
         session->lastResult = "";
+        return;
+    }
+    // `/type <expr>` and `/help <name>`: the input checked in the session and
+    // not run, answered as the native REPLs answer (help/describe.hxx).
+    if (command.kind == Command::Type ||
+        (command.kind == Command::Help && !command.argument.empty())) {
+        std::ostringstream out;
+        try {
+            Lexer lexer(
+                session->replAccumSource + "main do\n" + session->replBindings + command.argument +
+                    "\nend\n",
+                "<repl>");
+            Parser parser(lexer.tokenizeAll(), "<repl>");
+            auto program = std::make_unique<ast::Program>(parser.parseProgram());
+            if (!parser.diagnostics().empty()) {
+                throw std::runtime_error(parser.diagnostics().front().message);
+            }
+            semantic::Analyzer analyzer(&preludeSemanticInterfaces(""));
+            analyzer.setIndexesNames(true);
+            analyzer.analyze(*program);
+            const ast::Expr* expr = nullptr;
+            for (const auto& item : program->items) {
+                if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
+                    main && *main && !(*main)->body.empty()) {
+                    expr = (*main)->body.back().get();
+                }
+            }
+            if (!expr) {
+                session->lastResult = "  /type takes an expression: /type List.first\n";
+                return;
+            }
+            if (command.kind == Command::Type) {
+                help::printReplType(command.argument, analyzer, *expr, out, out);
+            } else {
+                help::ApiIndex own;
+                try {
+                    own.addSource("<repl>", session->replAccumSource, "");
+                } catch (...) {}
+                help::printReplNameHelp(
+                    command.argument, analyzer, *expr, {&own, &help::standardLibraryIndex()}, out,
+                    out);
+            }
+        } catch (const std::exception& e) {
+            out << "  " << kex::diagnostics::formatBriefException(e, "  ") << "\n";
+        }
+        session->lastResult = out.str();
         return;
     }
     if (command.kind == Command::Help) {

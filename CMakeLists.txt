@@ -258,6 +258,7 @@ add_library(kex_lib
     src/semantic/resolve_core.cxx
     src/ast/clone.cxx
     src/help/api_help.cxx
+    src/help/describe.cxx
     src/skill/skill.cxx
     "${KEX_SKILL_SOURCE}"
     src/ast/function_groups.cxx

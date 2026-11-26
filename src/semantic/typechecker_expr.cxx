@@ -5914,6 +5914,82 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
     return result;
 }
 
+auto TypeChecker::functionsNamed(const std::string& written) const -> std::vector<NamedFunction> {
+    std::vector<NamedFunction> result;
+    const bool qualified = kex::mangle::hasScope(written);
+    const auto scope = qualified ? kex::mangle::scopeOf(written) : std::string();
+    const auto member = kex::mangle::memberOf(written);
+    // The type a receiver function is made for, as a caller names it: `List`
+    // for `[A]`, `Range` for `Range<A>`.
+    const auto receiverOf = [&](const Signature& signature) -> std::string {
+        if (signature.params.empty() || !signature.params.front()) {
+            return {};
+        }
+        const auto receiver = expandTypeAliases(signature.params.front());
+        if (std::holds_alternative<ListType>(receiver->kind)) {
+            return "List";
+        }
+        if (std::holds_alternative<MapType>(receiver->kind)) {
+            return "Map";
+        }
+        if (std::holds_alternative<OptionalType>(receiver->kind)) {
+            return "Optional";
+        }
+        if (const auto* named = std::get_if<NamedType>(&receiver->kind)) {
+            return named->name;
+        }
+        if (const auto* constrained = std::get_if<ConstrainedType>(&receiver->kind)) {
+            return constrained->traitName;
+        }
+        return typeToString(receiver);
+    };
+    const auto madeFor = [&](const Signature& signature) {
+        const auto receiver = receiverOf(signature);
+        return receiver == scope || kex::mangle::memberOf(receiver) == scope;
+    };
+
+    if (const auto user = m_userSignatures.find(written); user != m_userSignatures.end()) {
+        for (const auto& signature : user->second) {
+            result.push_back({written, scope, signature});
+        }
+        return result;
+    }
+    // A receiver function is documented with the type it is made for; the
+    // module that compiled it (the prelude's `Prelude`) is no caller's name.
+    const auto imported = [&](const ImportedFunction& function) -> NamedFunction {
+        if (function.isReceiverMethod) {
+            const auto receiver = receiverOf(function.signature);
+            return {qualified ? written : member, receiver, function.signature};
+        }
+        const auto& owner = function.sourceModule.empty() ? scope : function.sourceModule;
+        return {
+            qualified || owner.empty() ? written : kex::mangle::qualify(owner, member), owner,
+            function.signature};
+    };
+    for (const auto* function : importedCandidates(written)) {
+        result.push_back(imported(*function));
+    }
+    if (!result.empty() || !qualified) {
+        return result;
+    }
+    // `List.first`, `Point.norm`: a function a `make` gives the type, which
+    // no module publishes under that name. Its receiver is its first
+    // parameter.
+    for (const auto* function : importedCandidates(member)) {
+        if (function->isReceiverMethod && madeFor(function->signature)) {
+            result.push_back(imported(*function));
+        }
+    }
+    if (const auto methods = m_methodSignatures.find(member); methods != m_methodSignatures.end()) {
+        for (const auto& signature : methods->second) {
+            if (madeFor(signature)) {
+                result.push_back({written, scope, signature});
+            }
+        }
+    }
+    return result;
+}
+
 // The module whose function a capture names, by the rules a call of the name
 // follows: `~Mod.fn` resolves `Mod` as `Mod.fn(x)` would (an alias, an
 // enclosing module, a module a `using` opened); a bare `~fn` is the

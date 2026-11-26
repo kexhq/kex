@@ -256,6 +256,18 @@ public:
     // Canonical source-facing rendering. Internal inference variable IDs are
     // deliberately normalized to A, B, C, ... for diagnostics and tooling.
     auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
+    // A function NAMED, not called (`f`, `Geo.area`, `List.first`): every
+    // clause the name has, found in the tables `Type.of(f)` reads — the
+    // program's own signatures, then the imported functions — and, for
+    // `Type.name`, the `make Type` functions of this program. `owner` is
+    // where the function is declared: its module, or the type a `make` gives
+    // it ("" for a top-level function). Empty when the name is no function's.
+    struct NamedFunction {
+        std::string name;
+        std::string owner;
+        Signature signature;
+    };
+    auto functionsNamed(const std::string& written) const -> std::vector<NamedFunction>;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
     // The module of the imported function a call by name runs (`Math` for

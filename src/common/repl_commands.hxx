@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kex {
@@ -15,6 +16,7 @@ enum class ReplCommandKind {
     Exit,
     Clear,
     Help,
+    Type,
     Set,
     Unset,
     Complete,
@@ -39,7 +41,8 @@ inline auto replCommands() -> const std::vector<ReplCommand>& {
     static const std::vector<ReplCommand> cmds = {
         {K::Exit, "exit", "", "", "Exit the REPL"},
         {K::Clear, "/clear", "", "", "Clear the terminal screen"},
-        {K::Help, "/help", "/h", "", "Show this help"},
+        {K::Help, "/help", "/h", "[name]", "Show this help, or the type and docs of name"},
+        {K::Type, "/type", "/t", "<expr>", "Show the type of expr, without running it"},
         {K::Set, "/set", "", "<opt>", "Enable a feature"},
         {K::Unset, "/unset", "", "<opt>", "Disable a feature"},
         {K::Complete, "/complete", "", "<p>", "Show completions for prefix p"},
@@ -81,6 +84,19 @@ inline auto replCommandCompletions(const std::string& prefix) -> std::vector<std
         }
     }
     return matches;
+}
+
+// Where the code a `/type` or `/help` line carries starts, so <TAB> completes
+// it as it would the same code typed alone; npos for any other line.
+inline auto replCodeArgumentStart(const std::string& line) -> std::size_t {
+    for (const auto* command : {"/type ", "/t ", "/help ", "/h "}) {
+        const std::string_view prefix(command);
+        if (line.size() >= prefix.size() && line.compare(0, prefix.size(), prefix) == 0) {
+            const auto start = line.find_first_not_of(' ', prefix.size());
+            return start == std::string::npos ? line.size() : start;
+        }
+    }
+    return std::string::npos;
 }
 
 inline auto isReplExit(const std::string& input) -> bool {

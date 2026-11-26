@@ -71,6 +71,14 @@ public:
     // been printed to `err`.
     auto printTopic(std::string_view query, std::ostream& out, std::ostream& err) const -> bool;
 
+    // A declaration the checker resolved, as `printTopic` shows it: the owner
+    // `owner` (a module, type, record or trait by its full name; "" is the
+    // top level) when `member` is empty, else that owner's members called
+    // `member`, its traits' included. Exact names only, as resolved: no
+    // spelling is guessed at. False when this index has none.
+    auto printEntity(const std::string& owner, const std::string& member, std::ostream& out) const
+        -> bool;
+
 private:
     auto findOwners(std::string_view name) const -> std::vector<const ApiOwner*>;
     auto traitOwner(const std::string& name) const -> const ApiOwner*;

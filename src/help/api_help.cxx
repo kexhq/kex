@@ -988,6 +988,43 @@ auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> voi
     }
 }
 
+auto ApiIndex::printEntity(
+    const std::string& owner, const std::string& member, std::ostream& out) const -> bool {
+    const auto found = m_owners.find(owner);
+    if (found == m_owners.end()) {
+        return false;
+    }
+    if (member.empty()) {
+        printOwner(found->second, out);
+        return true;
+    }
+    std::vector<std::pair<const ApiOwner*, const ApiMember*>> matches;
+    for (const auto& candidate : found->second.members) {
+        if (candidate.name == member) {
+            matches.emplace_back(&found->second, &candidate);
+        }
+    }
+    for (const auto& traitName : found->second.traits) {
+        if (!matches.empty()) {
+            break;
+        }
+        if (const auto* trait = traitOwner(traitName)) {
+            for (const auto& candidate : trait->members) {
+                if (candidate.name == member) {
+                    matches.emplace_back(trait, &candidate);
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) {
+            out << "\n";
+        }
+        printMember(*matches[i].first, *matches[i].second, out);
+    }
+    return !matches.empty();
+}
+
 auto ApiIndex::printTopic(std::string_view query, std::ostream& out, std::ostream& err) const
     -> bool {
     if (const auto owners = findOwners(query); !owners.empty()) {
