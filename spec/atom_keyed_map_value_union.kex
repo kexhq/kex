@@ -1,0 +1,15 @@
+# A map literal joins its values as a list literal joins its elements, atom
+# keys included: `{ host: "localhost", port: 8080 }` is a
+# `{Atom: String | Integer}`. It was typed by its first value, a
+# `{Atom: String}`, so reading `:port` with an Integer default and putting an
+# Integer there were both rejected.
+
+main do
+  let config = { host: "localhost", port: 8080 }
+  IO.printLine(config.get(:port).or(0))
+  let moved = config.put(:port, 9090)
+  IO.printLine(moved.get(:port).or(0))
+  IO.printLine(moved.get(:host).or(""))
+  let more = { ...moved, debug: true }
+  IO.printLine(more.count)
+end

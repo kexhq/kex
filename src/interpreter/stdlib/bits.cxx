@@ -42,7 +42,6 @@ auto position(const std::vector<ValuePtr>& args, size_t index, const char* what)
 // Bits — bitwise operations on Integer. The typed surface lives in
 // src/stdlib/bits.kex; kex_intrinsic_bits.erl is the BEAM twin.
 auto Evaluator::registerBitsBuiltins() -> void {
-    defineModule("Bits");
 
     defineIntrinsic("Bits.and", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;

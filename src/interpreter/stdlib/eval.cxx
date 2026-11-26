@@ -90,7 +90,6 @@ static auto evaluatorEntry(const std::string& function, bool exprOnly) -> Native
 }
 
 auto Evaluator::registerEvalBuiltins() -> void {
-    defineModule("Evaluator");
     defineIntrinsic("Evaluator.run", evaluatorEntry("Evaluator.run", false));
     defineIntrinsic("Evaluator.runExpression", evaluatorEntry("Evaluator.runExpression", true));
 }

@@ -1,0 +1,12 @@
+# `~Binary.fromHex` names the module function `Binary.fromHex`, a
+# `String -> Binary?`. Because `Binary` also names a type, the capture was
+# checked as a function of a Binary receiver, and passing it where a String
+# goes in was rejected ("expects argument 1 to be Binary, but got String").
+
+main do
+  let hex: String? = Just("00ff")
+  IO.printLine(hex.into(~Binary.fromHex).map { |b| b.bytes })
+  let b64: String? = Just("AGhp/w==")
+  IO.printLine(b64.into(~Binary.fromBase64).map { |b| b.bytes })
+  IO.printLine(["ff", "zz"].map(~Binary.fromHex))
+end

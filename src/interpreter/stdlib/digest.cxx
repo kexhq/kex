@@ -5,7 +5,6 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerDigestBuiltins() -> void {
-    defineModule("Digest");
     defineIntrinsic("Digest.sha256", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
             return Value::string(sha256Hex(std::string_view{}));

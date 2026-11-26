@@ -294,8 +294,6 @@ auto split(const std::string& subject, const ValuePtr& regex, int64_t limit)
 } // namespace regexsupport
 
 auto Evaluator::registerRegexBuiltins() -> void {
-    defineModule("Regex");
-
     // Regex::compile(source) -> Result<Regex, RegexError>
     //
     // The `Regex` record carries only its source; the compiled pcre2_code
