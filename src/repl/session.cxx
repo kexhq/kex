@@ -69,11 +69,14 @@ static auto replLoadFailure(const std::exception& e) -> std::string {
 // everything defined in it so far.
 class BeamReplSession {
 public:
-    explicit BeamReplSession(bool skipPrelude) : m_skipPrelude(skipPrelude) {}
+    BeamReplSession(bool skipPrelude, bool inspect)
+        : m_skipPrelude(skipPrelude), m_inspect(inspect) {}
     auto run() -> int;
 
 private:
     bool m_skipPrelude;
+    // Whether an input's value is echoed as `=> value` (off: `--no-inspect`).
+    bool m_inspect;
     // Writable directory for each evaluation's beams, and the prebuilt runtime.
     std::string m_beamDir;
     std::string m_rtPaDir;
@@ -162,8 +165,8 @@ private:
     auto loadModules(const std::vector<kex::ir::EmitResult>& results) -> bool;
 };
 
-auto runBeamRepl(bool skipPrelude) -> int {
-    BeamReplSession session(skipPrelude);
+auto runBeamRepl(bool skipPrelude, bool inspect) -> int {
+    BeamReplSession session(skipPrelude, inspect);
     return session.run();
 }
 
@@ -351,6 +354,9 @@ auto BeamReplSession::define(const std::string& source) -> void {
 
     // `using M` is an import, not a definition — it is kept in m_topDefs
     // so it persists across inputs, but saying "defined M" is wrong.
+    if (!m_inspect) {
+        return;
+    }
     const bool isImport = source.rfind("using ", 0) == 0;
     std::cout << kex::color::apply(kex::color::gray) << "=> "
               << kex::color::apply(kex::color::reset) << (isImport ? "using " : "defined ") << fname
@@ -579,7 +585,11 @@ auto BeamReplSession::evaluate(
                                 : typesOfPatternNames(
                                       topDefsStr() + "main do\n" + semanticBindSource + withOpen,
                                       source, withClose, patternLetNames);
+    // `--no-inspect`: the value is still computed, just not echoed.
     const auto inspectCall = [&](const std::string& expression) {
+        if (!m_inspect) {
+            return expression;
+        }
         if (!beamSemanticType) {
             return "Kex.Intrinsic.IO.inspectRepl(" + expression + ")";
         }
@@ -1122,11 +1132,14 @@ auto BeamReplSession::run() -> int {
 // session: the evaluator every input runs in, and what has been defined.
 class WalkerReplSession {
 public:
-    explicit WalkerReplSession(bool skipPrelude) : m_skipPrelude(skipPrelude) {}
+    WalkerReplSession(bool skipPrelude, bool inspect)
+        : m_skipPrelude(skipPrelude), m_inspect(inspect) {}
     auto run() -> int;
 
 private:
     bool m_skipPrelude;
+    // Whether an input's value is echoed as `=> value` (off: `--no-inspect`).
+    bool m_inspect;
     // Completion's index (prelude loaded once, updated on each input) and the
     // one inputs are checked in.
     ReplCompletionBase m_completionBase;
@@ -1213,7 +1226,8 @@ private:
     auto showResult(
         const kex::interpreter::ValuePtr& result,
         const std::optional<std::string>& semanticType = std::nullopt) -> void {
-        if (result && !std::holds_alternative<kex::interpreter::UnitValue>(result->data)) {
+        if (m_inspect && result &&
+            !std::holds_alternative<kex::interpreter::UnitValue>(result->data)) {
             std::cout << kex::color::apply(kex::color::gray) << "=> "
                       << kex::color::apply(kex::color::reset) << result->inspect();
             if (m_showTypes) {
@@ -1236,8 +1250,8 @@ private:
         -> void;
 };
 
-auto runWalkerRepl(bool skipPrelude) -> int {
-    WalkerReplSession session(skipPrelude);
+auto runWalkerRepl(bool skipPrelude, bool inspect) -> int {
+    WalkerReplSession session(skipPrelude, inspect);
     return session.run();
 }
 
@@ -1344,9 +1358,11 @@ auto WalkerReplSession::evaluate(
         // check, not just the latest one.
         m_replAccumSource += source + "\n";
         const bool isImport = source.rfind("using ", 0) == 0;
-        std::cout << kex::color::apply(kex::color::gray) << "=> "
-                  << kex::color::apply(kex::color::reset) << (isImport ? "using " : "defined ")
-                  << replDefinitionName(source) << "\n";
+        if (m_inspect) {
+            std::cout << kex::color::apply(kex::color::gray) << "=> "
+                      << kex::color::apply(kex::color::reset) << (isImport ? "using " : "defined ")
+                      << replDefinitionName(source) << "\n";
+        }
     } else {
         // Wrap in main for expression evaluation
         const auto withExcept = pendingWith ? pendingWith->capability : std::string();

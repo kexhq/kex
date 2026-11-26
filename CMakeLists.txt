@@ -700,7 +700,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # history — testing only through Node wasn't sufficient here.
         -sEXPORT_ES6=1
         -sEXPORT_NAME=createKexReplModule
-        -sEXPORTED_FUNCTIONS=_kex_version,_kex_repl_banner,_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free
+        -sEXPORTED_FUNCTIONS=_kex_version,_kex_repl_banner,_kex_repl_create,_kex_repl_destroy,_kex_repl_set_inspect,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free
         -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
         # Embeds the unified stdlib into MEMFS. `prelude.kex` selects the
         # automatic subset; opt-in modules resolve from the same root.

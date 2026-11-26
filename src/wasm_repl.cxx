@@ -62,6 +62,9 @@ struct KexReplSession {
     // completed so `x.` is typed by analysis (see kex_repl_complete).
     std::string replBindings;
     std::string lastCompletions;
+    // Whether a value is echoed as `=> value : Type`; off is the browser's
+    // `kex --no-inspect` (kex_repl_set_inspect).
+    bool inspect = true;
 };
 
 extern "C" {
@@ -110,6 +113,13 @@ KexReplSession* kex_repl_create() {
 EMSCRIPTEN_KEEPALIVE
 void kex_repl_destroy(KexReplSession* session) {
     delete session;
+}
+
+// `--no-inspect` for the browser REPL: with 0, an input's value is not
+// echoed, so only what the program prints itself is shown.
+EMSCRIPTEN_KEEPALIVE
+void kex_repl_set_inspect(KexReplSession* session, int inspect) {
+    session->inspect = inspect != 0;
 }
 
 namespace {
@@ -262,7 +272,8 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         // and ":", plain value, cyan type — showTypes defaults to on there
         // too), so the two look identical once rendered through a real
         // terminal instead of a plain-text diff.
-        if (!isDef && value && !std::holds_alternative<UnitValue>(value->data)) {
+        if (session->inspect && !isDef && value &&
+            !std::holds_alternative<UnitValue>(value->data)) {
             result += std::string(color::apply(color::gray)) + "=> " + color::apply(color::reset) +
                       value->inspect() + " " + color::apply(color::gray) + ":" +
                       color::apply(color::reset) + " " + color::apply(color::cyan) +

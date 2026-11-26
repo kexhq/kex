@@ -14,6 +14,11 @@ namespace kex::help {
 
 enum class OwnerKind { Module, Type, Record, Trait };
 
+// A doc comment as help shows it: the prose with its code spans highlighted,
+// then `@param`s as a list, `@return` as one line and each `@example` as a
+// highlighted code block. Colored when kex::color is enabled.
+auto renderDoc(const std::string& doc) -> std::string;
+
 // One thing a caller can write: a function of a module, or a method a `make`
 // or `trait` block gives a type.
 struct ApiMember {

@@ -1953,6 +1953,18 @@ int main() {
             }
         });
 
+        // kexhq/kex#89: only what the program prints itself.
+        it("echoes no values with --no-inspect, in both REPLs", [kex]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "printf '1 + 1\\nIO.printLine(\"twice: ${x * 2}\")\\nIO.inspect(x)\\n' | " +
+                    kex + repl + " --no-inspect -e 'let x = 21' -e 'let half(n) = n / 2' 2>&1");
+                assertTrue(out.find("twice: 42") != std::string::npos, "lost printLine: " + out);
+                assertTrue(out.find("21 : Integer") != std::string::npos, "lost inspect: " + out);
+                assertTrue(out.find("=> ") == std::string::npos, "echoed a value: " + out);
+            }
+        });
+
         it("refuses a file", [kex]() {
             auto out = runCommand(kex + " -e '1' some.kex 2>&1; echo \"status=$?\"");
             assertTrue(

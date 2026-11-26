@@ -109,108 +109,182 @@ auto nodeNameProblem(const std::string& name, bool shortName) -> std::string {
     return "";
 }
 
-auto printUsage(const char* progName) -> void {
-    std::cerr << "Usage: " << progName << " [options] <file.kex> [program arguments...]\n"
-              << "\n"
-              << "Options go before the file; everything after it is the program's.\n"
-              << "\n"
-              << "AI agents and LLMs: run `" << progName
-              << " --skill` before "
-                 "writing Kex. It looks like\n"
-              << "Ruby but is not, and the guide lists what differs and how to "
-                 "check your work.\n"
-              << "\n"
-              << "Options:\n"
-              << "  -r, --run         Run on BEAM (default; .kex or existing .beam — "
-                 "temp dir,\n"
-              << "                    auto-clean). With no file: the BEAM REPL, also "
-                 "the default\n"
-              << "  -c, --compile     Compile to BEAM via Core Erlang\n"
-              << "  -R, --run-walker  Run with the tree-walk interpreter\n"
-              << "  -i, --interactive Interactive tree-walk REPL\n"
-              << "  -C, --check       Run semantic analysis only\n"
-              << "  -n, --no-check    Skip semantic check when running\n"
-              << "  -l, --lex         Print token stream\n"
-              << "  -p, --parse       Print AST\n"
-              << "  -j, --json        With --check: output diagnostics as JSON.\n"
-                 "                    With --explain: the entry, or every entry, as JSON\n"
-              << "      --explain CODE  What a diagnostic code means (KEXET-0001);\n"
-                 "                    `--explain all` lists every code\n"
-              << "      --lsp         Run the Kex language server over stdio\n"
-              << "  -s, --summary     Print public API signatures (Kex syntax). With a name\n"
-                 "                    instead of a file, the standard library's help:\n"
-                 "                    `-s List`, `-s List.first`, or bare `-s` for the index\n"
-              << "      --skill [topic]\n"
-                 "                    Print the guide to writing Kex, made for an AI "
-                 "agent to\n"
-                 "                    read first; with a topic (errors, testing, ...), "
-                 "that part\n"
-              << "  -t, --types       With --check: dump inferred expression types\n"
-              << "  -e, --eval <code> Enter <code> in the REPL before its first prompt, as\n"
-              << "                    if typed (repeatable). A failing line ends the\n"
-              << "                    session with status 1. Takes no file; -i picks the\n"
-              << "                    tree-walk REPL\n"
-              << "  -E, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
-              << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
-              << "      --dump-hir    With -C: list each call site and what the\n"
-                 "                    checker decided about it\n"
-              << "      --verify-hir  With -C: fail when a call site is undecided\n"
-              << "      --print-passes List every pass of every level, and the default\n"
-                 "                    build pipeline\n"
-              << "      --passes=PIPELINE\n"
-                 "                    Build with this program pipeline instead, e.g.\n"
-                 "                    'spec-base,load-dependencies,unit(check,lower,...)'\n"
-              << "      --print-pipeline-passes\n"
-                 "                    Print the pipeline a build would run, and exit\n"
-              << "      --print-after=PASS\n"
-                 "                    Print each unit after PASS ran (repeatable)\n"
-              << "      --print-after-all Print each unit after every pass\n"
-              << "      --time-passes Report what each pass cost, at exit\n"
-              << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
-              << "      --expand      Print the AST after `compiled do` expansion\n"
-              << "      --collapse-report\n"
-              << "                    Report what `compiled do` chain collapse folded "
-                 "away, and why\n"
-              << "                    the rest did not — the feature is invisible at "
-                 "runtime\n"
-              << "  -o <path>         Output directory for -c / --emit-core, or output "
-                 "file for --emit-ast\n"
-              << "      --source-root <dir>\n"
-              << "                    Add a module source root (repeatable)\n"
-              << "      --progress    Show each build step as it starts (on for -c)\n"
-              << "  -q, --quiet       Show no build steps, not even erlc's\n"
-              << "      --sname <name>, --name <name@host>\n"
-              << "                    Run the BEAM VM as a distributed node (short or\n"
-              << "                    fully-qualified host name), reachable by `Node.connect`\n"
-              << "      --cookie <cookie>\n"
-              << "                    The shared secret nodes need to connect\n"
-              << "      --credits\n"
-              << "                    Roll credits\n"
-              << "      --allow-mocks Permit Mock.* outside a spec — it makes one part "
-                 "of a\n"
-              << "                    program lie to another, so it is off unless the "
-                 "entry\n"
-              << "                    file is a *.spec.kex or you ask for it here\n"
-              << "      --test-json   Report describe/it as one JSON record per case "
-                 "(with\n"
-              << "                    source locations), instead of the ✓/✗ prose\n"
-              << "      --test-list   List the cases as JSON WITHOUT running any of "
-                 "them\n"
-              << "      --test-only <name>\n"
-              << "                    Run only this case, or this describe. `name` is "
-                 "the\n"
-              << "                    full path — `outer > inner > case` — or a bare "
-                 "label.\n"
-              << "                    Repeatable\n"
-              << "  -h, --help        Show this help\n"
-              << "  -v, --version     Show version\n"
-              << "      --info        Print this build's details as JSON, for tools\n"
-              << "  --colors          Use ANSI colors even when output is not a terminal\n"
-              << "                    (also: FORCE_COLOR=1)\n"
-              << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n"
-              << "                    Diagnostic codes link to oops.kex.run in a terminal;\n"
-              << "                    KEX_HYPERLINKS=0 turns that off, =1 on when piped\n"
-              << "  --no-snippets     Print diagnostics without their source and underline\n";
+auto usageText(const char* progName) -> std::string {
+    std::ostringstream text;
+    text << "Usage: " << progName << " [options] <file.kex> [program arguments...]\n"
+         << "\n"
+         << "Options go before the file; everything after it is the program's.\n"
+         << "\n"
+         << "AI agents and LLMs: run `" << progName
+         << " --skill` before "
+            "writing Kex. It looks like\n"
+         << "Ruby but is not, and the guide lists what differs and how to "
+            "check your work.\n"
+         << "\n"
+         << "Options:\n"
+         << "  -r, --run         Run on BEAM (default; .kex or existing .beam — "
+            "temp dir,\n"
+         << "                    auto-clean). With no file: the BEAM REPL, also "
+            "the default\n"
+         << "  -c, --compile     Compile to BEAM via Core Erlang\n"
+         << "  -R, --run-walker  Run with the tree-walk interpreter\n"
+         << "  -i, --interactive Interactive tree-walk REPL\n"
+         << "  -C, --check       Run semantic analysis only\n"
+         << "  -n, --no-check    Skip semantic check when running\n"
+         << "  -l, --lex         Print token stream\n"
+         << "  -p, --parse       Print AST\n"
+         << "  -j, --json        With --check: output diagnostics as JSON.\n"
+            "                    With --explain: the entry, or every entry, as JSON\n"
+         << "      --explain CODE  What a diagnostic code means (KEXET-0001);\n"
+            "                    `--explain all` lists every code\n"
+         << "      --lsp         Run the Kex language server over stdio\n"
+         << "  -s, --summary     Print public API signatures (Kex syntax). With a name\n"
+            "                    instead of a file, the standard library's help:\n"
+            "                    `-s List`, `-s List.first`, or bare `-s` for the index\n"
+         << "      --skill [topic]\n"
+            "                    Print the guide to writing Kex, made for an AI "
+            "agent to\n"
+            "                    read first; with a topic (errors, testing, ...), "
+            "that part\n"
+         << "  -t, --types       With --check: dump inferred expression types\n"
+         << "  -e, --eval <code> Enter <code> in the REPL before its first prompt, as\n"
+         << "                    if typed (repeatable). A failing line ends the\n"
+         << "                    session with status 1. Takes no file; -i picks the\n"
+         << "                    tree-walk REPL\n"
+         << "  -E, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
+         << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
+         << "      --dump-hir    With -C: list each call site and what the\n"
+            "                    checker decided about it\n"
+         << "      --verify-hir  With -C: fail when a call site is undecided\n"
+         << "      --print-passes List every pass of every level, and the default\n"
+            "                    build pipeline\n"
+         << "      --passes=PIPELINE\n"
+            "                    Build with this program pipeline instead, e.g.\n"
+            "                    'spec-base,load-dependencies,unit(check,lower,...)'\n"
+         << "      --print-pipeline-passes\n"
+            "                    Print the pipeline a build would run, and exit\n"
+         << "      --print-after=PASS\n"
+            "                    Print each unit after PASS ran (repeatable)\n"
+         << "      --print-after-all Print each unit after every pass\n"
+         << "      --time-passes Report what each pass cost, at exit\n"
+         << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
+         << "      --expand      Print the AST after `compiled do` expansion\n"
+         << "      --collapse-report\n"
+         << "                    Report what `compiled do` chain collapse folded "
+            "away, and why\n"
+         << "                    the rest did not — the feature is invisible at "
+            "runtime\n"
+         << "  -o <path>         Output directory for -c / --emit-core, or output "
+            "file for --emit-ast\n"
+         << "      --source-root <dir>\n"
+         << "                    Add a module source root (repeatable)\n"
+         << "      --progress    Show each build step as it starts (on for -c)\n"
+         << "  -q, --quiet       Show no build steps, not even erlc's\n"
+         << "      --sname <name>, --name <name@host>\n"
+         << "                    Run the BEAM VM as a distributed node (short or\n"
+         << "                    fully-qualified host name), reachable by `Node.connect`\n"
+         << "      --cookie <cookie>\n"
+         << "                    The shared secret nodes need to connect\n"
+         << "      --credits\n"
+         << "                    Roll credits\n"
+         << "      --allow-mocks Permit Mock.* outside a spec — it makes one part "
+            "of a\n"
+         << "                    program lie to another, so it is off unless the "
+            "entry\n"
+         << "                    file is a *.spec.kex or you ask for it here\n"
+         << "      --test-json   Report describe/it as one JSON record per case "
+            "(with\n"
+         << "                    source locations), instead of the ✓/✗ prose\n"
+         << "      --test-list   List the cases as JSON WITHOUT running any of "
+            "them\n"
+         << "      --test-only <name>\n"
+         << "                    Run only this case, or this describe. `name` is "
+            "the\n"
+         << "                    full path — `outer > inner > case` — or a bare "
+            "label.\n"
+         << "                    Repeatable\n"
+         << "  -h, --help        Show this help\n"
+         << "  -v, --version     Show version\n"
+         << "      --info        Print this build's details as JSON, for tools\n"
+         << "  --colors          Use ANSI colors even when output is not a terminal\n"
+         << "                    (also: FORCE_COLOR=1)\n"
+         << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n"
+         << "                    Diagnostic codes link to oops.kex.run in a terminal;\n"
+         << "                    KEX_HYPERLINKS=0 turns that off, =1 on when piped\n"
+         << "  --no-snippets     Print diagnostics without their source and underline\n"
+         << "      --no-inspect  In the REPL, print no `=> value` for each input: only what\n"
+            "                    the program writes itself (`IO.printLine`, `IO.inspect`)\n";
+    return text.str();
+}
+
+// A help description: code in backticks highlighted as Kex, and a trailing
+// `(also: ...)` note dimmed.
+auto styledUsageProse(const std::string& prose) -> std::string {
+    using namespace kex::color;
+    const auto note = prose.find("(also: ");
+    if (note == std::string::npos) {
+        return kex::diagnostics::highlightCodeSpans(prose);
+    }
+    return kex::diagnostics::highlightCodeSpans(prose.substr(0, note)) + apply(dim) +
+           prose.substr(note) + apply(reset);
+}
+
+// One line of the usage text in the palette `OptionParser` gives `tey --help`
+// (src/stdlib/option_parser.kex): bold headings, cyan flags and the arguments
+// they take, dim notes.
+auto styledUsageLine(const std::string& line) -> std::string {
+    using namespace kex::color;
+    if (line.rfind("Usage: ", 0) == 0) {
+        const auto program = line.find(' ', 7);
+        return std::string(apply(bold)) + "Usage:" + apply(reset) + " " + apply(bold) +
+               line.substr(7, program - 7) + apply(reset) + apply(cyan) +
+               (program == std::string::npos ? "" : line.substr(program)) + apply(reset);
+    }
+    if (!line.empty() && line.back() == ':' && line[0] != ' ') {
+        return std::string(apply(bold)) + line + apply(reset);
+    }
+    const auto first = line.find_first_not_of(' ');
+    if (first == std::string::npos || line[first] != '-') {
+        return styledUsageProse(line);
+    }
+    // The flag column: `-r, --run`, `--explain CODE`, `--eval <code>`,
+    // `--skill [topic]`, up to the first word of the description.
+    const auto isFlagWord = [](std::string_view word) {
+        if (word.empty()) {
+            return false;
+        }
+        if (word[0] == '-' || word[0] == '<' || word[0] == '[') {
+            return true;
+        }
+        return word.size() > 1 && std::all_of(word.begin(), word.end(), [](char c) {
+                   return std::isupper(static_cast<unsigned char>(c)) || c == '_' || c == ',';
+               });
+    };
+    auto end = first;
+    while (end < line.size()) {
+        const auto wordEnd = std::min(line.find(' ', end), line.size());
+        if (!isFlagWord(std::string_view(line).substr(end, wordEnd - end))) {
+            break;
+        }
+        end = line.find_first_not_of(' ', wordEnd);
+        if (end == std::string::npos) {
+            end = line.size();
+        }
+    }
+    auto flags = line.substr(first, end - first);
+    const auto padding = flags.size() - std::min(flags.size(), flags.find_last_not_of(' ') + 1);
+    flags.resize(flags.size() - padding);
+    return line.substr(0, first) + apply(cyan) + flags + apply(reset) + std::string(padding, ' ') +
+           styledUsageProse(line.substr(end));
+}
+
+// `--help` prints to stdout, as `tey --help` does, so it can be paged and
+// searched; usage shown because of a bad flag goes to stderr.
+auto printUsage(const char* progName, std::ostream& out) -> void {
+    std::istringstream text(usageText(progName));
+    for (std::string line; std::getline(text, line);) {
+        out << styledUsageLine(line) << "\n";
+    }
 }
 
 auto printVersion() -> void {
@@ -295,6 +369,7 @@ enum Value {
     TimePasses,
     PrintPipelinePasses,
     IamAi,
+    NoInspect,
 };
 } // namespace Option
 
@@ -361,6 +436,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
         {"no-colors", no_argument, nullptr, 'N'},
         {"colors", no_argument, nullptr, Option::Colors},
         {"no-snippets", no_argument, nullptr, Option::NoSnippets},
+        {"no-inspect", no_argument, nullptr, Option::NoInspect},
         {"no-prelude", no_argument, nullptr, Option::NoPrelude},
         {"source-root", required_argument, nullptr, Option::SourceRoot},
         {"quiet", no_argument, nullptr, 'q'},
@@ -557,7 +633,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
                 options.mode = Mode::Complete;
                 break;
             case 'h':
-                printUsage(argv[0]);
+                printUsage(argv[0], std::cout);
                 {
                     options.exitNow = 0;
                     return options;
@@ -577,8 +653,9 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
             case 'N': kex::color::enabled = false; break;
             case Option::Colors: kex::color::enabled = true; break;
             case Option::NoSnippets: kex::diagnostics::snippets = false; break;
+            case Option::NoInspect: options.noInspect = true; break;
             default:
-                printUsage(argv[0]);
+                printUsage(argv[0], std::cerr);
                 {
                     options.exitNow = 1;
                     return options;
@@ -1174,10 +1251,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (mode == Mode::BeamRepl) {
-        return runBeamRepl(skipPrelude);
+        return runBeamRepl(skipPrelude, !options.noInspect);
     }
     if (mode == Mode::Repl) {
-        return runWalkerRepl(skipPrelude);
+        return runWalkerRepl(skipPrelude, !options.noInspect);
     }
 
     std::string filepath = argv[optind];
