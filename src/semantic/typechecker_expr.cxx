@@ -7582,6 +7582,9 @@ auto TypeChecker::checkCallCore(
         // has no signature of its own: the type answers it (OwnMethod).
         if (callExpr && isMethodCall && !argTypes.empty()) {
             if (const auto own = ownTypeAnswers(argTypes, name)) {
+                if (missesTraitArity(argTypes, name, loc)) {
+                    return Type::unknown();
+                }
                 m_decidedCalls[callExpr] = own->decision();
                 return Type::unknown();
             }
@@ -7590,6 +7593,9 @@ auto TypeChecker::checkCallCore(
         // Monoid's default on String): the value picks the body at run time.
         if (callExpr && isMethodCall && concreteReceiver &&
             m_traits.declaresMethod(m_traits.implementorKey(argTypes[0]), name)) {
+            if (missesTraitArity(argTypes, name, loc)) {
+                return Type::unknown();
+            }
             decideDispatch(callExpr, name);
             return Type::unknown();
         }
@@ -8012,6 +8018,9 @@ auto TypeChecker::checkCallCore(
         // A default the type inherits answers the call: the type's own.
         if (!anyFirstParamPlausible && traitProvides && callExpr) {
             if (const auto own = ownTypeAnswers(argTypes, name)) {
+                if (missesTraitArity(argTypes, name, loc)) {
+                    return Type::unknown();
+                }
                 m_decidedCalls[callExpr] = own->decision();
                 return Type::unknown();
             }
@@ -9931,6 +9940,92 @@ auto TypeChecker::missesRequiredArity(
     const auto least =
         (none ? 0 : required.requiredParams.value_or(required.params.size())) + receivers;
     if (given >= least && given <= most) {
+        return false;
+    }
+    error(
+        diag::Code::WrongArgumentCount, loc,
+        {{"name", sourceName(name)},
+         {"expected", std::to_string(most)},
+         {"actual", std::to_string(given)}});
+    return true;
+}
+
+// A function a trait gives the receiver's type, required or a default body,
+// takes as many values as it is declared with, whichever type answers it:
+// `a.min()` for Comparable's `let min(other: This)` lacks its argument, and
+// was waved through as the type's own answer, to fail at run time on both
+// backends (found by `make fuzz-metamorphic`).
+auto TypeChecker::missesTraitArity(
+    const std::vector<TypePtr>& argTypes, const std::string& name, SourceLocation loc) -> bool {
+    if (argTypes.empty()) {
+        return false;
+    }
+    const auto receiver = resolve(argTypes.front());
+    // The type's own function of the name, at this count, answers it instead.
+    if (const auto own = m_methodSignatures.find(name); own != m_methodSignatures.end()) {
+        for (const auto& signature : own->second) {
+            if (signature.params.size() == argTypes.size() && !signature.params.empty() &&
+                !std::holds_alternative<ConstrainedType>(signature.params.front()->kind) &&
+                argMatchesParam(receiver, signature.params.front())) {
+                return false;
+            }
+        }
+    }
+    if (const auto [trait, required] = m_traits.requiredMethod(receiver, name); required) {
+        return missesRequiredArity(*required, argTypes.size(), name, loc);
+    }
+    const auto given = argTypes.size();
+    bool defined = false;
+    bool fits = false;
+    std::size_t most = 0;
+    const auto consider = [&](std::size_t least, std::size_t upper) {
+        defined = true;
+        most = std::max(most, upper);
+        fits = fits || (given >= least && given <= upper);
+    };
+    // A default of a trait compiled apart is filed with the receiver functions,
+    // its receiver the trait itself (`Comparable`'s `min`).
+    if (m_importedInterfaces) {
+        if (const auto functions = m_importedInterfaces->receiverFunctions.find(name);
+            functions != m_importedInterfaces->receiverFunctions.end()) {
+            for (const auto& function : functions->second) {
+                const auto& signature = function.signature;
+                const auto* constrained =
+                    signature.params.empty()
+                        ? nullptr
+                        : std::get_if<ConstrainedType>(&signature.params.front()->kind);
+                if (constrained && m_traits.satisfies(receiver, constrained->traitName)) {
+                    consider(
+                        signature.requiredParams.value_or(signature.params.size()),
+                        signature.params.size());
+                }
+            }
+        }
+    }
+    // One of this program's traits: its default's clauses, as written.
+    for (const auto& [traitName, functions] : m_traitDefaults) {
+        if (!m_traits.satisfies(receiver, traitName)) {
+            continue;
+        }
+        for (const auto* function : functions) {
+            if (!function || function->name != name) {
+                continue;
+            }
+            for (const auto& clause : function->clauses) {
+                const bool explicitReceiver =
+                    !clause.params.empty() && clause.params.front().pattern &&
+                    std::holds_alternative<ast::ThisPattern>(
+                        (*clause.params.front().pattern)->kind);
+                const std::size_t receivers = explicitReceiver ? 0 : 1;
+                std::size_t least = clause.params.size();
+                while (least > 0 && clause.params[least - 1].defaultValue) {
+                    least--;
+                }
+                consider(least + receivers, clause.params.size() + receivers);
+            }
+        }
+    }
+    if (!defined || fits) {
         return false;
     }
     error(

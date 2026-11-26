@@ -933,6 +933,12 @@ private:
     auto missesRequiredArity(
         const Signature& required, std::size_t given, const std::string& name, SourceLocation loc)
         -> bool;
+    // Whether a call reaching a function a trait gives the receiver's type (a
+    // requirement or a default body) passes a count it is not declared with;
+    // reported when so.
+    auto missesTraitArity(
+        const std::vector<TypePtr>& argTypes, const std::string& name, SourceLocation loc)
+        -> bool;
     // Compile-time intrinsic handlers (intrinsics.hxx; typechecker_intrinsics.cxx).
     friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
         -> const CompileTimeIntrinsic*;
