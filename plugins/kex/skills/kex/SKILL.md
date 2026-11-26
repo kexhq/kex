@@ -160,7 +160,7 @@ main do
   let (label, value) = pair                              # not: pair[0], pair.first
   IO.printLine("${label}=${value}")
   let pairs = [("a", 2), ("b", 1)]
-  IO.printLine(pairs.sortBy { |_, n| n })                # not: { |(_, n)| n }
+  IO.printLine(pairs.sortBy { |_, n| n })                # or: { |(_, n)| n }
 end
 ```
 

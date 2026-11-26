@@ -1,0 +1,16 @@
+amount 0
+amount 5
+amount 
+amount 3
+amount 
+:id: 4 (primary key)
+:id: 8 (key)
+:id: 8
+42
+3
+1
+users.:age default 18
+users.:age default 0 null
+users.:age
+:bio 80
+:bio 255

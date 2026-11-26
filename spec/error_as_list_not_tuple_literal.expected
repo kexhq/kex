@@ -1,0 +1,4 @@
+spec/error_as_list_not_tuple_literal.kex:10:18: [KEXET-0522]: Error, `.as(List)` needs a tuple literal; for a tuple known only at run time use `.items`, or `.to(List)`
+   |
+10 |   IO.inspect(p.as(List))
+   |              ^^^^^^^^^^

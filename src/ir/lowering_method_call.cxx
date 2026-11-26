@@ -818,6 +818,11 @@ auto Lowering::lowerConversion(const ast::MethodCall& n, const std::string& targ
             return lit(LitKind::Atom, text);
         }
     }
+    // `(1, 2).as(List)`: the checker admits only a tuple literal, so its
+    // elements become the list's.
+    if (target == kex::names::kListType) {
+        return callE("erlang", "tuple_to_list", 1, one(lower(n.receiver)));
+    }
     return lower(n.receiver);
 }
 

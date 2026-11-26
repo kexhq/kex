@@ -108,7 +108,8 @@ KEX_DIAGNOSTIC(ExpectedEndToCloseSpawn, "KEXEP-0106", "expected 'end' to close s
 KEX_DIAGNOSTIC(ExpectedEqualsAfterTheCapabilityNameInWith, "KEXEP-0107", "expected '=' after the capability name in 'with', got {found}")
 KEX_DIAGNOSTIC(ExpectedDoAfterTheWithReplacement, "KEXEP-0108", "expected 'do' after the 'with' replacement, got {found}")
 KEX_DIAGNOSTIC(ExpectedEndToCloseWith, "KEXEP-0109", "expected 'end' to close with, got {found}")
-KEX_DIAGNOSTIC(ExpectedRParenInTupleParam, "KEXEP-0110", "expected ')' in tuple param, got {found}")
+// A tuple block parameter is parsed as a pattern now, which reports its own errors.
+KEX_RETIRED_DIAGNOSTIC("KEXEP-0110")
 KEX_DIAGNOSTIC(ExpectedParamName, "KEXEP-0111", "expected param name, got {found}")
 KEX_DIAGNOSTIC(ExpectedPipeToCloseParams, "KEXEP-0112", "expected '|' to close params, got {found}")
 KEX_DIAGNOSTIC(ExpectedTokenToCloseLambda, "KEXEP-0113", "expected {expected} to close lambda, got {found}")
@@ -159,3 +160,5 @@ KEX_DIAGNOSTIC(UnsplicedGenerationForm, "KEXEP-0157", "generating a `{keyword}` 
 KEX_DIAGNOSTIC(DoAfterIfCondition, "KEXEP-0158", "use 'then' instead of 'do' in if expression: `if cond then body end`")
 KEX_DIAGNOSTIC(TraitParamKindMismatch, "KEXEP-0159", "`{param}` in trait `{trait}` takes {first} type argument(s) here but {second} elsewhere: use it the same way everywhere")
 KEX_DIAGNOSTIC(NestedTooDeep, "KEXEP-0160", "this is nested more than {limit} levels deep: give an inner part a name with `let`, and use the name")
+KEX_DIAGNOSTIC(FunctionBodyOnNextLine, "KEXEP-0161", "a function body on its own line goes in `do ... end`: write `do` in place of `=`, and `end` after the body")
+KEX_DIAGNOSTIC(GuardOnFunctionClause, "KEXEP-0162", "a function clause cannot have a `when` guard: match on the parameter in the body instead")

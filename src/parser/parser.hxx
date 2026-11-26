@@ -142,6 +142,7 @@ private:
 
     // Functions
     auto parseFunctionClause() -> ast::FunctionClause;
+    auto skipClauseGuard() -> void;
     auto parseParams() -> std::vector<ast::Param>;
     auto parseParam() -> ast::Param;
     auto parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation>;
@@ -183,6 +184,7 @@ private:
     auto parseSpawnExpr() -> ast::ExprPtr;
     auto parseWithExpr() -> ast::ExprPtr;
     auto parseLambda() -> ast::ExprPtr;
+    auto parseBlockParams(std::vector<ast::ExprPtr>& body) -> std::vector<ast::LambdaParam>;
     auto parseShorthandLambda() -> ast::ExprPtr;
     auto parseCurryExpr() -> ast::ExprPtr;
     auto parseListExpr() -> ast::ExprPtr;
@@ -256,6 +258,8 @@ private:
     // enough for a debug or sanitizer build, whose frames are larger: those
     // overflowed near 400 levels.
     int m_nesting = 0;
+    // Numbers the hidden parameter each tuple block parameter becomes.
+    int m_tupleParams = 0;
     static constexpr int kMaxNesting = 256;
     // How deep each operator node built so far is: a chain of `+` is a tree
     // as deep as it is long, though parsing it does not recurse.

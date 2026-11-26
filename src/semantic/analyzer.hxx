@@ -265,6 +265,11 @@ public:
     auto literalIsFloat(const ast::Expr& literal) const -> bool {
         return m_checker.floatLiterals().contains(&literal);
     }
+    // Whether an argument is passed as `Just(value)`: a plain `T` given for a
+    // defaulted `T?` parameter (kexhq/kex#446).
+    auto passedAsJust(const ast::Expr& argument) const -> bool {
+        return m_checker.justArguments().contains(&argument);
+    }
     // The letters a function takes its types for, the types a call passes,
     // and the letter a call goes through (§12 step 7: `A.identity`).
     auto typeParametersOf(const ast::FunctionDef& def) const -> std::vector<std::string> {

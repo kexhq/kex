@@ -120,6 +120,9 @@ To convert text to an atom:
 On the BEAM, atoms are never freed. Use `text.to(Atom)` for external input to
 avoid creating an unbounded number of atoms.
 
+`value.atom?` answers whether any value is an atom: `:ok.atom?` is `true`,
+while a `Bool`, `None` and a constructor such as `Red` are not atoms.
+
 ### String Interpolation
 
 Strings support `${expr}` interpolation. The expression is evaluated and
@@ -501,6 +504,10 @@ Fixed-size, heterogeneous:
 let pair = (1, "hello")
 let triple = (true, 42, :ok)
 ```
+
+`(1, 2, 3).as(List)` is the list `[1, 2, 3]`, its elements joined into one
+type as a list literal's are. It takes a tuple literal; a tuple known only at
+run time converts with `.items` or `.to(List)`.
 
 ### Maps
 

@@ -1,0 +1,54 @@
+# A defaulted `T?` parameter takes a plain `T`, passed as `Just(value)`
+# (kexhq/kex#446): `default: 0` reads like the declaration it is, where
+# `default: Just(0)` put the wrapper in front of every reader.
+
+let bigint(label: String, default: Integer? = None) -> String = "${label} ${default}"
+
+let column(name: Atom, size: Integer = 8, note: String? = None) -> String do
+  let shown = note.map { |text| " (${text})" }.or("")
+  "${name}: ${size}${shown}"
+end
+
+let pick(first: Integer, second: Integer? = Just(2)) -> Integer = first + second.or(0)
+
+record Table do
+  name: String
+end
+
+make Table do
+  let integer(label: Atom, default: Integer? = None, nullable: Bool = false) -> String do
+    let shown = default.map { |value| " default ${value}" }.or("")
+    "${@name}.${label}${shown}${nullable then " null" else ""}"
+  end
+end
+
+module Columns do
+  let text(label: Atom, limit: Integer? = None) -> String = "${label} ${limit.or(255)}"
+end
+
+main do
+  IO.printLine(bigint("amount", default: 0))
+  IO.printLine(bigint("amount", 5))
+  IO.printLine(bigint("amount"))
+  IO.printLine(bigint("amount", default: Just(3)))
+  IO.printLine(bigint("amount", default: None))
+
+  # Named arguments in any order, beside a plain defaulted one.
+  IO.printLine(column(:id, note: "primary key", size: 4))
+  IO.printLine(column(:id, note: "key"))
+  IO.printLine(column(:id))
+
+  # A computed value is wrapped once, wherever it comes from.
+  let n = 40
+  IO.printLine(pick(1, n + 1))
+  IO.printLine(pick(1))
+  IO.printLine(pick(1, None))
+
+  # A `make` function called through its receiver, and a module's function.
+  let t = Table { name: "users" }
+  IO.printLine(t.integer(:age, default: 18))
+  IO.printLine(t.integer(:age, nullable: true, default: 0))
+  IO.printLine(t.integer(:age))
+  IO.printLine(Columns.text(:bio, limit: 80))
+  IO.printLine(Columns.text(:bio))
+end

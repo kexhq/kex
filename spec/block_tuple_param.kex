@@ -1,0 +1,39 @@
+# A tuple pattern works in a BLOCK PARAMETER, the spelling a named function's
+# parameter, `let` and `match` already use (kexhq/kex#612).
+#
+# `|a, b|` auto-spreads one tuple argument, but only where a single tuple is
+# passed to a block of two parameters. `|(a, b)|` takes the argument whole and
+# destructures it, so it reaches tuple elements in every block position: next to
+# an ordinary parameter, nested, and through `Stream`.
+
+main do
+  [(1, 2)].each { |(a, b)| IO.printLine("${a}+${b}") }
+
+  IO.printLine([(1, 2), (3, 4)].map { |(a, b)| a * b })
+
+  [("x", 5)].each do |(name, n)|
+    IO.printLine("${name}=${n}")
+  end
+
+  # Nested, and a wildcard element.
+  IO.printLine([("p", (3, 4))].map { |(name, (x, _))| "${name}@${x}" })
+
+  # Next to an ordinary parameter: the accumulator is a tuple, the item is not.
+  let (count, total) = [5, 6, 7].reduce((0, 0)) { |(n, sum), x| (n + 1, sum + x) }
+  IO.printLine("${count} ${total}")
+
+  # A tuple item next to an ordinary accumulator.
+  IO.printLine([(1, 2), (3, 4)].reduce(0) { |acc, (a, b)| acc + a * b })
+
+  # Two tuple parameters in one block.
+  let combine = { |(a, b), (c, d)| a * c + b * d }
+  IO.printLine(combine((1, 2), (3, 4)))
+
+  # A block that closes over a name from outside.
+  let offset = 100
+  IO.printLine([(1, 2)].map { |(a, b)| a + b + offset })
+
+  # Through Stream, where a two-parameter block does not auto-spread (#610).
+  let pairs = Stream.from((1, 2)) { |(a, b)| (a + 1, b * 2) }
+  IO.printLine(pairs.map { |(a, b)| a + b }.take(3))
+end

@@ -269,6 +269,51 @@ make A is Discrete => Range<A>, implement: Enumerable<A>, Foldable<A> do
   min :> A?
   let min = this.items.min
 
+  # Returns the element with the smallest +f+ key wrapped in +Just+, or
+  # +None+ for an empty range. The first of several tying elements wins.
+  #
+  # @param f [A -> B] the key each element is compared by
+  # @return [A?] the element with the smallest key, or +None+
+  #
+  # @example
+  #   (1..10).minBy { |n| (n - 4).abs }   # => Just(4)
+  minBy :> (A -> B) -> A?
+  let minBy(f) = this.items.minBy(f)
+
+  # Returns the element with the largest +f+ key wrapped in +Just+, or
+  # +None+ for an empty range. The first of several tying elements wins.
+  #
+  # @param f [A -> B] the key each element is compared by
+  # @return [A?] the element with the largest key, or +None+
+  #
+  # @example
+  #   (1..10).maxBy { |n| n % 7 }   # => Just(6)
+  maxBy :> (A -> B) -> A?
+  let maxBy(f) = this.items.maxBy(f)
+
+  # Returns the elements as a list sorted by the key +f+ gives each one,
+  # smallest key first. The sort is stable: elements with equal keys keep
+  # their order.
+  #
+  # @param f [A -> B] the key each element is sorted by
+  # @return [[A]] the sorted elements
+  #
+  # @example
+  #   (1..6).sortBy { |n| n % 3 }   # => [3, 6, 1, 4, 2, 5]
+  sortBy :> (A -> B) -> [A]
+  let sortBy(f) = this.items.sortBy(f)
+
+  # Groups the elements by the key +f+ gives each one. Each group keeps its
+  # elements in ascending order.
+  #
+  # @param f [A -> K] the key each element is grouped under
+  # @return [{K: [A]}] each key with the elements that produced it
+  #
+  # @example
+  #   (1..6).groupBy { |n| n.even? }   # => { false: [1, 3, 5], true: [2, 4, 6] }
+  groupBy :> (A -> K) -> {K: [A]}
+  let groupBy(f) = this.items.groupBy(f)
+
   # Returns a range of the same elements in the opposite order.
   #
   # It starts at the last element the step reaches, so
