@@ -116,6 +116,12 @@ let createElement(name: String, id: String? = None, classes: [String] = []) do
 end
 ```
 
+A defaulted Optional parameter takes a plain value too, passed as its `Just`:
+`createElement("div", id: "main")` is `createElement("div", id: Just("main"))`.
+`None` and a value that is already a `String?` are passed as they are. Only a
+parameter with a default does this; a `T?` parameter without one still needs
+its `Just`.
+
 ## Named Arguments
 
 ```kex

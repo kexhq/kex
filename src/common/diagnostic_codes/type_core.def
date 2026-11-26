@@ -94,3 +94,7 @@ KEX_DIAGNOSTIC(MakeContractFieldTyped, "KEXET-0184", "`{name}` is declared in th
 KEX_DIAGNOSTIC(NewIsReserved, "KEXET-0185", "`new` is reserved for the next-state binding; use a name such as `build` for constructor functions")
 KEX_DIAGNOSTIC(NonExhaustiveClauses, "KEXET-0186", "non-exhaustive clauses of `{name}`: missing case(s) {cases} of {type}")
 KEX_DIAGNOSTIC(AnnotationArityMismatch, "KEXWT-0001", "type annotation for '{name}' declares {declared} parameter(s) but definition has {actual}")
+// A `/`, `%`, `div`, `modulo` or `divmod` whose divisor the checker knows is
+// 0: a literal, literal arithmetic, or a `let` bound to one (kexhq/kex#702).
+// It fails at run time on both backends, whatever the dividend.
+KEX_DIAGNOSTIC(DivisionByConstantZero, "KEXWT-0002", "division by zero: the divisor of `{operator}` is always 0, so this fails at run time")

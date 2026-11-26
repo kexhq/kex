@@ -1,0 +1,34 @@
+# kex: check-only
+# A divisor the checker knows is 0 fails on every run, on both backends, so
+# `--check` says so (kexhq/kex#702): a literal, literal arithmetic, or a
+# `let` bound to one, under `/`, `%` and Integer's `div`, `modulo` and
+# `divmod`. Only warnings: the program still compiles.
+
+let half(n: Integer) -> Integer = n / 2
+
+main do
+  let HELLO = 16
+  IO.printLine("Hello, ${22 / (HELLO - 16)}")
+
+  let zero = 0
+  let none = zero * 5
+  IO.printLine(7 % none)
+  IO.printLine(7.div(-zero))
+  IO.printLine(7.modulo(HELLO - HELLO))
+  IO.printLine(7.divmod(0))
+  IO.printLine(1.5 / 0.0)
+
+  # Nothing to say: the divisor is not a known 0.
+  var count = 0
+  count = 4
+  IO.printLine(7 / count)
+  let four = HELLO / 4
+  IO.printLine(7 / four)
+  IO.printLine(7 / (zero + 1))
+  IO.printLine(half(0))
+  let shadowed = 0
+  [1, 2].each do |shadowed|
+    IO.printLine(7 / shadowed)
+  end
+  IO.printLine(shadowed)
+end

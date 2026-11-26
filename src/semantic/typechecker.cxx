@@ -91,6 +91,7 @@ auto TypeChecker::check(
     m_typeReferences.clear();
     m_stringPatterns.clear();
     m_successWrappers.clear();
+    m_justArguments.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_captureCalls.clear();
@@ -8403,8 +8404,12 @@ auto TypeChecker::defineVar(const std::string& name, TypePtr type, TypeEnv::Bind
 }
 
 auto TypeChecker::declareVar(
-    const std::string& name, TypePtr type, bool isVar, SourceLocation where, SourceLocation named)
-    -> void {
+    const std::string& name,
+    TypePtr type,
+    bool isVar,
+    SourceLocation where,
+    SourceLocation named,
+    std::optional<ConstantNumber> constant) -> void {
     if (named.line == 0) {
         named = where;
     }
@@ -8419,7 +8424,7 @@ auto TypeChecker::declareVar(
         defineVar(name, std::move(type), first);
         return;
     }
-    defineVar(name, std::move(type), {isVar, false, named.line, named.column});
+    defineVar(name, std::move(type), {isVar, false, named.line, named.column, constant});
     if (m_recordsNames) {
         m_bindingSites.emplace_back(name, named);
     }
@@ -11123,6 +11128,7 @@ auto TypeChecker::forgetAnswers(const ast::FunctionDef& copy) -> void {
     forget(m_typeArguments, nodes);
     forget(m_importedTypeBindings, nodes);
     forget(m_successWrappers, nodes);
+    forget(m_justArguments, nodes);
     forget(m_resolvedCalls, calls);
     forget(m_staticTypeOfCalls, calls);
     forget(m_methodTypeArguments, calls);

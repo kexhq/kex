@@ -12,6 +12,9 @@
 #include "../common/source_name.hxx"
 #include "../common/well_known.hxx"
 #include <cctype>
+#include <charconv>
+#include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -1239,10 +1242,26 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!declared && m_inSyntheticMain) {
                         declared = declaredConstantType(varPat->name, valueType, expr.location);
                     }
+                    // The number it binds, when known, for a divisor that is
+                    // always 0 (kexhq/kex#702). A local `let UPPER` binds its
+                    // wrapper's body.
+                    std::optional<ConstantNumber> constant;
+                    if (node.value) {
+                        const ast::Expr* bound = node.value.get();
+                        if (ast::isLocalConstantBind(node.pattern, node.value)) {
+                            const auto& wrapper = std::get<ast::Lambda>(bound->kind);
+                            bound = wrapper.body.size() == 1 && !wrapper.rescue
+                                        ? wrapper.body.front().get()
+                                        : nullptr;
+                        }
+                        if (bound) {
+                            constant = constantNumber(*bound);
+                        }
+                    }
                     // At the name as written (`let total`), not the statement's start.
                     declareVar(
                         varPat->name, declared ? declared : valueType,
-                        /*isVar=*/false, expr.location, node.pattern->location);
+                        /*isVar=*/false, expr.location, node.pattern->location, constant);
                     // For tooling, as a pattern's names are: hover on the name answers
                     // for the binding, not for some same-named function.
                     m_patternBindings.push_back(
@@ -3864,7 +3883,188 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         },
         expr.kind);
     m_typeMap[&expr] = result;
+    warnDivisionByZero(expr);
     return result;
+}
+
+auto TypeChecker::constantNumber(const ast::Expr& expr) const -> std::optional<ConstantNumber> {
+    if (const auto* literal = std::get_if<ast::IntLiteral>(&expr.kind)) {
+        std::string_view digits = literal->value;
+        int base = 10;
+        if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')) {
+            digits.remove_prefix(2);
+            base = 16;
+        }
+        std::int64_t value = 0;
+        const auto [end, failure] =
+            std::from_chars(digits.data(), digits.data() + digits.size(), value, base);
+        if (failure != std::errc{} || end != digits.data() + digits.size()) {
+            return std::nullopt;
+        }
+        // An integer literal a Float takes is a float (decision 2).
+        if (m_floatLiterals.contains(&expr)) {
+            return ConstantNumber{true, 0, static_cast<double>(value)};
+        }
+        return ConstantNumber{false, value, 0.0};
+    }
+    if (const auto* literal = std::get_if<ast::FloatLiteral>(&expr.kind)) {
+        char* end = nullptr;
+        const double value = std::strtod(literal->value.c_str(), &end);
+        if (end != literal->value.c_str() + literal->value.size() || !std::isfinite(value)) {
+            return std::nullopt;
+        }
+        return ConstantNumber{true, 0, value};
+    }
+    if (const auto* name = std::get_if<ast::Identifier>(&expr.kind)) {
+        const auto* binding = bindingOf(name->name);
+        return binding && !binding->isVar ? binding->constant : std::nullopt;
+    }
+    if (const auto* name = std::get_if<ast::UpperIdentifier>(&expr.kind)) {
+        const auto* binding = bindingOf(name->name);
+        return binding && !binding->isVar ? binding->constant : std::nullopt;
+    }
+    if (const auto* unary = std::get_if<ast::UnaryOp>(&expr.kind)) {
+        if (unary->op != TokenType::Minus || !unary->operand) {
+            return std::nullopt;
+        }
+        auto operand = constantNumber(*unary->operand);
+        if (!operand) {
+            return std::nullopt;
+        }
+        if (operand->floating) {
+            operand->real = -operand->real;
+        } else if (__builtin_sub_overflow(std::int64_t{0}, operand->integer, &operand->integer)) {
+            return std::nullopt;
+        }
+        return operand;
+    }
+    const auto* binary = std::get_if<ast::BinaryOp>(&expr.kind);
+    if (!binary || !binary->left || !binary->right ||
+        (binary->op != TokenType::Plus && binary->op != TokenType::Minus &&
+         binary->op != TokenType::Star)) {
+        return std::nullopt;
+    }
+    const auto left = constantNumber(*binary->left);
+    const auto right = left ? constantNumber(*binary->right) : std::nullopt;
+    // Mixed operands are a different question (the numeric tower); only
+    // two of a kind fold.
+    if (!left || !right || left->floating != right->floating) {
+        return std::nullopt;
+    }
+    ConstantNumber folded{left->floating, 0, 0.0};
+    if (folded.floating) {
+        folded.real = binary->op == TokenType::Plus    ? left->real + right->real
+                      : binary->op == TokenType::Minus ? left->real - right->real
+                                                       : left->real * right->real;
+        return std::isfinite(folded.real) ? std::optional{folded} : std::nullopt;
+    }
+    const bool overflow =
+        binary->op == TokenType::Plus
+            ? __builtin_add_overflow(left->integer, right->integer, &folded.integer)
+        : binary->op == TokenType::Minus
+            ? __builtin_sub_overflow(left->integer, right->integer, &folded.integer)
+            : __builtin_mul_overflow(left->integer, right->integer, &folded.integer);
+    return overflow ? std::nullopt : std::optional{folded};
+}
+
+auto TypeChecker::warnDivisionByZero(const ast::Expr& expr) -> void {
+    if (!m_diagnostics) {
+        return;
+    }
+    const auto typeOf = [&](const ast::Expr* operand) -> TypePtr {
+        const auto found = operand ? m_typeMap.find(operand) : m_typeMap.end();
+        return found == m_typeMap.end() ? nullptr : resolve(found->second);
+    };
+    const auto divisorIsZero = [&](const ast::Expr* divisor) {
+        const auto value = divisor ? constantNumber(*divisor) : std::nullopt;
+        return value && value->zero();
+    };
+    // Only the built-in operation: a type of the program may give `/` a
+    // meaning of its own, 0 included.
+    const auto builtinNumber = [&](const TypePtr& type, bool open) {
+        return type && (isNumericType(type) || (open && isUndetermined(type)));
+    };
+    if (const auto* binary = std::get_if<ast::BinaryOp>(&expr.kind)) {
+        if ((binary->op != TokenType::Slash && binary->op != TokenType::Percent) ||
+            !divisorIsZero(binary->right.get()) ||
+            !builtinNumber(typeOf(binary->left.get()), /*open=*/true) ||
+            !builtinNumber(typeOf(binary->right.get()), /*open=*/false)) {
+            return;
+        }
+        warning(
+            diag::Code::DivisionByConstantZero, expr.location,
+            {{"operator", binary->op == TokenType::Slash ? "/" : "%"}});
+        return;
+    }
+    // Integer's own `div`, `modulo` and `divmod` (src/stdlib/number.kex).
+    const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
+    if (!call || (call->method != "div" && call->method != "modulo" && call->method != "divmod") ||
+        call->args.size() != 1 || !call->namedArgs.empty() || call->block ||
+        !divisorIsZero(call->args.front().get())) {
+        return;
+    }
+    const auto receiver = typeOf(call->receiver.get());
+    const auto* primitive = receiver ? std::get_if<PrimitiveType>(&receiver->kind) : nullptr;
+    if (!primitive || primitive->kind != PrimitiveType::Integer) {
+        return;
+    }
+    warning(diag::Code::DivisionByConstantZero, expr.location, {{"operator", call->method}});
+}
+
+auto TypeChecker::wrapDefaultedOptionals(
+    const std::vector<Signature>& candidates,
+    std::vector<TypePtr>& argTypes,
+    const std::vector<const ast::Expr*>& slots) -> void {
+    if (slots.size() != argTypes.size()) {
+        return;
+    }
+    // What a `T?` holds; null for any other type.
+    const auto heldBy = [](const TypePtr& type) -> TypePtr {
+        if (const auto* optional = std::get_if<OptionalType>(&type->kind)) {
+            return optional->inner;
+        }
+        if (const auto* named = std::get_if<NamedType>(&type->kind);
+            named && named->name == names::kOptionalType && named->typeArgs.size() == 1) {
+            return named->typeArgs.front();
+        }
+        return nullptr;
+    };
+    for (std::size_t i = 0; i < argTypes.size(); ++i) {
+        // A block, or a defaulted parameter the call leaves out, is no plain value.
+        if (!slots[i] || !argTypes[i]) {
+            continue;
+        }
+        const auto argument = resolve(argTypes[i]);
+        // Only a value known not to be an Optional already: `None`, a `T?`
+        // or one not yet known is passed as it is.
+        const auto* named = std::get_if<NamedType>(&argument->kind);
+        if (!isConcreteValue(argument) || containsTypeVariable(argument) || heldBy(argument) ||
+            (named && named->name == kex::names::kNoneConstructor)) {
+            continue;
+        }
+        // Every candidate this call may reach takes a defaulted `T?` here
+        // that this value is a `T` of, and does not take the value itself.
+        bool any = false;
+        bool every = true;
+        for (const auto& candidate : candidates) {
+            const auto required = candidate.requiredParams.value_or(candidate.params.size());
+            if (argTypes.size() < required || argTypes.size() > candidate.params.size()) {
+                continue;
+            }
+            const auto param = resolve(candidate.params[i]);
+            const auto held = heldBy(param);
+            if (i < required || !held || argMatchesParam(argTypes[i], param) ||
+                !argMatchesParam(argTypes[i], held)) {
+                every = false;
+                break;
+            }
+            any = true;
+        }
+        if (any && every) {
+            argTypes[i] = Type::optional(argTypes[i]);
+            m_justArguments.insert(slots[i]);
+        }
+    }
 }
 
 auto TypeChecker::inferBinaryOp(
@@ -7640,10 +7840,21 @@ auto TypeChecker::checkCallCore(
             const bool hasBlock =
                 functionCall ? bool(functionCall->block) : bool(methodCall->block);
             std::vector<TypePtr> ordered(layout.params.size());
+            // The argument expressions, placed as their types are, so what
+            // reads them by slot (a Float parameter's integer literal, a
+            // defaulted Optional's plain value) reads the right one.
+            const bool exprsLaidOut = argExprs.size() == argTypes.size();
+            std::vector<const ast::Expr*> orderedExprs(layout.params.size(), nullptr);
+            const auto place = [&](std::size_t slot, std::size_t from) {
+                ordered[slot] = argTypes[from];
+                if (exprsLaidOut) {
+                    orderedExprs[slot] = argExprs[from];
+                }
+            };
             bool valid =
                 argTypes.size() == receiverSlots + positionalCount + named->size() + hasBlock;
             if (valid && throughReceiver) {
-                ordered.front() = argTypes.front();
+                place(0, 0);
             }
             for (size_t i = 0; valid && i < named->size(); ++i) {
                 const auto it = std::find(
@@ -7657,7 +7868,7 @@ auto TypeChecker::checkCallCore(
                     valid = false;
                     break;
                 }
-                ordered[slot] = argTypes[receiverSlots + positionalCount + i];
+                place(slot, receiverSlots + positionalCount + i);
             }
             size_t next = receiverSlots;
             for (size_t i = 0; valid && i < positionalCount + hasBlock; ++i) {
@@ -7668,8 +7879,7 @@ auto TypeChecker::checkCallCore(
                     valid = false;
                     break;
                 }
-                ordered[next++] =
-                    argTypes[i < positionalCount ? receiverSlots + i : argTypes.size() - 1];
+                place(next++, i < positionalCount ? receiverSlots + i : argTypes.size() - 1);
             }
             if (valid) {
                 const auto required = layout.requiredParams.value_or(layout.params.size());
@@ -7686,8 +7896,12 @@ auto TypeChecker::checkCallCore(
                     }
                 }
                 argTypes = std::move(ordered);
+                if (exprsLaidOut) {
+                    argExprs = std::move(orderedExprs);
+                }
             }
         }
+        wrapDefaultedOptionals(*sigs, argTypes, argExprs);
     }
 
     // `let hello = makeGreeter("Hello")` is a top-level zero-arg binding

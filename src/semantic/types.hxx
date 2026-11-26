@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -416,6 +417,17 @@ auto typeVariableId(const TypePtr& type) -> std::optional<int>;
 // How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
 // whether the language bound it (`new`, `from`) rather than the program,
 // which an explicit binding then shadows instead of redeclaring.
+// A number the checker knows while checking: a literal, literal arithmetic,
+// or a `let` bound to one (kexhq/kex#702).
+struct ConstantNumber {
+    bool floating = false;
+    std::int64_t integer = 0;
+    double real = 0.0;
+    auto zero() const -> bool {
+        return floating ? real == 0.0 : integer == 0;
+    }
+};
+
 struct VarBinding {
     bool isVar = false;
     bool implicit = false;
@@ -424,6 +436,8 @@ struct VarBinding {
     // used in.
     int line = 0;
     int column = 0;
+    // The number a `let` binds, when the checker knows it.
+    std::optional<ConstantNumber> constant = std::nullopt;
 };
 
 class TypeEnv {

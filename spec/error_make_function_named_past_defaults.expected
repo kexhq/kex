@@ -1,9 +1,12 @@
-spec/error_make_function_named_past_defaults.kex:13:26: [KEXET-0491]: Error, `text` expects argument 4 to be String, but got Integer
+spec/error_make_function_named_past_defaults.kex:13:37: [KEXET-0491]: Error, `text` expects argument 4 to be String, but got Integer
 
 text : Table -> Atom -> Bool -> String -> String
    |
+ 8 |   let text(label: Atom, primaryKey: Bool = false, doc: String = "") -> String = "${label}"
+   |                                                        ------ expected because of this parameter
+  ...
 13 |   IO.printLine(table.text(:id, doc: 1))
-   |                ^^^^^^^^^^^^^^^^^^^^^^^
+   |                                     ^ this has type Integer
 spec/error_make_function_named_past_defaults.kex:14:26: [KEXET-0483]: Error, missing required argument `label` for `text`
    |
 14 |   IO.printLine(table.text(doc: "no label"))

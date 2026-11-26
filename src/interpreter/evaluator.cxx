@@ -2749,6 +2749,17 @@ auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
 }
 
 auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
+    // A plain `T` passed for a defaulted `T?` parameter is its `Just`
+    // (kexhq/kex#446): the value, evaluated once, then wrapped. First, so
+    // nothing throws between marking the argument and entering it again.
+    if (!m_programs.empty() && m_programs.passedAsJust(expr)) [[unlikely]] {
+        if (m_justUnwrapped == &expr) {
+            m_justUnwrapped = nullptr;
+        } else {
+            m_justUnwrapped = &expr;
+            return wrappedSuccess("Just", eval(expr));
+        }
+    }
     checkDeadline();
     // An expression nested past what the stack holds (src/common/stack_guard.hxx),
     // a little past where a call's own check (callFunction) says which
