@@ -1459,6 +1459,9 @@ private:
     struct Branch {
         TypePtr type;
         SourceLocation location;
+        // The value as written, where it is one expression: a literal there
+        // goes into a distinct type the way it would on its own.
+        const ast::Expr* value = nullptr;
     };
     // With `expected` (a declared result, a typed `let`), each branch is
     // checked against it and a wrong one is reported at that branch; the

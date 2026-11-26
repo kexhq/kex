@@ -3647,10 +3647,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 std::vector<Branch> branches;
                 if (node.thenExpr) {
-                    branches.push_back({inferExpr(*node.thenExpr), node.thenExpr->location});
+                    branches.push_back(
+                        {inferExpr(*node.thenExpr), node.thenExpr->location, node.thenExpr.get()});
                 }
                 if (node.elseExpr) {
-                    branches.push_back({inferExpr(*node.elseExpr), node.elseExpr->location});
+                    branches.push_back(
+                        {inferExpr(*node.elseExpr), node.elseExpr->location, node.elseExpr.get()});
                 }
                 return joinBranches(branches, branchCheckTarget(expected));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
@@ -5193,6 +5195,20 @@ auto TypeChecker::literalCoercesTo(const ast::Expr& value, const TypePtr& target
             std::holds_alternative<SizedFloatType>(resolved->kind)) {
             return true;
         }
+    }
+    // A choice between values goes where each of them would: `owner: admin?
+    // then id else ""` puts a UserId or the literal "" into a UserId field.
+    if (const auto* choice = std::get_if<ast::ThenElseExpr>(&value.kind)) {
+        const auto fits = [&](const ast::ExprPtr& branch) {
+            if (!branch) {
+                return false;
+            }
+            const auto already = typeOf(branch.get());
+            return literalCoercesTo(*branch, target) ||
+                   (already && isConcreteValue(resolve(already)) &&
+                    argMatchesParam(resolve(already), target));
+        };
+        return fits(choice->thenExpr) && fits(choice->elseExpr);
     }
     if (const auto* list = std::get_if<ListType>(&resolved->kind)) {
         const auto* written = std::get_if<ast::ListExpr>(&value.kind);
@@ -11109,7 +11125,8 @@ auto TypeChecker::joinBranches(const std::vector<Branch>& branches, const TypePt
                  !(typeVariableId(type) && m_rigidVars.contains(*typeVariableId(type))))) {
                 continue;
             }
-            if (!argMatchesParam(type, expected)) {
+            if (!argMatchesParam(type, expected) &&
+                !(branch.value && literalCoercesTo(*branch.value, expected))) {
                 typeMismatch(branch.location, expected, type);
             }
         }

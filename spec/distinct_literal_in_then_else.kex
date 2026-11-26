@@ -1,0 +1,18 @@
+# A literal in a branch of `then ... else` goes into a distinct type the way
+# a bare literal does: `owner: bot? then id else ""` fills a UserId field.
+# The checker coerced `owner: ""` but rejected the same "" as a branch.
+
+distinct type UserId = String
+
+record User do
+  id : UserId
+  owner : UserId
+end
+
+main do
+  let id = "u1".as(UserId)
+  let made = User { id: id, owner: true then id else "" }
+  let none = User { id: id, owner: false then id else "" }
+  let chosen : UserId = false then id else ""
+  IO.printLine("${made.owner}|${none.owner}|${chosen}|")
+end
