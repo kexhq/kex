@@ -1,50 +1,42 @@
-# Calendar dates, wall-clock times, and instants.
+# Calendar dates, times of day, and instants.
 #
-# Three civil types, each a plain record:
+# There are three calendar types, each a plain record:
 #
-#   Date      a calendar day, no time and no zone       (2026-07-30)
-#   Time      a time of day, no date and no zone        (14:03:00)
+#   Date      a calendar day, with no time or zone      (2026-07-30)
+#   Time      a time of day, with no date or zone       (14:03:00)
 #   DateTime  both, plus a fixed offset from UTC        (2026-07-30T14:03:00+02:00)
 #
-# Two span types connect them, and which one you want depends on whether the
-# calendar gets a say:
+# and two kinds of span:
 #
-#   Duration  fixed elapsed time, a count of seconds   (36.hour, 10.day)
-#   Period    a calendar step, resolved by the calendar (1.month, 2.year)
+#   Duration  a fixed amount of elapsed time            (36.hour, 10.day)
+#   Period    a calendar step, sized by the calendar    (1.month, 2.year)
 #
-# `36.hour` is always 129600 seconds; `1.month` is however long that
-# particular month turns out to be. So `date + 1.month` clamps January 31st
-# to the last day of February, while `date + 30.day` counts thirty days.
+# +36.hour+ is always 129600 seconds, while +1.month+ is as long as the
+# month it lands in. So +date + 1.month+ takes January 31st to the last day
+# of February, and +date + 30.day+ counts thirty days.
 #
-# A time `Measure` such as `5.second` is a third thing and deliberately NOT a
-# Duration: a Measure describes a measurement, a Duration describes elapsed
-# time. The plural `5.second` builds the Duration.
+#   let due = Date.of(2026, 7, 30).try
+#   due.weekday.name            # => "Thursday"
+#   (due + 10.day).iso          # => "2026-08-09"
+#   (due + 1.month).iso         # => "2026-08-30"
+#   Time.now().iso              # the current time, such as "14:03:00"
 #
-# Values are built through their own module and used through functions:
+# Everything that reads the clock goes through the +Time.Clock+ capability,
+# so a test can fix the time with +with Time.Clock = Mock.Clock { at: ... }+.
 #
-#   let due = Date.of(2026, 7, 30).try           # Date
-#   due.weekday.name                             # "Thursday"
-#   (due + 10.day).iso                          # "2026-08-09"
-#   (due + 1.month).iso                         # "2026-08-30"
-#   Time.now().iso                            # e.g. "14:03:00"
+# Zones are fixed offsets: UTC, an explicit one such as +02:00+, or the
+# offset this machine's zone has at a given instant. Named IANA zones and
+# their daylight-saving rules are not modeled. +Time.now()+ gets the right
+# offset for the present moment, but nothing here can say what the offset
+# will be at some future local time.
 #
-# Anything that reads the clock is replaceable: `Time.Clock` is a capability,
-# and `with Time.Clock = Mock.Clock { at: ... }` pins it for a block.
-#
-# Zones are fixed offsets: UTC, an explicit `+02:00`, or whatever this
-# machine's zone resolves to at a given instant. Named IANA zones and their
-# DST rules are not modeled: `Time.now()` asks the host for the offset in
-# effect at that moment, so it is right now, but it cannot say what the offset
-# WILL be for some future local time.
-#
-# Each type has its own file: Date and Weekday in date.kex, DateTime in
-# date_time.kex, Period in period.kex, Duration's operations in duration.kex,
-# and pattern formatting in date_format.kex. This file holds Time, the clock,
-# TimeError, and the calendar arithmetic the others are written on. The
-# records and ADTs stay at file level so `make` blocks, callers, and every
-# module can see them.
+# +Date+ and +Weekday+ are in date.kex, +DateTime+ in date_time.kex, +Period+
+# in period.kex, +Duration+'s functions in duration.kex and pattern
+# formatting in date_format.kex. This file has +Time+, the clock,
+# +TimeError+, and the calendar arithmetic the others use.
 
-# A field out of range, or text that is not a date/time.
+# The error for a date or time field out of range, or for text that is not
+# a date or time.
 type TimeError = InvalidDate(Integer, Integer, Integer)
                | InvalidTime(Integer, Integer, Integer)
                | InvalidFormat(String)
@@ -53,10 +45,10 @@ type TimeError = InvalidDate(Integer, Integer, Integer)
 #
 #   let t = Time.of(14, 3, 0).try
 #   t.iso                  # => "14:03:00"
-#   (t + 2.hour).iso      # => "16:03:00"
+#   (t + 2.hour).iso       # => "16:03:00"
 #
-# Arithmetic wraps within the day: there is no date to carry into. Reach for
-# +DateTime+ when the day rolling over matters.
+# Arithmetic wraps around midnight, since there is no date to carry into.
+# Use +DateTime+ when crossing into the next day matters.
 record Time do
   # The hour, 0 through 23.
   hour : Integer
@@ -71,26 +63,25 @@ record Time do
   nanosecond : Integer
 end
 
-# Building times of day, controlling the clock in tests, and the calendar
-# arithmetic the other time files are written on.
+# Functions for building times of day, the clock capability, and the
+# calendar arithmetic the other time types use.
 module Time do
 
-  # Builds a validated time of day.
+  # Builds a time of day, checking every field.
   #
-  # Every field is range-checked, so a +Time+ you hold is always a real time.
-  # Leap seconds are not modeled, so a second of 60 is rejected.
+  # A second of 60 is rejected, since leap seconds are not modeled.
   #
   # @param hour [Integer] the hour, 0 through 23
   # @param minute [Integer] the minute, 0 through 59
   # @param second [Integer] the second, 0 through 59
-  # @param nanosecond [Integer] the sub-second part, 0 through 999999999; omitted for 0
-  # @return [Result<Time, TimeError>] the time, or why it is not one
+  # @param nanosecond [Integer] the fraction of a second, 0 through 999999999; 0 if omitted
+  # @return [Result<Time, TimeError>] the time, or an +InvalidTime+ error
   #
   # @example
   #   Time.of(14, 3, 0).map { |t| t.iso }   # => Ok("14:03:00")
   #   Time.of(25, 0, 0)                     # => Error(InvalidTime(25, 0, 0))
   #
-  # @example With sub-second precision
+  # @example With a fraction of a second
   #   Time.of(14, 3, 0, 123456789).map { |t| t.iso }
   #   # => Ok("14:03:00.123456789")
   let of(hour: Integer, minute: Integer, second: Integer) -> Result<Time, TimeError> = Time.of(hour, minute, second, 0)
@@ -105,7 +96,7 @@ module Time do
     return Ok(Time { hour: hour, minute: minute, second: second, nanosecond: nanosecond })
   end
 
-  # Midnight, 00:00:00. The start of a day.
+  # Returns midnight, 00:00:00.
   #
   # @return [Time] 00:00:00
   #
@@ -114,23 +105,23 @@ module Time do
   #   (Time.midnight() - 1.second).iso     # => "23:59:59"
   let midnight() -> Time = Time { hour: 0, minute: 0, second: 0, nanosecond: 0 }
 
-  # Builds a time of day from a count of seconds since midnight.
+  # The one-argument form is declared first: the interpreter resolves an
+  # overloaded module function to its last definition regardless of arity,
+  # so a delegating overload placed second would call itself.
+
+  # Builds a time of day from a number of seconds since midnight.
   #
-  # Wraps, so 86400 is midnight again and -1 is 23:59:59, which is what makes
-  # it total where +Time.of+ is fallible.
+  # The count wraps around the day, so 86400 is midnight again and -1 is
+  # 23:59:59. Unlike +Time.of+, it cannot fail.
   #
-  # @param count [Integer] seconds since midnight; wraps outside 0..86399
-  # @param nanosecond [Integer] the sub-second part; omitted for 0
+  # @param count [Integer] seconds since midnight
+  # @param nanosecond [Integer] the fraction of a second; 0 if omitted
   # @return [Time] the time of day
   #
   # @example
   #   Time.fromSecondsSinceMidnight(50580).iso   # => "14:03:00"
   #   Time.fromSecondsSinceMidnight(86400).iso   # => "00:00:00"
   #   Time.fromSecondsSinceMidnight(-1).iso      # => "23:59:59"
-  #
-  # Declared before the two-argument form: the interpreter resolves an
-  # overloaded module function to its LAST definition regardless of arity, so
-  # a delegating overload has to come first or it recurses into itself.
   let fromSecondsSinceMidnight(count: Integer) -> Time = Time.fromSecondsSinceMidnight(count, 0)
 
   let fromSecondsSinceMidnight(count: Integer, nanosecond: Integer) -> Time do
@@ -138,10 +129,11 @@ module Time do
     return Time { hour: total / 3600, minute: total.modulo(3600) / 60, second: total.modulo(60), nanosecond: nanosecond }
   end
 
-  # Parses an ISO 8601 time of day.
+  # Parses an ISO 8601 time of day: +14:03+, +14:03:00+ or
+  # +14:03:00.123456789+.
   #
-  # Accepts +14:03+, +14:03:00+, or +14:03:00.123456789+. Anything else is
-  # +InvalidFormat+.
+  # Each field must have two digits. Anything else is an +InvalidFormat+
+  # error, and an out-of-range field is +InvalidTime+.
   #
   # @param text [String] the text to parse
   # @return [Result<Time, TimeError>] the time, or why it could not be read
@@ -162,41 +154,43 @@ module Time do
     return Time.of(hour, minute, second, nanosecond)
   end
 
-  # The current time of day, in this machine's zone.
+  # Returns the current time of day in this machine's zone.
   #
-  # Reads +Time.Clock+ like everything else here does, so it is pinned by
-  # replacing that capability in a test.
+  # It reads +Time.Clock+, so a test can fix it by replacing that capability.
   #
   # @return [Time] the current time of day
   #
   # @example
-  #   Time.now().iso   # => "14:03:00"
+  #   Time.now().iso   # such as "14:03:00"
   foul now() -> Time do
     let moment = DateTime.now()
     return moment.time
   end
 
-  # The current time of day in UTC, whatever this machine's zone is.
+  # Returns the current time of day in UTC.
   #
   # @return [Time] the current UTC time of day
   #
   # @example
-  #   Time.utcNow().iso   # => "12:03:00"
+  #   Time.utcNow().iso   # such as "12:03:00"
   foul utcNow() -> Time do
     let moment = DateTime.utcNow()
     return moment.time
   end
 
-  # Parses an ISO 8601 zone designator into an offset.
+  # Parses an ISO 8601 zone designator, such as +Z+, +02:00+ or -05:30, into
+  # an offset from UTC.
   #
-  # Accepts +Z+, ++02:00+, +-05:30+, or the empty string (all meaning UTC for
-  # the first and last).
+  # +Z+ and the empty string both mean UTC. Otherwise the text must be a sign
+  # and two-digit hours and minutes, separated by a colon.
   #
   # @param text [String] the zone designator
-  # @return [Result<Duration, TimeError>] the offset, or why it could not be read
+  # @return [Result<Duration, TimeError>] the offset, or an +InvalidFormat+
+  #   error
   #
   # @example
   #   Time.parseOffset("+02:00").map { |d| d.wholeSeconds }   # => Ok(7200)
+  #   Time.parseOffset("-05:30").map { |d| d.wholeSeconds }   # => Ok(-19800)
   #   Time.parseOffset("Z").map { |d| d.wholeSeconds }        # => Ok(0)
   let parseOffset(text: String) -> Result<Duration, TimeError> do
     return Ok(Duration.zero()) if text.empty? || text == "Z"
@@ -212,25 +206,23 @@ module Time do
     return Ok(Duration.utcOffset(hours, minutes))
   end
 
-  # The clock: the one place the current instant comes from.
+  # The clock, which every function that needs the current instant reads.
   #
-  # Anything that asks what time it is (`Time.now`, `Date.today`,
-  # `DateTime.utcNow`) reads this, so replacing it replaces the whole
-  # calendar. It is a capability, so the replacement is for a lexical region:
-  # it reaches every call made from the region and every process spawned in
-  # it, it nests, and it cannot outlive its block. This is what makes code
-  # that calls `Date.today()` testable:
+  # +Time.now+, +Date.today+ and +DateTime.utcNow+ all read it, so replacing
+  # it changes what all of them see. The replacement applies to a block: it
+  # reaches every call made inside the block and every process started there,
+  # it can be nested, and it ends with the block. That makes code that calls
+  # +Date.today()+ testable:
   #
   #   with Time.Clock = Mock.Clock { at: DateTime.parse("2026-07-30T14:03:00Z").try } do
-  #     Date.today().iso   # "2026-07-30", always
+  #     Date.today().iso   # always "2026-07-30"
   #   end
   #
-  # +now+ is the whole interface. Its answer carries the zone as its offset,
-  # so one member covers both ambient inputs: what time it is, and where.
-  # +Mock.Clock+ is the ready-made stand-in; any record that implements +now+
-  # is one too.
+  # +now+ is its only function. The instant it returns carries the local
+  # offset, so it also says which zone the machine is in. +Mock.Clock+ is a
+  # ready-made replacement, and any record that implements +now+ can be one.
   capability Clock do
-    # The current instant, in this machine's zone as it stands right now.
+    # Returns the current instant, with this machine's current UTC offset.
     #
     # @return [DateTime] the current instant
     foul now() -> DateTime do
@@ -238,8 +230,10 @@ module Time do
     end
   end
 
-  # The civil instant +nanos+ after the Unix epoch, in this machine's zone as
-  # it stands at that instant. Foul because the zone is ambient.
+  # Returns the instant +nanos+ nanoseconds after the Unix epoch, with the
+  # offset this machine's zone has at that instant.
+  #
+  # It is +foul+ because the machine's zone is outside the program.
   #
   # @param nanos [Integer] nanoseconds since the Unix epoch
   # @return [DateTime] that instant, in the local zone
@@ -249,17 +243,18 @@ module Time do
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, offset), nanos - epochSeconds * 1000000000)
   end
 
-  # Nanoseconds since the Unix epoch for a civil datetime. A plain function
-  # rather than a `DateTime` function: on BEAM a function named `epochNanos`
-  # flattens onto the same name as the `DateTime.epochNanos()` module
-  # function, and the arity-0 one wins: silently, answering for the host
-  # clock instead of for `moment`.
+  # A plain function, not a DateTime function: on BEAM a function named
+  # epochNanos would share its name with the DateTime.epochNanos() module
+  # function, and the arity-0 one would win, reading the host clock instead
+  # of moment.
+
+  # Returns the number of nanoseconds from the Unix epoch to +moment+.
   let nanosOf(moment: DateTime) -> Integer do
     return moment.epochSeconds * 1000000000 + moment.time.nanosecond
   end
 
-  # Public because the `make` blocks below live at file level and reach them
-  # by qualification; they are equally useful on their own.
+  # The functions below are public because the make blocks at file level call
+  # them, and they are useful on their own too.
 
   # Returns +true+ when +year+ is a leap year in the proleptic Gregorian
   # calendar.
@@ -277,35 +272,32 @@ module Time do
     return year.dividesBy?(400)
   end
 
-  # The number of days in a month.
+  # Returns the number of days in a month of a given year.
   #
-  # Year first, matching `Date.of(year, month, day)` and every other
-  # date-shaped signature in this file.
+  # The year comes first, as in +Date.of(year, month, day)+. A month outside
+  # 1 through 12 gives +Error(InvalidDate(year, month, 1))+.
   #
   # @param year [Integer] the calendar year, which decides February's length
   # @param month [Integer] the month, 1 through 12
-  # @return [Result<Integer, TimeError>] the day count, or why the month is not one
+  # @return [Result<Integer, TimeError>] the number of days, or an
+  #   +InvalidDate+ error
   #
   # @example
   #   Time.daysInMonth(2024, 2)   # => Ok(29)
   #   Time.daysInMonth(2023, 2)   # => Ok(28)
   #   Time.daysInMonth(2026, 13)  # => Error(InvalidDate(2026, 13, 1))
-  #
-  # Returns +Error(InvalidDate(year, month, 1))+ when the month is outside
-  # 1 through 12.
   let daysInMonth(year: Integer, month: Integer) -> Result<Integer, TimeError> do
     return Error(InvalidDate(year, month, 1)) if month < 1 || month > 12
     return Ok(Time.daysInValidMonth(year, month))
   end
 
-  # The number of days in a month, with the range check already done.
+  # Returns the number of days in a month that is known to be 1 through 12.
   #
-  # Every caller inside this file has a month it built or validated itself.
-  # Use +daysInMonth+ for a month that came from outside.
+  # Use +daysInMonth+ for a month from outside the program.
   #
   # @param year [Integer] the calendar year
-  # @param month [Integer] the month, assumed to be 1 through 12
-  # @return [Integer] the day count
+  # @param month [Integer] the month, which must be 1 through 12
+  # @return [Integer] the number of days
   #
   # @example
   #   Time.daysInValidMonth(2024, 2)   # => 29
@@ -317,11 +309,11 @@ module Time do
     return 28
   end
 
-  # The number of days from 1970-01-01 to a calendar date, negative before it.
+  # Returns the number of days from 1970-01-01 to a calendar date, negative
+  # for earlier dates.
   #
-  # Howard Hinnant's civil-calendar algorithms: exact across the whole
-  # proleptic Gregorian range, and they need only truncating integer
-  # division: the semantics Kex's `/` already has.
+  # It uses Howard Hinnant's algorithms, which are exact across the whole
+  # proleptic Gregorian calendar.
   #
   # @param year [Integer] the calendar year
   # @param month [Integer] the month, 1 through 12
@@ -341,8 +333,8 @@ module Time do
     return era * 146097 + doe - 719468
   end
 
-  # The calendar date a count of days since 1970-01-01 lands on. The inverse
-  # of +daysFromCivil+.
+  # Returns the date a number of days after 1970-01-01; the inverse of
+  # +daysFromCivil+.
   #
   # @param epochDay [Integer] days since the Unix epoch
   # @return [Date] the calendar date
@@ -364,7 +356,7 @@ module Time do
     return Date { year: year, month: month, day: day }
   end
 
-  # The weekday a count of days since 1970-01-01 falls on.
+  # Returns the weekday of the date a number of days after 1970-01-01.
   #
   # @param epochDay [Integer] days since the Unix epoch
   # @return [Weekday] the day of the week
@@ -382,9 +374,9 @@ module Time do
     return Sunday
   end
 
-  # The ISO number of a weekday: Monday is 1, Sunday is 7.
+  # Returns the ISO number of a weekday: 1 for Monday through 7 for Sunday.
   #
-  # +weekday.number+ is the readable way to ask.
+  # +weekday.number+ reads better.
   #
   # @param weekday [Weekday] the day of the week
   # @return [Integer] its ISO number, 1 through 7
@@ -399,9 +391,9 @@ module Time do
   let weekdayNumber(@Saturday) -> Integer = 6
   let weekdayNumber(@Sunday) -> Integer = 7
 
-  # The English name of a weekday.
+  # Returns the English name of a weekday.
   #
-  # +weekday.name+ is the readable way to ask.
+  # +weekday.name+ reads better.
   #
   # @param weekday [Weekday] the day of the week
   # @return [String] its English name
@@ -417,7 +409,7 @@ module Time do
   let weekdayName(@Sunday) -> String = "Sunday"
 
   make Weekday do
-    # This weekday's ISO number: Monday is 1, Sunday is 7.
+    # Returns the weekday's ISO number: 1 for Monday through 7 for Sunday.
     #
     # @return [Integer] the ISO number, 1 through 7
     #
@@ -426,7 +418,7 @@ module Time do
     #   Sunday.number   # => 7
     let number -> Integer = Time.weekdayNumber(this)
 
-    # This weekday's English name.
+    # Returns the weekday's English name.
     #
     # @return [String] the name
     #
@@ -447,14 +439,14 @@ module Time do
     let weekend? -> Bool = Time.weekdayNumber(this) > 5
   end
 
-  # Renders a +TimeError+ as a sentence for the user.
+  # A plain function, not an Errorable implementation: a message function here
+  # would share BEAM's dispatcher with the message field of PatternError and
+  # break it (spec/record_field_method_collision.kex).
+
+  # Returns a +TimeError+ as a sentence for a person to read.
   #
-  # A plain function rather than an `Errorable` implementation: a `message`
-  # function here joins the same BEAM dispatcher as ParseError's `message`
-  # FIELD and breaks it (spec/record_field_method_collision.kex).
-  #
-  # @param error [TimeError] the failure to describe
-  # @return [String] the message to show
+  # @param error [TimeError] the error to describe
+  # @return [String] the message
   #
   # @example
   #   Time.errorMessage(InvalidDate(2026, 13, 1))
@@ -476,14 +468,9 @@ module Time do
 
   let formatTime(value: Time) -> String = "${Time.pad2(value.hour)}:${Time.pad2(value.minute)}:${Time.pad2(value.second)}${Time.formatFraction(value.nanosecond)}"
 
-  # Fractional seconds, in the 3/6/9-digit groupings ISO 8601 output
-  # conventionally uses, whichever is the shortest that loses nothing. A whole
-  # second renders no fraction at all, so `14:03:00` is unchanged.
-  #
-  # Without this the nanosecond field was kept on the value and compared, but
-  # never rendered: `Time.parse("14:03:00.5")` and `Time.parse("14:03:00")`
-  # produced different values that printed identically, and every parse/format
-  # round-trip silently dropped sub-second precision.
+  # Formats a fraction of a second for ISO 8601 output: 3, 6 or 9 digits,
+  # whichever is the shortest that loses nothing, with a leading +.+. A
+  # fraction of 0 gives +""+, so +14:03:00+ has no fraction.
   let formatFraction(nanosecond: Integer) -> String do
     return "" if nanosecond == 0
     return ".${Time.padTo(nanosecond / 1000000, 3)}" if nanosecond.dividesBy?(1000000)
@@ -491,7 +478,7 @@ module Time do
     return ".${Time.padTo(nanosecond, 9)}"
   end
 
-  # ±HH:MM, the shape an ISO 8601 offset takes. UTC renders as "Z".
+  # Formats an offset from UTC as ISO 8601 +±HH:MM+, or +Z+ for UTC.
   let formatOffset(offset: Duration) -> String do
     let total = offset.wholeSeconds
     return "Z" if total == 0
@@ -511,9 +498,11 @@ module Time do
     return DateTime { date: moment.date, time: time, offset: moment.offset }
   end
 
-  # A Duration holds Float seconds, so it is rounded to the nanosecond, the
-  # finest unit it names, before truncating: 7.nanosecond is 7e-9 seconds,
-  # and dividing that by 1e-9 directly gives 6.999... and so 6.
+  # Returns how many whole +unit+s fit in +seconds+.
+  #
+  # Both are rounded to the nanosecond first, since a +Duration+ holds Float
+  # seconds: 7 nanoseconds is 7e-9 seconds, and dividing that by 1e-9 gives
+  # 6.999..., which would truncate to 6.
   let truncatedBy(seconds: Float, unit: Float) -> Integer do
     let nanos = (seconds * 1000000000.0).round
     let unitNanos = (unit * 1000000000.0).round
@@ -525,9 +514,8 @@ module Time do
     return "${value}"
   end
 
-  # Left-pad with zeros to a fixed width. A value already that wide is left
-  # alone rather than truncated: losing digits would be worse than a field
-  # one character too long.
+  # Pads +value+ with leading zeros to +width+ digits. A wider value is left
+  # as it is, not cut.
   let padTo(value: Integer, width: Integer) -> String do
     var text = "${value}"
     while text.count < width do
@@ -536,16 +524,16 @@ module Time do
     return text
   end
 
-  # Years keep four digits where they fit; ISO 8601 has no fixed spelling
-  # beyond that, so wider years render as-is.
+  # Formats a year with at least four digits. ISO 8601 sets no width for
+  # other years, so they are written as they are.
   let padYear(value: Integer) -> String do
     return "${value}" if value < 0 || value > 9999
     return Time.padTo(value, 4)
   end
 
-  # Digits, with the failure reported against the WHOLE input rather than the
-  # fragment that failed: `Time.parse("2:03 pm")` should complain about
-  # "2:03 pm", not about "03 pm".
+  # Reads +fragment+ as ASCII digits. On failure, the error names +whole+,
+  # the full input: +Time.parse("2:03 pm")+ should report "2:03 pm", not
+  # "03 pm".
   let digitsIn(fragment: String, whole: String) -> Result<Integer, TimeError> do
     match Time.digitsToInteger(fragment) do
       Ok(value) => return Ok(value)
@@ -553,14 +541,15 @@ module Time do
     end
   end
 
-  # The same, for a field ISO 8601 writes at a fixed width: "14", never "2".
+  # Reads +fragment+ as exactly +width+ ASCII digits, as +digitsIn+ does.
+  # ISO 8601 fields have a fixed width: "14", never "2".
   let fixedDigitsIn(fragment: String, width: Integer, whole: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(whole)) if fragment.count != width
     return Time.digitsIn(fragment, whole)
   end
 
-  # ASCII digits only: Integer.parse would also take a sign, and that does
-  # not belong inside an ISO 8601 field.
+  # Reads text of ASCII digits only. Unlike +Integer.parse+, it rejects a
+  # sign, which has no place inside an ISO 8601 field.
   let digitsToInteger(text: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(text)) if text.empty? || text.chars.any? { |c| !c.in?('0'..'9') }
     match Integer.parse(text) do
@@ -569,8 +558,8 @@ module Time do
     end
   end
 
-  # ".5" is 500000000ns: the digits are padded out to nanosecond scale.
-  # The caller has seen the ".", so an empty fraction is malformed, not zero.
+  # Reads the digits after a decimal point as nanoseconds: "5" is 500000000.
+  # Empty text, or more than nine digits, is an +InvalidFormat+ error.
   let parseFraction(text: String, whole: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(whole)) if text.empty? || text.count > 9
     var digits = text
@@ -580,8 +569,8 @@ module Time do
     return Time.digitsIn(digits, whole)
   end
 
-  # Splits "14:03:00+02:00" into its time and offset halves. A missing offset
-  # reads as UTC, matching what a zero offset formats back to.
+  # Splits text such as "14:03:00+02:00" into the time and the offset. With
+  # no offset, the offset part is "Z", for UTC.
   let splitOffset(text: String) -> [String] do
     # Only the final "Z" is the designator: "...00ZZ" leaves "...00Z" to fail
     # as a time rather than quietly dropping the extra one.
@@ -603,8 +592,8 @@ make Time, implement: Inspectable, Showable do
   # @return [String] the rendered time
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
 
-  # Renders the time in ISO form, so interpolation and +IO.printLine+ show
-  # +14:03:00+.
+  # Renders the time in ISO 8601 form, which is what interpolation and
+  # +IO.printLine+ show.
   #
   # @return [String] the ISO 8601 time
   #
@@ -612,7 +601,7 @@ make Time, implement: Inspectable, Showable do
   #   "starts at ${Time.of(14, 3, 0).try}"   # => "starts at 14:03:00"
   let showValue -> String = this.iso
 
-  # Seconds from midnight to this time of day, ignoring the nanosecond field.
+  # Returns the number of whole seconds from midnight to this time of day.
   #
   # @return [Integer] seconds since midnight
   #
@@ -632,20 +621,19 @@ make Time, implement: Inspectable, Showable do
   # Returns +true+ when this time of day is later than +other+.
   #
   # @param other [Time] the time to compare against
-  # @return [Bool] +true+ when this time comes second
+  # @return [Bool] +true+ when this time comes after +other+
   #
   # @example
   #   Time.of(15, 0, 0).try.after?(Time.of(14, 3, 0).try)   # => true
   let after?(other: Time) -> Bool = this.compareTo(other) == Greater
 
-  # Advances the time of day by a span, wrapping within the day.
+  # Returns the time of day +span+ later, wrapping around midnight.
   #
-  # A Time has no date to carry into, so 23:00 + 2.hour is 01:00. Reach for
-  # +DateTime+ when the day rolling over is something you need to see.
+  # A +Time+ has no date to carry into, so 23:00 plus 2 hours is 01:00. Use
+  # +DateTime+ to see the day change. Fractions of a second carry into the
+  # seconds.
   #
-  # Sub-second spans count: the nanoseconds carry into the seconds.
-  #
-  # @param span [Duration] the elapsed span to add
+  # @param span [Duration] the span to add
   # @return [Time] the later time of day
   #
   # @example
@@ -658,7 +646,7 @@ make Time, implement: Inspectable, Showable do
     return Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + carry, nanos - carry * 1000000000)
   end
 
-  # Moves the time of day back by a span, wrapping within the day.
+  # Returns the time of day +span+ earlier, wrapping around midnight.
   #
   # @param span [Duration] the elapsed span to subtract
   # @return [Time] the earlier time of day
@@ -667,7 +655,7 @@ make Time, implement: Inspectable, Showable do
   #   (Time.midnight() - 1.second).iso   # => "23:59:59"
   let -(span: Duration) -> Time = this + span.negated
 
-  # The time of day +count+ seconds later, wrapping within the day.
+  # Returns the time of day +count+ seconds later, wrapping around midnight.
   #
   # @param count [Integer] how many seconds to add
   # @return [Time] the shifted time of day
@@ -676,7 +664,7 @@ make Time, implement: Inspectable, Showable do
   #   Time.of(14, 3, 0).try.addSeconds(60).iso   # => "14:04:00"
   let addSeconds(count: Integer) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + count, this.nanosecond)
 
-  # The time of day +count+ minutes later, wrapping within the day.
+  # Returns the time of day +count+ minutes later, wrapping around midnight.
   #
   # @param count [Integer] how many minutes to add
   # @return [Time] the shifted time of day
@@ -685,7 +673,7 @@ make Time, implement: Inspectable, Showable do
   #   Time.of(14, 3, 0).try.addMinutes(30).iso   # => "14:33:00"
   let addMinutes(count: Integer) -> Time = this.addSeconds(count * 60)
 
-  # The time of day +count+ hours later, wrapping within the day.
+  # Returns the time of day +count+ hours later, wrapping around midnight.
   #
   # @param count [Integer] how many hours to add
   # @return [Time] the shifted time of day
@@ -694,12 +682,12 @@ make Time, implement: Inspectable, Showable do
   #   Time.of(23, 0, 0).try.addHours(2).iso   # => "01:00:00"
   let addHours(count: Integer) -> Time = this.addSeconds(count * 3600)
 
-  # Elapsed time from this time of day to +other+, within the same day.
+  # Returns the time from this time of day to +other+ on the same day.
   #
-  # Negative when +other+ is earlier. Sub-second precision is kept.
+  # It is negative when +other+ is earlier, and keeps fractions of a second.
   #
   # @param other [Time] the time to measure to
-  # @return [Duration] the elapsed span
+  # @return [Duration] the span between them
   #
   # @example
   #   Time.of(14, 3, 0).try.until(Time.of(15, 3, 0).try).wholeMinutes   # => 60
@@ -709,8 +697,8 @@ make Time, implement: Inspectable, Showable do
     return (whole + fraction).second
   end
 
-  # The time of day as ISO 8601 text, with fractional seconds only when they
-  # are non-zero.
+  # Returns the time of day as ISO 8601 text, with a fraction of a second only
+  # when it is not zero.
   #
   # @return [String] the ISO 8601 time
   #
@@ -719,7 +707,7 @@ make Time, implement: Inspectable, Showable do
   #   Time.of(14, 3, 0, 123456789).try.iso   # => "14:03:00.123456789"
   let iso -> String = Time.formatTime(this)
 
-  # Orders this time of day against another, nanoseconds included.
+  # Compares this time of day with +other+, nanoseconds included.
   #
   # @param other [Time] the time to compare against
   # @return [Ordering] +Less+, +Equal+ or +Greater+
@@ -737,8 +725,8 @@ make Time, implement: Inspectable, Showable do
 end
 
 make TimeError, implement: Showable do
-  # Shows the failure as the sentence +Time.errorMessage+ writes, so
-  # +"${e}"+ explains itself rather than printing the constructor.
+  # Renders the error as the sentence +Time.errorMessage+ gives, so
+  # +"${e}"+ reads as a message.
   #
   # @return [String] the message
   #

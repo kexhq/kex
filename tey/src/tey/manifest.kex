@@ -51,33 +51,33 @@ record Plugin do
   pluginGenerators : [PluginOperation] = []
 end
 
-# A project-specific command, run as `tey <name>`. Without these every package
-# grows a Makefile or a bin/ script beside package.kex for "the way you run the
-# linter", which the manifest — the one file a newcomer reads — says nothing
-# about.
+# A project-specific command, run as +tey <name>+. It puts tasks such as
+# running the linter in the manifest, where a newcomer looks, instead of a
+# Makefile or a +bin/+ script.
 #
-# A name is one word, grouped with a colon: `db:migrate`, `assets:build`.
+# A name is one word, optionally grouped with a colon: +db:migrate+,
+# +assets:build+.
 record Command do
-  # Prefixed, like Dependency's fields, because a bare `run` field is read as
-  # OptionConfig's `run` method at every call site that has not pinned the
-  # receiver's type — `command.run` typechecked as "`run` expects 2 arguments,
-  # got 1" — and a bare `name` loses the same way to Weekday's.
+  # Prefixed, like Dependency's fields, because a bare +run+ field is read as
+  # OptionConfig's +run+ function at every call site that has not pinned the
+  # receiver's type (+command.run+ failed with "+run+ expects 2 arguments,
+  # got 1"), and a bare +name+ clashes with Weekday's in the same way.
   commandName : String
-  # The command line. A first word ending in `.kex` is run through the selected
-  # toolchain with this package's source roots already in place; anything else
-  # is handed to `sh -c`, so a pipeline or an `&&` works.
+  # The command line. When the first word ends in +.kex+, that file is run
+  # with the selected toolchain and this package's source roots. Anything else
+  # goes to +sh -c+, so pipelines and +&&+ work.
   commandRun : String
   commandDescription : String = ""
 end
 
-# A toolchain package: the compiler executable plus the runtime and standard
-# library it was built with, installed together so the three can never drift
-# apart. Kex's own `package.kex` is the one that declares it — and a reader
-# that did not know the declaration could not run any tey command from the
-# compiler's own checkout, which is where it is most used.
+# A toolchain package: the compiler executable with the runtime and standard
+# library it was built with, installed together so they always match. Kex's
+# own +package.kex+ declares one, so the reader must understand it for any
+# tey command to work in the compiler's checkout.
 #
-# Fields are prefixed like Command's: a bare `compiler` would be read as a
-# method on an unpinned receiver before it is read as a field here.
+# Fields are prefixed, as in +Command+, because a bare +compiler+ would be
+# read as a function call on a receiver of unknown type before it is read as
+# a field here.
 record Toolchain do
   toolchainName : String
   toolchainCompiler : String = ""
@@ -88,25 +88,22 @@ end
 record ManifestPackage do
   name : String
   version : String = "0.1.0"
-  # One line saying what the package is for. Optional, because a manifest that
-  # cannot be written until its author has phrased the sentence is a manifest
-  # nobody writes — but it is what a package index or a `tey list` has to show,
-  # and a name alone never says enough.
+  # One line saying what the package is for. It is optional, but it is what a
+  # package index or +tey list+ shows next to the name.
   description : String = ""
   license : String = ""
   packageKexRequirement : String = ">= 0.3.0"
-  # The Erlang/OTP a package needs. Optional — absent means "no opinion" —
-  # and worth setting when the package reaches for `BEAM.*` interop that
-  # arrived in a particular release. The floor actually enforced is the higher
-  # of this and the toolchain's own (see Tey.Toolchain.runtimeOtpFloor): a
-  # package cannot ask for an OTP older than the one that compiled the runtime
-  # beams it is about to load.
+  # The Erlang/OTP version the package needs, or empty for no requirement.
+  # Set it when the package uses +BEAM.*+ interop added in a particular OTP
+  # release. The version enforced is the higher of this and the toolchain's
+  # own minimum (see +Tey.Toolchain.runtimeOtpFloor+), since the runtime beams
+  # cannot load on an older OTP than the one that compiled them.
   packageOtpRequirement : String = ""
   entrypoint : String = "src/main.kex"
-  # The folders at the package's top that hold its modules, when it keeps
-  # them there instead of under `src/`: `sources(["app", "config", "db"])`
-  # makes `App.Models.User` the file `app/models/user.kex`. Empty for the
-  # usual layout, where `src/` holds everything.
+  # The top-level folders that hold the package's modules, when they are not
+  # under +src/+. With +sources(["app", "config", "db"])+, +App.Models.User+
+  # is the file +app/models/user.kex+. Empty for the usual layout, where
+  # +src/+ holds everything.
   sourceFolders : [String] = []
   manifestDependencies : [Dependency] = []
   targets : [Target] = []
@@ -116,32 +113,32 @@ record ManifestPackage do
   plugins : [Plugin] = []
 end
 
-# The command names Tey answers itself. A `command(...)` may not take one of
-# them: `tey test` must mean the same thing in every checkout, so a manifest
-# that tries to redefine it is an error at read time rather than a silent
-# shadow. Kept here because the READER is what enforces it, and Tey.Cli cannot
-# be asked: it is built on this module, so reading the list off its declared
-# commands would be a cycle. The two have to be kept in step by hand — one
-# `.command(...)` in Tey.Cli, one name here (the first word is enough: `kex`
-# covers every `kex ...` subcommand).
-# Whether a name can be a source folder: one directory at the package's top,
-# by its plain name. Not a path — its name is the first part of every module
-# in it — and nothing hidden.
+# Returns +true+ when +name+ can be a source folder: a plain, non-hidden
+# directory name at the package's top, not a path, since the name becomes the
+# first part of every module in it.
 let sourceFolder?(name: String) -> Bool do
   return !name.empty? && !name.contains?("/") && !name.startsWith?(".")
 end
 
+# The command names Tey handles itself, which a +command(...)+ may not take.
+# +tey test+ must mean the same in every checkout, so a manifest that
+# redefines one fails to read.
+#
+# The list lives here because the reader enforces it; +Tey.Cli+ is built on
+# this module, so taking the list from its commands would be a cycle. Keep the
+# two in step by hand: one +.command(...)+ in +Tey.Cli+, one name here. The
+# first word is enough, so +kex+ covers every +kex ...+ subcommand.
 let reservedCommands -> [String] do
   return ["add", "build", "clean", "docs", "generate", "help", "init", "install",
           "kex", "list", "local", "new", "plugin", "run", "setup", "test",
           "uninstall", "update", "upgrade"]
 end
 
-# Reads a `package.kex`.
+# Reads the text of a +package.kex+ into a +ManifestPackage+, or returns the
+# first problem found.
 #
-# The compiler parses the manifest. Tey only interprets the resulting Kex AST,
-# so comments, multiline calls, strings, and future grammar fixes cannot drift
-# from the language that actually compiles package.kex.
+# The text is parsed with +Kex.AST+, so the manifest follows the same grammar
+# as any Kex file, comments and multi-line calls included.
 let read(text: String) -> ManifestPackage or! String do
   var name = ""
   var version = "0.1.0"
@@ -355,9 +352,9 @@ let read(text: String) -> ManifestPackage or! String do
                      manifestWorkspace: workspace, plugins: plugins })
 end
 
-# Reads a virtual-workspace manifest: a package.kex whose root is `workspace`
-# rather than a publishable package. Package-root workspaces are returned on
-# ManifestPackage.manifestWorkspace by `read` above.
+# Reads a virtual-workspace manifest: a +package.kex+ whose root is
+# +workspace+, with no package of its own. For a package that is also a
+# workspace root, +read+ returns the workspace in +manifestWorkspace+.
 let readWorkspace(text: String) -> ManifestWorkspace or! String do
   let program = match Kex.AST.parse(text, "package.kex") do
     Ok(parsed) => parsed
@@ -373,6 +370,9 @@ let readWorkspace(text: String) -> ManifestWorkspace or! String do
   end
 end
 
+# Reads the text of a +package.local.kex+: the +local("name", path: "...")+
+# overrides that point a dependency at a local checkout. Returns an error for
+# anything else in the file, or for a package overridden twice.
 let readLocal(text: String) -> [LocalOverride] or! String do
   let program = match Kex.AST.parse(text, "package.local.kex") do
     Ok(parsed) => parsed

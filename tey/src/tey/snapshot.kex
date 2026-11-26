@@ -3,9 +3,13 @@ module Tey.Snapshot
 using Tey.Manifest, only: [ManifestPackage]
 using Tey.Plugin, only: [approved?]
 
-# Turns a path dependency into an immutable, content-addressed cache entry.
-# The declared path remains in the lockfile for explanation; builds use the
-# snapshot identified by `sha256`, never the live directory.
+# Copies a path dependency into the cache as an immutable snapshot named by
+# its content digest, and returns its lockfile entry.
+#
+# The lockfile keeps the declared path for reference, but builds use the
+# snapshot named by +sha256+, never the live directory. Fails when the
+# directory is missing, its +package.kex+ cannot be read or names another
+# package, or a symbolic link in it is broken or points outside it.
 foul create(name: String, declaredPath: String,
             declaringRoot: String) -> Tey.Lockfile.Dependency or! String do
   let source = if FS.Path.absolute?(declaredPath)
@@ -44,10 +48,13 @@ foul create(name: String, declaredPath: String,
   return Ok(snapshot)
 end
 
+# Returns the cache directory of a dependency's snapshot.
 foul cachedPath(dependency: Tey.Lockfile.Dependency) -> String do
   return FS.Path.join(Tey.Cache.root, "snapshots", dependency.sha256)
 end
 
+# Returns the snapshot directory of +dependency+ after checking that it is
+# in the cache and that its content still matches the locked +sha256+.
 foul verify(dependency: Tey.Lockfile.Dependency) -> String or! String do
   let path = Tey.Snapshot.cachedPath(dependency)
   return Error("${dependency.name} is not present in the snapshot cache") if !FS.Directory.directory?(path)
@@ -56,13 +63,14 @@ foul verify(dependency: Tey.Lockfile.Dependency) -> String or! String do
   return Error("content hash mismatch for ${dependency.name}: expected ${dependency.sha256}, got ${actual}")
 end
 
-# The files a snapshot of `root` holds, relative to it: everything but VCS
-# metadata, build output and `.teyignore` matches.
+# Returns the files a snapshot of +root+ holds, relative to it and sorted:
+# everything except VCS metadata, build output, +package.local.kex+,
+# +tey.lock+ and paths matched by +.teyignore+.
 foul sourceFiles(root: String) -> [String] do
   return Tey.Snapshot.includedFiles(root)
 end
 
-# The content digest a snapshot of `root` is published under.
+# Returns the content digest a snapshot of +root+ is published under.
 foul contentDigest(root: String) -> String or! String do
   return Tey.Snapshot.digest(root)
 end

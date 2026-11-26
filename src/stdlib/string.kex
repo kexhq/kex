@@ -1,12 +1,11 @@
-# Text. A +String+ is a sequence of Unicode characters, immutable like every
-# other Kex value. Operations that transform text return a new string rather
-# than changing the receiver.
+# Text. A +String+ is an immutable sequence of Unicode characters; functions
+# that transform text return a new string.
 #
 # A +String+ is its own type, not a list of characters. It is +Enumerable+, so
-# +each+, +reduce+, +find+ and friends walk it one +Char+ at a time, and the
-# sequence operations that could reasonably answer in either currency pick the
-# useful one: +take+, +drop+ and +sort+ hand back a +String+, while +first+ and
-# +last+ hand back a +Char+. Use +chars+ to cross over to a real list.
+# +each+, +reduce+ and +find+ walk it one +Char+ at a time. Sequence functions
+# return whichever type is more useful: +take+, +drop+ and +sort+ return a
+# +String+, while +first+ and +last+ return a +Char+. Use +chars+ to get a
+# +[Char]+.
 #
 #   let line = "  Hello, World  "
 #   line.trim.lowerCase.split(", ")   # => ["hello", "world"]
@@ -20,9 +19,9 @@
 make String, implement: Enumerable<Char>, Foldable<Char> do
   # Folds the string from the left, one +Char+ at a time.
   #
-  # This is +String+'s +Enumerable+ primitive: +map+, +filter+, +find+, +any?+
-  # and the rest are defined in terms of it. Reach for it directly when you are
-  # accumulating something that is neither a string nor a list.
+  # +String+'s other +Enumerable+ functions, such as +map+, +find+ and +any?+,
+  # are built on this one. Use it directly to accumulate something that is
+  # neither a string nor a list.
   #
   # @param acc [A] the initial accumulator
   # @param f [A -> Char -> A] combines the accumulator with each character
@@ -35,7 +34,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   #   "banana".reduce({}) do |counts, c|
   #     counts.put(c.string, counts.get(c.string).or(0) + 1)
   #   end
-  #   # => {"a": 3, "b": 1, "n": 2}
+  #   # => { "a": 3, "b": 1, "n": 2 }
   reduce :> A -> (A -> Char -> A) -> A
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this.chars, acc, f)
 
@@ -49,12 +48,10 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   each :> (Char -> Void) -> Void
   let each(f) = this.chars.each(f)
 
-  # Applies +f+ to every character and joins the results back into a +String+.
+  # Applies +f+ to every character and joins the results into a +String+.
   #
-  # This is the string-preserving counterpart of +map+. +map+ comes from
-  # +Enumerable+ and collects into a list, because its type says
-  # +(Char -> B) -> [B]+ and +B+ need not be a +Char+ at all. When you want a
-  # string out, name the operation that produces one.
+  # +map+, from +Enumerable+, returns a list, since its function may return
+  # something other than a +Char+. Use +mapChars+ when you want a string back.
   #
   # @param f [Char -> Char] applied to each character
   # @return [String] the mapped characters, as a string
@@ -73,7 +70,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Returns the characters satisfying +pred+, as a +String+.
   #
-  # @param pred [Char -> Bool] kept when it answers +true+
+  # @param pred [Char -> Bool] a character is kept when this returns +true+
   # @return [String] the matching characters, in order
   #
   # @example Keeping only the digits
@@ -95,12 +92,10 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   uniq :> String
   let uniq = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.uniq(this.chars))
 
-  # A String is its OWN type, not a [Char]: `chars` converts between them.
-  # So the sequence operations below are declared here rather than inherited
-  # from List, and they answer in String's terms: `take`/`drop`/`sort` hand
-  # back a String, while `first`/`last` hand back a Char. The List intrinsics
-  # they delegate to already understand the String representation, so there is
-  # one implementation for both backends.
+  # A String is its own type, not a [Char], so the sequence functions below are
+  # declared here instead of coming from List: `take`/`drop`/`sort` return a
+  # String, `first`/`last` a Char. The List intrinsics they call understand the
+  # String representation.
 
   # Returns the first character, or +None+ when the string is empty.
   #
@@ -110,7 +105,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   #   "hi".first   # => Just('h')
   #   "".first     # => None
   #
-  # @example Testing an initial without risking an empty string
+  # @example Testing the first character of a string that may be empty
   #   "hello".first.map(~upper?).or(false)   # => false
   first :> Char?
   let first = Kex.Intrinsic.String.at(this, 0)
@@ -127,8 +122,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Returns the character at index +i+, counting from 0.
   #
-  # Answers +None+ for an index past either end rather than failing, so it is
-  # safe to index with a computed position.
+  # A negative index counts back from the end, so +-1+ is the last character.
+  # An index past either end returns +None+.
   #
   # @param i [Integer] the 0-based index
   # @return [Char?] the character, or +None+ when out of range
@@ -141,8 +136,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   let get(i: Integer) = Kex.Intrinsic.String.at(this, i < 0 then this.count + i else i)
 
   # Returns the character at index +i+, or +default+ when the index is out of
-  # range. The total form of +get+, for when a missing character has an
-  # obvious stand-in.
+  # range. Negative indices count from the end, as in +get(i)+.
   #
   # @param i [Integer] the 0-based index
   # @param default [Char] used when the index is out of range
@@ -154,8 +148,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   get :> Integer -> Char -> Char
   let get(i, default) = Kex.Intrinsic.String.at(this, i < 0 then this.count + i else i).or(default)
 
-  # Returns the substring addressed by +range+, both ends included. The same
-  # as +slice+ over a range, and what the +s[1..2]+ bracket spelling calls.
+  # Returns the substring addressed by +range+, both ends included. It is
+  # +slice+ over a range, and +s[1..2]+ calls it.
   #
   # @param range [Range<Integer>] the inclusive 0-based index range
   # @return [String] the characters in that range
@@ -170,8 +164,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   get :> Range<Integer> -> String
   let get(range: Range<Integer>) = this.slice(range)
 
-  # Returns the first +n+ characters. A short string is returned whole, so
-  # +take+ never fails on an +n+ that is too large.
+  # Returns the first +n+ characters, or the whole string when it is shorter
+  # than +n+.
   #
   # @param n [Integer] how many characters to keep
   # @return [String] the leading +n+ characters
@@ -186,8 +180,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   take :> Integer -> String
   let take(n) = Kex.Intrinsic.String.take(this, n)
 
-  # Returns everything after the first +n+ characters. The complement of
-  # +take+: +s.take(n) + s.drop(n)+ is +s+.
+  # Returns everything after the first +n+ characters, so
+  # +s.take(n) + s.drop(n)+ is +s+.
   #
   # @param n [Integer] how many characters to skip
   # @return [String] the remaining characters
@@ -205,12 +199,11 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   # Returns the substring of +length+ characters starting at index +start+,
   # counting from 0.
   #
-  # Characters, not bytes: the indices count what +count+ counts. The window
-  # is clamped rather than refused, the way +take+ and +drop+ already behave:
-  # a start past the end answers +""+, a length running past the end stops at
-  # the end, and a negative length answers +""+. A negative start counts back
-  # from the end, as in Ruby: +-1+ is the last character, and a start still
-  # before the beginning answers +""+.
+  # Indices count characters, not bytes. Out-of-range values are clamped, as
+  # in +take+ and +drop+: a start past the end or a negative length returns
+  # +""+, and a length running past the end stops there. A negative start
+  # counts back from the end, as in Ruby, so +-1+ is the last character; a
+  # start that is still before the beginning returns +""+.
   #
   # @param start [Integer] the 0-based index of the first character
   # @param length [Integer] how many characters to keep
@@ -232,10 +225,10 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Returns the substring addressed by +range+, both ends included.
   #
-  # The bounds are clamped like the start/length form above: a range running
-  # past either end is trimmed to the string, and a range whose start lies
-  # past its end answers +""+. Either end may count back from the end, as
-  # Ruby's does: +1..-1+ is everything after the first.
+  # Bounds are clamped as in the start/length form: a range running past the
+  # end is trimmed to the string, and a range whose start lies past its end
+  # returns +""+. Either bound may be negative to count back from the end, as
+  # in Ruby, so +1..-1+ is everything after the first character.
   #
   # @param range [Range<Integer>] the inclusive 0-based index range
   # @return [String] the characters in that range
@@ -256,10 +249,9 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
     this.slice(from, to - from + 1)
   end
 
-  # Returns the characters that do NOT satisfy +pred+: the complement of
-  # +filter+.
+  # Returns the characters that do not satisfy +pred+, as a +String+.
   #
-  # @param pred [Char -> Bool] dropped when it answers +true+
+  # @param pred [Char -> Bool] a character is dropped when this returns +true+
   # @return [String] the characters that failed the predicate
   #
   # @example
@@ -316,9 +308,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   end
 
   # Returns the index of the first character satisfying +pred+, or +None+.
-  #
-  # The predicate counterpart of +indexOf+, which searches for one known
-  # character.
+  # Use +indexOf+ to search for a known character.
   #
   # @param pred [(Char) -> Bool] the test applied to each character
   # @return [Integer?] the 0-based index, or +None+
@@ -369,7 +359,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   let zip(other) = Kex.Intrinsic.List.zip(this.chars, other)
 
   # Splits the string in two: the characters satisfying +pred+, then those
-  # that do not. One pass, both answers.
+  # that do not.
   #
   # @param pred [Char -> Bool] the test applied to each character
   # @return [(String, String)] the matching and non-matching characters
@@ -387,8 +377,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
     (Kex.Intrinsic.String.fromChars(matching), Kex.Intrinsic.String.fromChars(others))
   end
 
-  # Returns the number of characters: characters, not bytes. See +bytes+ for
-  # the storage-level length.
+  # Returns the number of characters (codepoints), not bytes. +byteSize+ gives
+  # the encoded length, and +graphemeCount+ the characters a reader sees.
   #
   # @return [Integer] the character count
   #
@@ -400,8 +390,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   let count = Kex.Intrinsic.String.count(this)
 
   # Returns how many times +sub+ occurs, counting non-overlapping matches
-  # from the left. An empty +sub+ occurs 0 times. (Ruby spells this
-  # +scan(sub).size+; +count+ here counts characters by a predicate.)
+  # from the left. An empty +sub+ occurs 0 times. Ruby writes this
+  # +scan(sub).size+; Kex's +count+ with a predicate counts characters.
   #
   # @param sub [String] the text to look for
   # @return [Integer] the number of occurrences
@@ -413,8 +403,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   occurrences :> String -> Integer
   let occurrences(sub) = sub.empty? then 0 else this.split(sub).count - 1
 
-  # Returns the number of characters. The same as +count+, under the name
-  # familiar from other languages.
+  # Returns the number of characters. The same as +count+.
   #
   # @return [Integer] the character count
   #
@@ -423,16 +412,14 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   length :> Integer
   let length = Kex.Intrinsic.String.count(this)
 
-  # Returns the number of user-perceived characters: extended grapheme
-  # clusters (Unicode UAX #29), which is not always +count+.
+  # Returns the number of user-perceived characters, counted as extended
+  # grapheme clusters (Unicode UAX #29).
   #
-  # +count+ answers the codepoint count, and most text is one codepoint per
-  # grapheme cluster, so the two usually agree. They part ways for a base
-  # character combined with a following mark, an emoji built from more than
-  # one codepoint, and `"\r\n"`, which is one grapheme cluster over two
-  # codepoints: reach for +graphemeCount+ over +count+ wherever "how many
-  # characters does a person see" is the question, such as sizing text for
-  # display or truncating it at a boundary a reader would recognize.
+  # +count+ counts codepoints. The two agree for most text, but differ for a
+  # letter followed by a combining mark, an emoji made of several codepoints,
+  # and +"\r\n"+, which is one cluster of two codepoints. Use +graphemeCount+
+  # when the question is how many characters a person sees, for example when
+  # sizing text for display.
   #
   # @return [Integer] the grapheme cluster count
   #
@@ -450,8 +437,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Returns +true+ when the string has no characters.
   #
-  # Note that a string of spaces is not empty: use +blank?+ from the
-  # +Blankable+ trait when whitespace should not count.
+  # A string of spaces is not empty; use +blank?+ from +Blankable+ when
+  # whitespace should not count.
   #
   # @return [Bool] +true+ for the empty string
   #
@@ -472,7 +459,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   #   "hello".enclose("__")   # => "__hello__"
   #
   # @example Quoting a value for output
-  #   value.enclose("\"")   # => "\"localhost\""
+  #   "localhost".enclose("'")   # => "'localhost'"
   enclose :> String -> String
   let enclose(wrapper) = "${wrapper}${this}${wrapper}"
 
@@ -487,13 +474,13 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   #   "hello".enclose("{", "}")   # => "{hello}"
   #
   # @example Rendering a list literal
-  #   items.join(", ").enclose("[", "]")   # => "[a, b, c]"
+  #   ["a", "b", "c"].join(", ").enclose("[", "]")   # => "[a, b, c]"
   enclose :> String -> String -> String
   let enclose(left, right) = "${left}${this}${right}"
 
   # Returns the character at index +i+, counting from 0, or +None+ when the
-  # index is out of range. The same as the integer one-argument +get+ (+get+
-  # also accepts a +Range+, which answers a substring instead).
+  # index is out of range. A negative index counts from the end. The same as
+  # +get(i)+.
   #
   # @param i [Integer] the 0-based index
   # @return [Char?] the character, or +None+
@@ -526,8 +513,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   third :> Char?
   let third = Kex.Intrinsic.String.at(this, 2)
 
-  # Returns everything after the first character. The empty string has no
-  # rest, and answers with itself.
+  # Returns everything after the first character, or +""+ for the empty
+  # string.
   #
   # @return [String] the string without its first character
   #
@@ -539,8 +526,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Returns the string's characters as a list.
   #
-  # The bridge from +String+ to the +List+ functions that a string does not have
-  # of its own. Join back with +.join("")+.
+  # Use it to reach +List+ functions that +String+ lacks, and +join("")+ to get
+  # back to a string.
   #
   # @return [[Char]] the characters, in order
   #
@@ -554,12 +541,9 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Returns the string's UTF-8 encoding, one +Byte+ per byte.
   #
-  # +chars+ is the TEXT view of a string and +bytes+ is the STORAGE view, so
-  # they differ for anything outside ASCII: +"é"+ is one +Char+ and two
-  # +Byte+s. Use +bytes+ when the length that matters is the encoded one: a
-  # network frame, a file offset, a size limit.
-  #
-  # +String.fromBytes+ is the inverse.
+  # +chars+ and +bytes+ differ outside ASCII: +"é"+ is one +Char+ and two
+  # bytes. Use +bytes+ when the encoded form matters, as in a network frame or
+  # a size limit. +String.fromBytes+ is the inverse.
   #
   # @return [[Byte]] the UTF-8 bytes
   #
@@ -574,11 +558,10 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   bytes :> [Byte]
   let bytes = Kex.Intrinsic.String.bytes(this)
 
-  # The storage size in bytes, without building the byte list.
+  # Returns the length of the string's UTF-8 encoding in bytes.
   #
-  # +bytes.count+ answers the same number by materialising every byte first,
-  # which on a megabyte payload means a million values to count them. This
-  # reads the encoded length directly.
+  # It gives the same number as +bytes.count+ without building a list of every
+  # byte, which matters for large payloads.
   #
   # @return [Integer] the length of the UTF-8 encoding
   #
@@ -588,28 +571,28 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   byteSize :> Integer
   let byteSize = Kex.Intrinsic.String.byteSize(this)
 
-  # One byte of the storage view, or +None+ when the index is out of range.
+  # Returns the byte at a UTF-8 offset, or +None+ when the offset is out of
+  # range.
   #
-  # This indexes the ENCODING, not the text: +byteAt+ on a multi-byte
-  # character returns one of its bytes, never the character. Use +at+ or
-  # +chars+ for the text view.
+  # The offset indexes the encoding, so inside a multi-byte character it
+  # returns one of that character's bytes. Use +at+ to index characters.
   #
   # @param index [Integer] a zero-based byte offset
   # @return [Byte?] the byte, or +None+ past the end
   #
   # @example The two views of the same string
   #   "héllo".byteAt(1)   # => Just(195)
-  #   "héllo".at(1)       # => Just("é")
+  #   "héllo".at(1)       # => Just('é')
   #   "héllo".byteAt(99)  # => None
   byteAt :> Integer -> Byte?
   let byteAt(index: Integer) = Kex.Intrinsic.String.byteAt(this, index)
 
-  # A slice of the storage view, by byte offset and byte count.
+  # Returns the bytes from +offset+ to +offset + count+ of the UTF-8 encoding,
+  # as a +String+.
   #
-  # The range is clamped rather than refused, the way +take+ and +drop+
-  # already behave. Slicing mid-character yields a string holding partial
-  # UTF-8 — legal storage, but not text: decode it only at a boundary you
-  # know is a character boundary.
+  # Out-of-range values are clamped, as in +take+ and +drop+. Cutting inside a
+  # character leaves partial UTF-8 in the result, so slice only at offsets you
+  # know are character boundaries.
   #
   # @param offset [Integer] a zero-based byte offset, clamped to the string
   # @param count [Integer] how many bytes, clamped to what remains
@@ -623,7 +606,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   # Splits the string into its individual characters, as one-character
   # strings.
   #
-  # Use +chars+ instead when you want +Char+ values rather than strings.
+  # Use +chars+ to get +Char+ values.
   #
   # @return [[String]] one string per character
   #
@@ -636,7 +619,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   # string or a +Regex+.
   #
   # Separators at the ends produce empty parts, so splitting +",a,"+ on +","+
-  # gives three parts. Filter or trim afterwards when that is not wanted.
+  # gives three parts.
   #
   # @param sep [String | Regex] the separator to split on
   # @return [[String]] the parts, in order
@@ -645,7 +628,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   #   "a,b,c".split(",")     # => ["a", "b", "c"]
   #   "a, b, c".split(", ")  # => ["a", "b", "c"]
   #
-  # @example Splitting on a pattern (needs `using Regex`)
+  # @example Splitting on a pattern (needs +using Regex+)
   #   "a1b22c".split(re`[0-9]+`)   # => ["a", "b", "c"]
   #
   # @example Empty parts at the edges are kept
@@ -655,11 +638,10 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Splits the string into lines on +\n+.
   #
-  # A single trailing newline is dropped, so a file that ends in one does not
-  # produce a final empty line. A Windows +\r\n+ ending is one line ending,
-  # as Ruby's +chomp+ reads it, so no line keeps a stray +\r+. Every
-  # line-reading function (+FS.File.readLines+, +FileHandle.getLine+, a file
-  # +Feed+) reads line endings the same way.
+  # A single trailing newline is dropped, so a file that ends in one gives no
+  # final empty line. A Windows +\r\n+ counts as one line ending, so no line
+  # keeps a stray +\r+. +FS.File.readLines+, +FileHandle.getLine+ and file
+  # feeds split lines the same way.
   #
   # @return [[String]] the lines, without their newlines
   #
@@ -685,11 +667,9 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Indents every line but the first by +prefix+.
   #
-  # This is what splicing a multi-line value into an indented +${...}+ hole
-  # needs: the hole's own indentation already covers line one, and the rest
-  # have to catch up. Blank lines stay blank, and (through +lines+) a single
-  # trailing newline is dropped, so a block does not push a stray empty line
-  # into its slot.
+  # Use it to splice a multi-line value into an indented +${...}+ hole, where
+  # the text before the hole already indents the first line. Blank lines stay
+  # blank, and a single trailing newline is dropped, as +lines+ does.
   #
   # @param prefix [String] the indentation to add
   # @return [String] the re-indented string
@@ -750,22 +730,13 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
 
   # Replaces every occurrence of each key of +replacements+ with its value.
   #
-  # The keys are the placeholders exactly as written: no syntax is imposed and
-  # nothing is reserved, so +$NAME$+, +__NAME__+, +{{name}}+ and +%name%+ are
-  # all equally valid, and a template needs no escaping to be a template.
-  # +$NAME$+ is the convention to reach for when there is no reason to prefer
-  # another.
+  # Keys are matched literally, with no placeholder syntax, so +$NAME$+,
+  # +__NAME__+ and +{{name}}+ all work. +$NAME$+ is the usual convention. A
+  # placeholder cannot be written +${name}+ in a string literal, because that
+  # is interpolation and is filled in before +substitute+ runs.
   #
-  # Note that a placeholder is NOT +${name}+: that is interpolation, which the
-  # compiler resolves before this ever sees the string.
-  #
-  # This is what a template wants instead of a chain of +replace+ calls: the
-  # chain reads as a pipeline when it is really a substitution table.
-  #
-  # Substitutions are applied in the map's canonical key order and each is
-  # applied to the result of the last, so a value that itself contains a key
-  # can still be rewritten by a later one. Keep values placeholder-free when
-  # that matters.
+  # Substitutions run in the map's key order, each on the result of the last,
+  # so a later key can rewrite text that an earlier value put in.
   #
   # @param replacements [{String: String}] placeholder to replacement text
   # @return [String] the filled-in template
@@ -786,8 +757,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
     end
   end
 
-  # Removes leading and trailing whitespace. Whitespace inside the string is
-  # left alone.
+  # Removes leading and trailing whitespace, leaving whitespace inside the
+  # string alone.
   #
   # @return [String] the trimmed string
   #
@@ -822,8 +793,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   trimEnd :> String
   let trimEnd = Kex.Intrinsic.String.trimEnd(this)
 
-  # Removes +prefix+ from the start of the string when it is there, and
-  # otherwise returns the string unchanged. Ruby calls this +delete_prefix+.
+  # Removes +prefix+ from the start of the string if it is there. Ruby calls
+  # this +delete_prefix+.
   #
   # @param prefix [String] the text to remove
   # @return [String] the string without the prefix
@@ -834,8 +805,8 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   removePrefix :> String -> String
   let removePrefix(prefix) = this.startsWith?(prefix) then this.drop(prefix.count) else this
 
-  # Removes +suffix+ from the end of the string when it is there, and
-  # otherwise returns the string unchanged. Ruby calls this +delete_suffix+.
+  # Removes +suffix+ from the end of the string if it is there. Ruby calls
+  # this +delete_suffix+.
   #
   # @param suffix [String] the text to remove
   # @return [String] the string without the suffix
@@ -952,12 +923,9 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   # Returns the string with its first character upper-cased and the rest
   # LOWER-cased.
   #
-  # This matches Ruby's +String#capitalize+, so +"hELLO"+ becomes +"Hello"+,
-  # not +"HELLO"+. Use +upperCase+ when the whole string should shout.
-  #
-  # It is also what building a type name from data needs: a generated
-  # +type %name = ...+ inside a +compiled do+ block requires an upper-case
-  # identifier, so a list of lower-case words has to be capitalized first.
+  # As in Ruby, +"hELLO"+ becomes +"Hello"+. It is handy in a +compiled do+
+  # block for turning a lower-case word into the upper-case name that
+  # +type %name+ requires.
   #
   # @return [String] the capitalized string
   #
@@ -1089,7 +1057,7 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   # Returns +true+ when +sub+ appears anywhere in the string.
   #
   # The search is literal and case-sensitive. Lower-case both sides to ignore
-  # case; use +Regex+ when the needle is a pattern.
+  # case, or use +Regex+ to search for a pattern.
   #
   # @param sub [String] the text to look for
   # @return [Bool] +true+ when it is present
@@ -1132,16 +1100,14 @@ make String, implement: Enumerable<Char>, Foldable<Char> do
   endsWith? :> String -> Bool
   let endsWith?(suffix) = Kex.Intrinsic.String.endsWith?(this, suffix)
 
-  # Converts to another type. The most common target is +Integer+ or +Float+.
 end
 
 # A single Unicode character.
 #
-# Character literals are written with single quotes (+'a'+) and are a
-# different type from the one-character string +"a"+. The classification
-# functions (+digit?+, +alpha?+, +space?+ and the rest) are what most character
-# code needs; +codepoint+ and +String.fromCodepoint+ are the escape hatch to
-# raw Unicode values.
+# Character literals use single quotes (+'a'+), and +'a'+ is a different type
+# from the one-character string +"a"+. The predicates +digit?+, +alpha?+,
+# +space?+ and the rest classify a character; +codepoint+ and
+# +String.fromCodepoint+ convert to and from Unicode values.
 #
 #   "hello world".chars.count(~alpha?)   # => 10
 #   'a'.upperCase                        # => 'A'
@@ -1149,12 +1115,8 @@ end
 make Char do
   # Returns this character as a one-character +String+.
   #
-  # A +Char+ and a +String+ are distinct types, so converting between them is
-  # explicit. +to(String)+ is the fallible conversion protocol and answers
-  # +String?+ like every other conversion; +string+ is the total one, because a
-  # character is always one character of text and has no failure case to
-  # report. It is the single-character counterpart of +String.chars+ and
-  # +[Char].join("")+.
+  # +to(String)+ also works but returns +String?+, like every +to+ conversion;
+  # +string+ cannot fail, so it returns the +String+ directly.
   #
   # @return [String] the character as text
   #
@@ -1203,7 +1165,7 @@ make Char do
   digit? :> Bool
   let digit? = Kex.Intrinsic.Char.is_digit(this)
 
-  # Returns +true+ when the character is alphabetic.
+  # Returns +true+ when the character is a Unicode letter.
   #
   # @return [Bool] +true+ for a letter
   #
@@ -1217,8 +1179,8 @@ make Char do
   alpha? :> Bool
   let alpha? = Kex.Intrinsic.Char.is_alpha(this)
 
-  # Returns +true+ when the character is a letter. The Unicode-letter spelling
-  # of +alpha?+.
+  # Returns +true+ when the character is a Unicode letter. The same as
+  # +alpha?+.
   #
   # @return [Bool] +true+ for a letter
   #
@@ -1230,7 +1192,7 @@ make Char do
 
   # Returns +true+ when the character is upper case.
   #
-  # Characters without case (digits, punctuation) answer +false+.
+  # Characters without case, such as digits and punctuation, return +false+.
   #
   # @return [Bool] +true+ for an upper-case letter
   #
@@ -1239,7 +1201,7 @@ make Char do
   #   'a'.upper?   # => false
   #   '1'.upper?   # => false
   #
-  # @example Splitting a camelCase name
+  # @example Finding the first capital
   #   "camelCaseName".findIndex(~upper?)   # => Just(5)
   upper? :> Bool
   let upper? = Kex.Intrinsic.Char.is_upper(this)
@@ -1254,8 +1216,8 @@ make Char do
   lower? :> Bool
   let lower? = Kex.Intrinsic.Char.is_lower(this)
 
-  # Returns +true+ when the character is whitespace: a space, tab, newline or
-  # carriage return.
+  # Returns +true+ when the character is Unicode whitespace, such as a space,
+  # tab, newline or no-break space.
   #
   # @return [Bool] +true+ for whitespace
   #
@@ -1264,8 +1226,8 @@ make Char do
   #   '\t'.space?   # => true
   #   'a'.space?    # => false
   #
-  # @example Counting the words on a line
-  #   "one two  three".split(" ").reject(~empty?).count   # => 3
+  # @example Counting the spaces on a line
+  #   "one two  three".chars.count(~space?)   # => 3
   space? :> Bool
   let space? = Kex.Intrinsic.Char.is_space(this)
 
@@ -1300,14 +1262,12 @@ make Char do
   let in?(range) = range.contains?(this)
 end
 
-# Constructors for +String+ values that are built from something other than
-# text: a Unicode codepoint, or raw UTF-8 bytes.
+# Builds +String+ values from a Unicode codepoint or from UTF-8 bytes.
 module String do
   # Builds a one-character string from a Unicode codepoint.
   #
-  # Answers +None+ for a surrogate or a value outside the Unicode scalar
-  # range, so the result is always valid text. +Char.codepoint+ is the
-  # inverse.
+  # Returns +None+ for a surrogate or a value outside the Unicode range.
+  # +Char.codepoint+ is the inverse.
   #
   # @param value [Integer] the Unicode codepoint
   # @return [String?] the one-character string, or +None+
@@ -1325,9 +1285,8 @@ module String do
 
   # Rebuilds a string from its UTF-8 bytes: the inverse of +bytes+.
   #
-  # A +String+ is TEXT, so bytes outside 0..255 or a malformed encoding answer
-  # +None+ rather than a string that would decode to replacement characters.
-  # That makes it a decoding step you can check, not a lossy cast.
+  # Returns +None+ for a value outside 0..255 or for malformed UTF-8; invalid
+  # bytes are never turned into replacement characters.
   #
   # @param values [[Byte]] the UTF-8 bytes
   # @return [String?] the decoded string, or +None+
@@ -1343,22 +1302,17 @@ module String do
   let fromBytes(values) = Kex.Intrinsic.String.fromBytes(values)
 end
 
-# A fixed-size group of values, written +(a, b)+. Unlike a list, a tuple's
-# size and the type of each position are part of its type, so the +List+
-# functions do not apply to it: destructure it, match on it, or convert it with
-# +items+.
+# A fixed-size group of values, written +(a, b)+. A tuple's size and the type
+# of each position are part of its type, and +List+ functions do not apply to
+# it: destructure it, match on it, or convert it with +items+.
 #
 #   let (name, age) = ("Ada", 36)
 #   [1, 2, 3].partition { |n| n.even? }   # => ([2], [1, 3])
 make Tuple do
   # Returns the tuple's elements as a list.
   #
-  # A tuple is not a list (its arity is part of its type) so the +List+
-  # functions do not apply to it. This is the explicit conversion, and it loses
-  # the per-position typing in exchange.
-  #
-  # Destructuring is usually clearer when you know the shape:
-  # +let (a, b) = pair+.
+  # The list is typed +[Any]+, so the type of each position is lost. When you
+  # know the shape, destructuring (+let (a, b) = pair+) is usually clearer.
   #
   # @return [[Any]] the elements, in order
   #

@@ -8,9 +8,12 @@ record Binding do
   declaration : Plugin
 end
 
-# Fingerprints only the declared interface and requested resources. Provider
-# implementation changes do not silently revoke approval; a capability,
-# command schema, generator schema, or supported-Tey change does.
+# Returns a fingerprint of a plugin's declared interface and requested
+# resources, which an approval is tied to.
+#
+# Changing the plugin's implementation keeps the approval; changing a
+# capability, a command or generator schema, or the supported Tey versions
+# needs a new one.
 let fingerprint(plugin: Plugin) -> String do
   return Digest.sha256(Tey.Plugin.interfaceText(plugin))
 end
@@ -30,9 +33,11 @@ let missingApprovals(plugins: [Plugin], approvals: {String: String}) -> [Plugin]
   return plugins.filter { |plugin| !Tey.Plugin.approved?(plugin, approvals) }
 end
 
-# Keeps only approvals still backed by an identical visible declaration.
-# This is used when a lock is refreshed: removed plugins and interfaces whose
-# resources changed cannot inherit an old authorization.
+# Returns the approvals whose plugin is still declared with the same
+# fingerprint.
+#
+# Used when the lock file is refreshed, so a removed plugin, or one whose
+# interface changed, loses its approval.
 let validApprovals(plugins: [Plugin], approvals: {String: String}) -> {String: String} do
   return plugins.reduce({}) do |valid, plugin|
     if Tey.Plugin.approved?(plugin, approvals)

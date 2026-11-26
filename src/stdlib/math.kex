@@ -1,21 +1,19 @@
 # Mathematical constants and functions.
 #
-# All trigonometric functions work in radians. Every function here accepts a
-# +Number+ (an +Integer+ or a +Float+) and the transcendental ones answer
-# with a +Float+.
+# Angles are in radians. Every function takes a +Number+, an +Integer+ or a
+# +Float+, and all but +abs+, +floor+ and +ceil+ return a +Float+.
 #
-# A Kex +Float+ is always finite, so a domain error (+Math.sqrt(-1.0)+) or an
-# overflow (+Math.exp(1000.0)+) raises rather than producing +NaN+ or
-# +Infinity+: the same rule the BEAM enforces, where those two values cannot
-# exist at all. There is no non-finite float to test for afterwards.
+# A Kex +Float+ is always finite. A result with no real value
+# (+Math.sqrt(-1.0)+) or one too large for a float (+Math.exp(1000.0)+) raises
+# an error; there is no +NaN+ or +Infinity+ to check for.
 #
 #   Math.sqrt(2.0)              # => 1.4142135623730951
 #   Math.hypot(3.0, 4.0)        # => 5.0
 #   Math.sin(Math.PI / 2.0)     # => 1.0
 #
-# The everyday operations on a single number: +abs+, +floor+, +ceil+,
-# +round+, +sqrt+: can also be called with +Integer+ and +Float+ receivers, which usually
-# reads better in a chain: +x.abs+ over +Math.abs(x)+.
+# +abs+, +floor+, +ceil+ and +sqrt+ can also be called on the number, which
+# reads better in a chain: +x.abs+ rather than +Math.abs(x)+. +round+ exists
+# only in that form.
 module Math do
   # The ratio of a circle's circumference to its diameter.
   #
@@ -37,8 +35,7 @@ module Math do
   #   Math.log(Math.E)   # => 1.0
   let E = 2.71828182845904523536
 
-  # Returns the square root of +x+. Raises for a negative +x+, which has no
-  # real root.
+  # Returns the square root of +x+. Raises an error for a negative +x+.
   #
   # @param x [Number] a non-negative number
   # @return [Float] the square root
@@ -46,15 +43,14 @@ module Math do
   # @example
   #   Math.sqrt(9.0)    # => 3.0
   #   Math.sqrt(2.0)    # => 1.4142135623730951
-  #   Math.sqrt(-1.0)   # raises: Math.sqrt: undefined result (NaN)
+  #   Math.sqrt(-1.0)   # raises an error
   #
   # @example Distance between two points
   #   Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
   sqrt : Number -> Float
   let sqrt(x) = Kex.Intrinsic.Math.sqrt(x)
 
-  # Returns the cube root of +x+. Unlike +sqrt+, negative input is fine: a
-  # negative number has a real cube root.
+  # Returns the cube root of +x+, which may be negative.
   #
   # @param x [Number] any number
   # @return [Float] the cube root
@@ -97,7 +93,7 @@ module Math do
   #
   # @example
   #   Math.tan(0.0)             # => 0.0
-  #   Math.tan(Math.PI / 4.0)   # => 1.0
+  #   Math.tan(Math.PI / 4.0)   # => 0.9999999999999999
   tan : Number -> Float
   let tan(x) = Kex.Intrinsic.Math.tan(x)
 
@@ -125,8 +121,8 @@ module Math do
 
   # Returns the arc tangent of +x+ in radians, in the range -π/2 to π/2.
   #
-  # Use +atan2+ when you have both coordinates of a vector: it can tell the
-  # quadrant apart, and this cannot.
+  # To turn a vector into an angle, use +atan2+, which also finds the right
+  # quadrant.
   #
   # @param x [Number] any number
   # @return [Float] the angle in radians
@@ -139,9 +135,8 @@ module Math do
 
   # Returns the angle of the vector +(x, y)+ in radians, from -π to π.
   #
-  # Both signs are taken into account, so the result lands in the correct
-  # quadrant, which is why this, not +atan+, is what you want for converting
-  # a vector to an angle. Note the argument order: +y+ first.
+  # The signs of both components decide the quadrant, which +atan+ cannot do.
+  # +y+ comes first.
   #
   # @param y [Number] the vertical component
   # @param x [Number] the horizontal component
@@ -156,8 +151,8 @@ module Math do
   atan2 : Number -> Number -> Float
   let atan2(y, x) = Kex.Intrinsic.Math.atan2(y, x)
 
-  # Converts an angle from degrees to radians, the unit every trigonometric
-  # function here expects.
+  # Converts an angle from degrees to radians, the unit the trigonometric
+  # functions take.
   #
   # @param degrees [Number] the angle in degrees
   # @return [Float] the same angle in radians
@@ -171,8 +166,7 @@ module Math do
   deg2Rad : Number -> Float
   let deg2Rad(degrees) = PI * degrees / 180.0
 
-  # Converts an angle from radians to degrees: the inverse of
-  # +deg2Rad+.
+  # Converts an angle from radians to degrees, the inverse of +deg2Rad+.
   #
   # @param radians [Number] the angle in radians
   # @return [Float] the same angle in degrees
@@ -219,10 +213,10 @@ module Math do
   tanh : Number -> Float
   let tanh(x) = Kex.Intrinsic.Math.tanh(x)
 
-  # Returns the natural logarithm of +x+: its logarithm to base +e+. With a
-  # second argument, returns the logarithm to that base instead.
+  # Returns the natural logarithm of +x+, or with +base+ the logarithm to that
+  # base.
   #
-  # Raises for +x+ of zero or less, which has no real logarithm.
+  # Raises an error when +x+ is zero or negative.
   #
   # @param x [Number] a positive number
   # @param base [Number] the logarithm base; omitted for base +e+
@@ -239,8 +233,7 @@ module Math do
   let log(x) = Kex.Intrinsic.Math.log(x)
   let log(x, base) = Kex.Intrinsic.Math.log(x, base)
 
-  # Returns the base-2 logarithm of +x+. The same as +Math.log(x, 2.0)+, and
-  # more direct.
+  # Returns the base-2 logarithm of +x+, like +Math.log(x, 2.0)+.
   #
   # @param x [Number] a positive number
   # @return [Float] the base-2 logarithm
@@ -265,9 +258,10 @@ module Math do
   log10 : Number -> Float
   let log10(x) = Kex.Intrinsic.Math.log10(x)
 
-  # Returns +e+ raised to the power +x+: the inverse of +Math.log+.
+  # Returns +e+ raised to the power +x+, the inverse of +Math.log+.
   #
-  # Raises on overflow, which for a double happens a little past +x+ of 709.
+  # Raises an error when the result is too large for a float, which happens
+  # just past +x+ of 709.
   #
   # @param x [Number] the exponent
   # @return [Float] e to the power x
@@ -283,9 +277,9 @@ module Math do
 
   # Returns +x+ raised to the power +y+.
   #
-  # The result is always a +Float+, even for whole arguments. For an exact
-  # integer power use +Integer.pow+: +2.pow(100)+ keeps every digit, where
-  # rounding +Math.pow(2, 100)+ cannot.
+  # The result is a +Float+ even for whole numbers. For an exact integer power
+  # use +Integer.pow+: +2.pow(100)+ keeps every digit, and +Math.pow(2, 100)+
+  # does not.
   #
   # @param x [Number] the base
   # @param y [Number] the exponent
@@ -301,10 +295,10 @@ module Math do
   pow : Number -> Number -> Float
   let pow(x, y) = Kex.Intrinsic.Math.pow(x, y)
 
-  # Returns the magnitude of +x+, discarding its sign. The type is preserved:
-  # an +Integer+ in gives an +Integer+ out.
+  # Returns +x+ without its sign, as the same type: an +Integer+ stays an
+  # +Integer+.
   #
-  # You can also write +x.abs+ using UFCS.
+  # +x.abs+ does the same.
   #
   # @param x [Number] any number
   # @return [Number] the absolute value
@@ -315,8 +309,7 @@ module Math do
   abs : Number -> Number
   let abs(x) = Kex.Intrinsic.Math.abs(x)
 
-  # Returns the largest integer that is not greater than +x+: rounding
-  # toward negative infinity.
+  # Returns +x+ rounded down to an integer, toward negative infinity.
   #
   # @param x [Number] any number
   # @return [Integer] the floor
@@ -327,8 +320,7 @@ module Math do
   floor : Number -> Integer
   let floor(x) = Kex.Intrinsic.Math.floor(x)
 
-  # Returns the smallest integer that is not less than +x+: rounding toward
-  # positive infinity.
+  # Returns +x+ rounded up to an integer, toward positive infinity.
   #
   # @param x [Number] any number
   # @return [Integer] the ceiling
@@ -339,8 +331,7 @@ module Math do
   ceil : Number -> Integer
   let ceil(x) = Kex.Intrinsic.Math.ceil(x)
 
-  # Returns the Euclidean distance +sqrt(x*x + y*y)+, computed so that large
-  # values do not overflow on the way.
+  # Returns +sqrt(x*x + y*y)+, without overflowing for large +x+ or +y+.
   #
   # @param x [Number] the first leg
   # @param y [Number] the second leg

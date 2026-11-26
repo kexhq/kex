@@ -1,15 +1,14 @@
-# Elapsed time: a +Duration+ is a +Measure<Quantity.Time>+ (units.kex), a
-# count of seconds. These are the operations it has beyond every measure's,
-# its ISO 8601 form, and the +Duration+ module that builds spans and UTC
-# offsets.
+# Elapsed time. A +Duration+ is a +Measure<Quantity.Time>+ (see units.kex)
+# holding a number of seconds. This file adds the functions a span of time has
+# beyond those of every measure, its ISO 8601 form, and the +Duration+ module
+# for zero spans and UTC offsets.
 
-# The operations a span of time has beyond every measure's: a +Duration+ is
-# +Measure<Quantity.Time>+, so these are its own.
+# Functions on a +Duration+ beyond those every measure has.
 make Measure<Quantity.Time> do
   let wholeNanoseconds -> Integer = Time.truncatedBy(this.canonical, 0.000000001)
   let wholeMicroseconds -> Integer = Time.truncatedBy(this.canonical, 0.000001)
 
-  # The same span with its sign flipped.
+  # Returns the same span with its sign flipped.
   #
   # @return [Duration] the negated span
   #
@@ -19,8 +18,7 @@ make Measure<Quantity.Time> do
 
   # Multiplies the span by a plain number.
   #
-  # `3 * 1.day` is not the same call because the receiver has to be the
-  # Duration, so it is spelled `1.day * 3`.
+  # The span must come first: write `1.day * 3`, not `3 * 1.day`.
   #
   # @param factor [Number] the factor to multiply by
   # @return [Duration] the scaled span
@@ -38,7 +36,7 @@ make Measure<Quantity.Time> do
   #   (90.minute / 2).wholeMinutes   # => 45
   let /(divisor: Number) -> Duration = this.inOwnUnit(this.canonical / Kex.Intrinsic.Fun.convertTo(divisor, Float).or(1.0))
 
-  # The span's magnitude, discarding its direction.
+  # Returns the span's length without its sign.
   #
   # @return [Duration] the absolute span
   #
@@ -56,8 +54,8 @@ make Measure<Quantity.Time> do
 
   # Returns +true+ when the span points backwards.
   #
-  # A negative span is what +until+ gives you when the other moment is
-  # earlier, so this is how to ask which came first.
+  # +until+ returns a negative span when the other moment is earlier, so this
+  # tells you which came first.
   #
   # @return [Bool] +true+ for a negative span
   #
@@ -74,9 +72,6 @@ make Measure<Quantity.Time> do
   let positive? -> Bool = this.canonical > 0.0
 
   # Returns +true+ when this span is shorter than +other+.
-  #
-  # Named for length rather than for order: `before?`/`after?` are about when
-  # something happened, and a Duration is not a point in time.
   #
   # @param other [Duration] the span to compare against
   # @return [Bool] +true+ when this span is shorter
@@ -99,8 +94,8 @@ make Measure<Quantity.Time> do
   #   90.minute.longerThan?(1.hour)   # => true
   let longerThan?(other: Duration) -> Bool = this.canonical > other.canonical
 
-  # The span's length in seconds, fraction included. +wholeSeconds+ is the
-  # Integer form.
+  # Returns the span's length in seconds, fraction included. +wholeSeconds+
+  # gives an Integer.
   #
   # @return [Float] the seconds
   #
@@ -109,7 +104,7 @@ make Measure<Quantity.Time> do
   #   500.millisecond.seconds   # => 0.5
   let seconds -> Float = this.canonical
 
-  # The whole milliseconds in the span, truncated toward zero.
+  # Returns the whole milliseconds in the span, truncated toward zero.
   #
   # @return [Integer] the milliseconds
   #
@@ -117,7 +112,7 @@ make Measure<Quantity.Time> do
   #   500.millisecond.wholeMilliseconds   # => 500
   let wholeMilliseconds -> Integer = Time.truncatedBy(this.canonical, 0.001)
 
-  # The whole seconds in the span, truncated toward zero.
+  # Returns the whole seconds in the span, truncated toward zero.
   #
   # @return [Integer] the seconds
   #
@@ -125,7 +120,7 @@ make Measure<Quantity.Time> do
   #   2.hour.wholeSeconds   # => 7200
   let wholeSeconds -> Integer = Time.truncatedBy(this.canonical, 1.0)
 
-  # The whole minutes in the span, truncated toward zero.
+  # Returns the whole minutes in the span, truncated toward zero.
   #
   # @return [Integer] the minutes
   #
@@ -134,8 +129,8 @@ make Measure<Quantity.Time> do
   #   1.5.hour.wholeMinutes    # => 90
   let wholeMinutes -> Integer = Time.truncatedBy(this.canonical, 60.0)
 
-  # The whole hours in the span, truncated toward zero. A partial hour does
-  # not count.
+  # Returns the whole hours in the span, truncated toward zero, so a partial
+  # hour does not count.
   #
   # @return [Integer] the hours
   #
@@ -143,10 +138,10 @@ make Measure<Quantity.Time> do
   #   90.minute.wholeHours   # => 1
   let wholeHours -> Integer = Time.truncatedBy(this.canonical, 3600.0)
 
-  # The whole days in the span, truncated toward zero.
+  # Returns the whole days in the span, truncated toward zero.
   #
-  # This is what +date + span+ uses, which is why +date + 36.hour+ advances
-  # exactly one day.
+  # Adding a span to a +Date+ uses this, so +date + 36.hour+ moves one day
+  # forward.
   #
   # @return [Integer] the days
   #
@@ -155,7 +150,7 @@ make Measure<Quantity.Time> do
   #   2.week.wholeDays    # => 14
   let wholeDays -> Integer = Time.truncatedBy(this.canonical, 86400.0)
 
-  # The whole weeks in the span, truncated toward zero.
+  # Returns the whole weeks in the span, truncated toward zero.
   #
   # @return [Integer] the weeks
   #
@@ -164,9 +159,6 @@ make Measure<Quantity.Time> do
   let wholeWeeks -> Integer = Time.truncatedBy(this.canonical, 604800.0)
 
   # Orders this span against another by length.
-  #
-  # Delegates to `Number.compare` (algebra.kex), which orders the two Float
-  # second counts.
   #
   # @param other [Duration] the span to compare against
   # @return [Ordering] +Less+, +Equal+ or +Greater+
@@ -181,7 +173,7 @@ end
 
 # Building elapsed spans, and UTC offsets.
 module Duration do
-  # A span of no time at all. Also the UTC offset.
+  # Returns a span of zero length, which is also the UTC offset.
   #
   # @return [Duration] the zero span
   #
@@ -190,11 +182,10 @@ module Duration do
   #   date.at(time, Duration.zero()).iso   # => "...T09:00:00Z"
   let zero() -> Duration = 0.second
 
-  # A whole-minute UTC offset, the only kind ISO 8601 can spell.
+  # Returns a UTC offset of +hours+ and +minutes+.
   #
-  # A negative hour or minute puts the whole offset west of UTC, so
-  # +utcOffset(-5, 30)+ is five and a half hours behind UTC, not four and a
-  # half.
+  # If either part is negative the whole offset is west of UTC, so
+  # +utcOffset(-5, 30)+ is five and a half hours behind UTC.
   #
   # @param hours [Integer] the hour part of the offset
   # @param minutes [Integer] the minute part of the offset
@@ -213,12 +204,13 @@ module Duration do
   end
 end
 
-# A span's ISO 8601 form. It shows as every measure does, as its value and
-# unit (+"90.0 s"+); +iso+ writes the form a protocol wants.
+# A span's ISO 8601 form. String interpolation shows a span as every measure
+# shows, as value and unit (+"90.0 s"+); +iso+ gives the standard form.
 make Measure<Quantity.Time> do
-  # The span in ISO 8601 form: hours, minutes and seconds, with the
-  # fraction of a second written as +iso+ on a +Time+ writes it. A zero span
-  # is +PT0S+, and a negative one carries a leading +-+.
+  # Returns the span in ISO 8601 form, in hours, minutes and seconds.
+  #
+  # Fractions of a second are written as a +Time+'s +iso+ writes them. A zero
+  # span is +PT0S+, and a negative one starts with +-+.
   #
   # @return [String] the ISO 8601 duration
   #

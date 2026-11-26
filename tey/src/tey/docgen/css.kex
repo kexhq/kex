@@ -1,11 +1,12 @@
-# The docs site stylesheet, ported by hand from kex-run-site's design tokens
-# (src/styles/global.css): the warm honey/cream palette from the kex logo,
-# Plus Jakarta Sans / Fraunces / JetBrains Mono, dark warm code surface with
-# tok-* syntax classes. Plain CSS with custom properties — no Tailwind build,
-# so the output stays host-anywhere static files.
+# The docs site stylesheet, ported by hand from the design tokens in
+# kex-run-site's src/styles/global.css: the honey and cream palette of the kex
+# logo, Plus Jakarta Sans, Fraunces and JetBrains Mono, and a dark code surface
+# coloured through the tok-* syntax classes. It is plain CSS with custom
+# properties and needs no build step, so the generated site is static files
+# that any host can serve.
 #
-# The stylesheet itself is assets/style.css, embedded at compile time so the
-# build stays self-contained: Tey.Docgen.Index writes it to
+# The stylesheet lives in assets/style.css and is embedded at compile time.
+# +Tey.Docgen.Index+ and +Tey.Docgen.Prose+ write it to
 # <out>/assets/style.css.
 
 module Tey.Docgen.Css do

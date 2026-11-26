@@ -1,8 +1,8 @@
-# +Truthyable+: what counts as true when a value is used as a condition.
+# Types whose values can be asked whether they count as true.
 #
-# The rule is Crystal's, and it is short: only +false+, +None+ and +()+ are
-# falsy. Everything else is truthy, including +0+, +""+ and +[]+, which some
-# languages treat as false and Kex deliberately does not.
+# Only +false+ and +None+ are falsy. Every other value is truthy, including
+# +0+, +""+ and +[]+. +if+ and +while+ take only a +Bool+, so call +truthy?+
+# or +falsy?+ to apply this rule; +Assert.truthy+ uses it too.
 #
 #   0.truthy?       # => true
 #   "".truthy?      # => true
@@ -10,25 +10,21 @@
 #   None.truthy?    # => false
 #   false.truthy?   # => false
 #
-# When you want the "is there anything here" question instead, that is
-# +Blankable+'s +blank?+ / +present?+.
-#
-# There is no NaN to consider: a float operation that would produce one raises
-# instead, matching BEAM (see nonFiniteFloatError in src/interpreter/value.cxx).
+# To ask whether a value is empty, use +Blankable+'s +blank?+ and
+# +present?+.
 trait Truthyable do
-  # Returns +true+ when the value counts as true in a condition.
+  # Returns +true+ unless the value is +false+ or +None+.
   #
-  # @return [Bool] +true+ unless the value is +false+, +None+ or +()+
+  # @return [Bool] +true+ unless the value is +false+ or +None+
   #
   # @example
   #   1.truthy?        # => true
   #   None.truthy?     # => false
   truthy? :> Bool
 
-  # Returns +true+ when the value counts as false in a condition. The negation
-  # of +truthy?+.
+  # Returns +true+ for +false+ and +None+, the opposite of +truthy?+.
   #
-  # @return [Bool] +true+ for +false+, +None+ and +()+
+  # @return [Bool] +true+ for +false+ and +None+
   #
   # @example
   #   None.falsy?    # => true
@@ -52,13 +48,9 @@ make Bool, implement: Truthyable do
   truthy? :> Bool
   let truthy? = this
 
-  # Returns the negation of this boolean.
+  # Returns the negation of this boolean, the same as +!flag+.
   #
-  # +!flag+ says the same thing, and is the spelling to reach for when the
-  # value is already to hand. This one exists for the position +!+ cannot
-  # take: the end of a chain, where what is being negated is whatever the
-  # chain just produced. +falsy?+ answers the same question for any
-  # +Truthyable+ value; +not+ is the one that both takes and answers a +Bool+.
+  # It reads better than +!+ at the end of a chain.
   #
   # @return [Bool] +false+ for +true+, and +true+ for +false+
   #
@@ -73,10 +65,8 @@ make Bool, implement: Truthyable do
 end
 
 make Integer, implement: Truthyable do
-  # Always +true+, including for zero.
-  #
-  # Zero is a number, not an absence. Compare it explicitly when zero means
-  # something: +count == 0+.
+  # Always returns +true+, including for zero. Write +count == 0+ when zero
+  # matters.
   #
   # @return [Bool] always +true+
   #
@@ -88,7 +78,7 @@ make Integer, implement: Truthyable do
 end
 
 make Float, implement: Truthyable do
-  # Always +true+, including for zero.
+  # Always returns +true+, including for zero.
   #
   # @return [Bool] always +true+
   #
@@ -99,25 +89,20 @@ make Float, implement: Truthyable do
 end
 
 make String, implement: Truthyable do
-  # Always +true+, including for the empty string.
-  #
-  # Use +blank?+ from +Blankable+ when an empty or whitespace-only string
-  # should count as nothing.
+  # Always returns +true+, including for the empty string. Use +blank?+ to
+  # treat an empty or whitespace-only string as nothing.
   #
   # @return [Bool] always +true+
   #
   # @example
-  #   "".truthy?      # => true
-  #   "".blank?       # => true   (the question usually meant)
+  #   "".truthy?   # => true
+  #   "".blank?    # => true
   truthy? :> Bool
   let truthy?(@_) = true
 end
 
 make Optional<X>, implement: Truthyable do
-  # Returns +true+ for a +Just+ and +false+ for +None+.
-  #
-  # The one type where truthiness is genuinely about presence, which is what
-  # makes an optional usable directly as a condition.
+  # Returns +true+ for a +Just+, even +Just(false)+, and +false+ for +None+.
   #
   # @return [Bool] +true+ when a value is present
   #
@@ -130,27 +115,26 @@ make Optional<X>, implement: Truthyable do
 end
 
 make [X], implement: Truthyable do
-  # Always +true+, including for the empty list.
-  #
-  # Use +empty?+ or +blank?+ when an empty list should count as nothing.
+  # Always returns +true+, including for the empty list. Use +empty?+ or
+  # +blank?+ to test for an empty list.
   #
   # @return [Bool] always +true+
   #
   # @example
   #   [].truthy?   # => true
-  #   [].blank?    # => true   (the question usually meant)
+  #   [].blank?    # => true
   truthy? :> Bool
   let truthy?(@_) = true
 end
 
 make Map<K,V>, implement: Truthyable do
-  # Always +true+, including for the empty map.
+  # Always returns +true+, including for the empty map.
   #
   # @return [Bool] always +true+
   #
   # @example
   #   {}.truthy?   # => true
-  #   {}.blank?    # => true   (the question usually meant)
+  #   {}.blank?    # => true
   truthy? :> Bool
   let truthy?(@_) = true
 end
