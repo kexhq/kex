@@ -1,8 +1,7 @@
 # Tey — Package Manager for Kex
 
 > **Implementation status:** the first usable Tey bootstrap is in `tey/`.
-> Known compiler and package-manager gaps are tracked in
-> [`tey-limitations.md`](tey-limitations.md).
+> Known compiler gaps are tracked in [`known-gaps.md`](known-gaps.md).
 
 A package manager for Kex, written in Kex, with a Kex manifest. Git-resolved today,
 registry-shaped for tomorrow. Per-project footprint is just a lockfile — sources live

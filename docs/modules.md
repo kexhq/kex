@@ -1,12 +1,9 @@
 # Modules and Visibility
 
-> **Status.** Module declaration, nesting, `private do`, and qualified access
-> all work in the interpreter. `using` — including `only:`, `except:`, and
-> `as:` — is parsed and resolved during semantic analysis
-> (`src/semantic/resolve_pass.cxx`), but the tree-walk interpreter still treats
-> it as a **no-op** at runtime (names are not actually brought into scope — see
-> `docs/testing.md`). A full module system across BEAM modules is still in
-> progress.
+> **Status.** Module declaration, nesting, `private do`, qualified access and
+> `using` — including `only:`, `except:`, and `as:` — work on both backends.
+> `using` is resolved during semantic analysis (`src/semantic/resolve_pass.cxx`),
+> and each module compiles to its own BEAM module.
 
 ## Module Declaration
 

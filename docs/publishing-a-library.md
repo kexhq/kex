@@ -227,10 +227,13 @@ adding dependencies do not conflict on it by hand:
 tey setup merge-driver
 ```
 
-## What is not there yet
+## Transitive dependencies
 
-Transitive dependencies. Tey reads the manifest of the package you are
-building, not the manifests of what it fetches — so a library's own
-dependencies do not come along, and two constraints on the same package are
-not unified. Keep published libraries dependency-free until that lands;
-`docs/tey-limitations.md` tracks it, along with the rest.
+A library's own dependencies come along: after fetching a package, Tey reads
+its `package.kex` and resolves the `tey(...)` lines outside any `group` block
+(a dependency's `group :dev` is skipped, so its test frameworks stay out of
+your build). Constraints that several packages place on the same dependency
+are intersected, and Tey stops with both requirers named when the pinned
+version cannot satisfy them all, or when the same name is required from two
+different repositories. Compiler gaps that affect libraries are tracked in
+`docs/known-gaps.md`.

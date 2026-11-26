@@ -316,9 +316,8 @@ sticks.
 
 ## Known gaps
 
-The first run of this workflow is also its first real test; the `formula` job
-in particular has only been exercised against a simulated release.
-`docs/tey-limitations.md` tracks that and the related packaging gaps.
+The `formula` job runs only on a stable release, and none has been cut yet, so
+it has only been exercised against a simulated release.
 
 **No Intel macOS archive.** GitHub has retired its Intel macOS runners, so a
 `macos-13` build job queues forever — the first real release hung on exactly
