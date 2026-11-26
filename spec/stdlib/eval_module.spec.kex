@@ -1,5 +1,4 @@
 # kex: no-check
-# kex: interpreter-only
 
 using Evaluator
 
@@ -105,6 +104,46 @@ describe("EvaluatorOptions") do
     match Evaluator.runExpression("ENV.get(\"HOME\").present?", EvaluatorOptions { allow: [:ENV] }) do
       Ok(_) => assert(true)
       Error(msg) => assert(false, msg)
+    end
+  end
+end
+
+describe("Evaluator parse errors") do
+  it("returns Error for a program that does not parse") do
+    match Evaluator.run("main do 1 + end") do
+      Ok(value) => assert(false, "should fail, got ${value}")
+      Error(msg) => assert(msg.startsWith?("Parse error"), msg)
+    end
+  end
+
+  it("returns Error for an expression that does not parse") do
+    match Evaluator.runExpression("1 +") do
+      Ok(value) => assert(false, "should fail, got ${value}")
+      Error(msg) => assert(msg.startsWith?("Parse error at 1:"), msg)
+    end
+  end
+
+  it("returns Error for a top level that does not parse") do
+    match Evaluator.run("1 +") do
+      Ok(value) => assert(false, "should fail, got ${value}")
+      Error(msg) => assert(msg.startsWith?("Parse error"), msg)
+    end
+  end
+end
+
+describe("Evaluator results") do
+  it("returns records, variants and chars as values of this program") do
+    match Evaluator.run("main do\n(Kex.VERSION, Just('a'), [:ok], 2..5)\nend") do
+      Ok(result) => assert(result == (Kex.VERSION, Just('a'), [:ok], 2..5), "${result}")
+      Error(msg) => assert(false, msg)
+    end
+  end
+
+  it("refuses to lend host functions on BEAM") do
+    let opts = EvaluatorOptions { modules: {"Host": {"twice": { |x| x }}} }
+    match Evaluator.runExpression("1", opts) do
+      Ok(_) => assert(!Kex.BACKEND.beam?)
+      Error(msg) => assert(msg.contains?("EvaluatorOptions.modules"), msg)
     end
   end
 end

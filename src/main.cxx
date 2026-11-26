@@ -295,6 +295,7 @@ enum Value {
     TimePasses,
     PrintPipelinePasses,
     IamAi,
+    EvalEtf,
 };
 } // namespace Option
 
@@ -400,6 +401,9 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
         // kex_prelude.beam in the given dir. Used by the build to prebuild the
         // shared stdlib module alongside the runtime beams.
         {"build-prelude", required_argument, nullptr, Option::BuildPrelude},
+        // Answer one `Evaluator.run` call for a BEAM program: the request and
+        // the result are ETF (runtime/src/kex_intrinsic_evaluator.erl).
+        {"eval-etf", required_argument, nullptr, Option::EvalEtf},
         {nullptr, 0, nullptr, 0}};
 
     int opt;
@@ -511,6 +515,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
             case Option::Progress: progressRequested = true; break;
             case Option::IamAi: iamAi = true; break;
             case Option::BuildPrelude: options.buildPreludeDir = optarg; break;
+            case Option::EvalEtf: options.evalRequest = optarg; break;
             case 'r':
                 options.mode = Mode::Compile;
                 options.compileRun = true;
@@ -601,6 +606,10 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
     }
 #endif
 
+    if (options.evalRequest) {
+        options.exitNow = kex::interpreter::runEvaluatorRequest(*options.evalRequest);
+        return options;
+    }
     if (options.buildPreludeDir) {
         options.exitNow = buildPrelude(*options.buildPreludeDir, options.verifyHir);
         return options;

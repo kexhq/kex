@@ -1,0 +1,15 @@
+# Comparable's operators for a type made in another module: the trait's
+# default `<` is no function of this unit, so BEAM called a local `</2` and
+# failed IR verification. The type's own module answers it.
+using Ranks
+
+main do
+  let low = Rank { level: 1 }
+  let high = Rank { level: 2 }
+  IO.printLine("${low < high} ${low > high} ${low <= low} ${high >= low}")
+
+  # The same for a type of the prelude's.
+  let pre = Kex.Version { major: 0, minor: 4, patch: 0, revision: None, preRelease: "rc.1" }
+  let rel = Kex.Version { major: 0, minor: 4, patch: 0, revision: None, preRelease: "" }
+  IO.printLine("${pre < rel} ${pre > rel} ${rel <= rel} ${rel >= pre}")
+end

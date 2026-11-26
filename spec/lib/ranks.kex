@@ -1,0 +1,11 @@
+# A Comparable record whose `make` is in its own module, for
+# spec/trait_operator_apart.kex.
+module Ranks do
+  record Rank do
+    level : Integer
+  end
+
+  make Rank, implement: Comparable do
+    let compare(other: Rank) -> Ordering = this.level.compare(other.level)
+  end
+end

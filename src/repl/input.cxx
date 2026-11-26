@@ -606,6 +606,54 @@ auto replIsUpperConstantBinding(const std::string& source, size_t off) -> bool {
     return source[next] != '(' && source[next] != '{';
 }
 
+// An input with nothing to run: blank, or only comments (`# hello`). The
+// REPLs skip it as they skip an empty line. Wrapped as an expression, a lone
+// comment ate the wrapper's closing line on the BEAM REPL ("unexpected token:
+// end") and evaluated to None on the tree-walk one.
+auto replInputIsBlank(const std::string& source) -> bool {
+    try {
+        kex::Lexer lexer(source, "<repl>");
+        for (const auto& token : lexer.tokenizeAll()) {
+            if (token.type != kex::TokenType::Newline && token.type != kex::TokenType::Eof) {
+                return false;
+            }
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+// `source` without the comment that closes it (`1 + 2 # sum`): what follows
+// its last token when that is a `#` comment and blanks. Anything else after
+// the last token (a heredoc's body) keeps it whole, as does a lexer error.
+auto replWithoutTrailingComment(const std::string& source) -> std::string {
+    try {
+        kex::Lexer lexer(source, "<repl>");
+        int end = -1;
+        for (const auto& token : lexer.tokenizeAll()) {
+            if (token.type != kex::TokenType::Newline && token.type != kex::TokenType::Eof) {
+                end = token.location.endOffset;
+            }
+        }
+        if (end < 0 || static_cast<size_t>(end) > source.size()) {
+            return source;
+        }
+        const auto hash = source.find_first_not_of(" \t", end);
+        if (hash == std::string::npos || source[hash] != '#') {
+            return source;
+        }
+        const auto lineEnd = source.find('\n', hash);
+        if (lineEnd != std::string::npos &&
+            source.find_first_not_of(" \t\r\n", lineEnd) != std::string::npos) {
+            return source;
+        }
+        return source.substr(0, end);
+    } catch (const std::exception&) {
+        return source;
+    }
+}
+
 // Readline preserves whitespace typed or pasted before the first token. Kex's
 // parser accepts that indentation, but the REPL classifies definitions before
 // parsing them; comparing the raw line against "let ", "using ", etc. made an

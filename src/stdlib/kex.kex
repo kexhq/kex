@@ -226,6 +226,34 @@ module Kex do
     end
   end
 
+  # Versions order by release, the way semantic versioning orders them:
+  # major, minor and patch numerically, then a pre-release below its release
+  # (`0.4.0-rc.1 < 0.4.0`). The revision is build metadata and does not take
+  # part, so two builds of one release compare +Equal+.
+  make Version, implement: Comparable do
+    # Compares this version with +other+ by release.
+    #
+    # Pre-release channels compare one dot-separated part at a time: numeric
+    # parts numerically, below any named part; named parts as strings; and a
+    # channel that runs out first is the lower (`rc < rc.1`).
+    #
+    # @param other [Version] the version to compare against
+    # @return [Ordering] how this version orders against +other+
+    #
+    # @example
+    #   Kex.VERSION.compare(Kex.VERSION)   # => Equal
+    #
+    # @example Requiring a minimum toolchain
+    #   let floor = Kex.Version { major: 0, minor: 4, patch: 0, revision: None }
+    #   Kex.VERSION >= floor   # => true
+    let compare(other: Version) -> Ordering do
+      return this.major.compare(other.major)
+        .thenBy { this.minor.compare(other.minor) }
+        .thenBy { this.patch.compare(other.patch) }
+        .thenBy { Kex.comparePreRelease(@preRelease, other.preRelease) }
+    end
+  end
+
   # This build's version.
   #
   # @return [Version] the running toolchain's version
@@ -349,6 +377,40 @@ module Kex do
     #   Kex.Feature.list   # => [FileSystem, ExternalPrograms]
     list : [Feature]
     let list = Kex.Intrinsic.Kex.featureList()
+  end
+
+  private do
+    # Two pre-release channels in semantic-versioning order: no channel ("")
+    # above any channel, otherwise part by part.
+    let comparePreRelease(a: String, b: String) -> Ordering do
+      return Equal if a == b
+      return Greater if a.empty?
+      return Less if b.empty?
+
+      return Kex.compareChannelParts(a.split("."), b.split("."))
+    end
+
+    let compareChannelParts(a: [String], b: [String]) -> Ordering do
+      return match (a, b) do
+        ([], []) => Equal
+        ([], _) => Less
+        (_, []) => Greater
+        ([x | xs], [y | ys]) => do
+          Kex.compareChannelPart(x, y).thenBy { Kex.compareChannelParts(xs, ys) }
+        end
+      end
+    end
+
+    # One part of a channel: numbers numerically and below names.
+    let compareChannelPart(a: String, b: String) -> Ordering do
+      let aNumeric = !a.empty? && a.chars.all?(~digit?)
+      let bNumeric = !b.empty? && b.chars.all?(~digit?)
+      return Integer.parse(a).or(0).compare(Integer.parse(b).or(0)) if aNumeric && bNumeric
+      return Less if aNumeric
+      return Greater if bNumeric
+
+      return a.compare(b)
+    end
   end
 end
 

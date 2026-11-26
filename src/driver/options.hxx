@@ -53,6 +53,9 @@ struct Options {
     // `--build-prelude DIR`: run after every option is read, so `--verify-hir`
     // applies to the prelude wherever it stands.
     std::optional<std::string> buildPreludeDir;
+    // `--eval-etf REQUEST`: answer one `Evaluator.run` call for a BEAM program
+    // (kex::interpreter::runEvaluatorRequest), then exit.
+    std::optional<std::string> evalRequest;
     // `--print-passes`: list the compile pipeline and the IR passes, then exit.
     bool printPasses = false;
     // `--print-pipeline-passes`: the pipeline a build would run, as text.

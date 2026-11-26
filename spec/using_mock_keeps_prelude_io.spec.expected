@@ -1,0 +1,5 @@
+using Mock
+  ✓ leaves IO meaning the prelude's IO
+  ✓ still reaches Mock's own modules qualified
+
+2 passed, 0 failed

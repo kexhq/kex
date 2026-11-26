@@ -1,0 +1,34 @@
+# `Kex.Version` is Comparable by release, in semantic-versioning order: the
+# three numbers numerically, then a pre-release below its release, its parts
+# compared one at a time. The revision is build metadata and takes no part.
+let v(major: Integer, minor: Integer, patch: Integer, pre: String) -> Kex.Version do
+  return Kex.Version { major: major, minor: minor, patch: patch, revision: None, preRelease: pre }
+end
+
+main do
+  IO.printLine("${v(0, 4, 0, "").compare(v(0, 4, 0, ""))}")
+  IO.printLine("${v(0, 4, 0, "") < v(0, 5, 0, "")}")
+  IO.printLine("${v(0, 10, 0, "") > v(0, 9, 0, "")}")
+  IO.printLine("${v(1, 0, 0, "") > v(0, 99, 99, "")}")
+  IO.printLine("${v(0, 4, 1, "") > v(0, 4, 0, "")}")
+
+  # A pre-release is below its release, above the one before it.
+  IO.printLine("${v(0, 4, 0, "rc.1") < v(0, 4, 0, "")}")
+  IO.printLine("${v(0, 4, 0, "rc.1") > v(0, 3, 9, "")}")
+
+  # Channel parts: numbers numerically and below names, a shorter channel
+  # below a longer one it begins.
+  IO.printLine("${v(0, 4, 0, "alpha.2") < v(0, 4, 0, "alpha.10")}")
+  IO.printLine("${v(0, 4, 0, "alpha") < v(0, 4, 0, "alpha.1")}")
+  IO.printLine("${v(0, 4, 0, "alpha.1") < v(0, 4, 0, "beta")}")
+  IO.printLine("${v(0, 4, 0, "1") < v(0, 4, 0, "alpha")}")
+
+  # Two builds of one release are Equal to compare.
+  let built = Kex.Version {
+    major: 0, minor: 4, patch: 0, revision: Just("a1b2c3d"), preRelease: ""
+  }
+  IO.printLine("${built.compare(v(0, 4, 0, ""))}")
+
+  IO.printLine(v(0, 4, 0, "rc.1").max(v(0, 4, 0, "")).release)
+  IO.printLine("${Kex.VERSION >= v(0, 0, 0, "")}")
+end

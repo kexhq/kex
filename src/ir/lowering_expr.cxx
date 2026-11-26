@@ -1785,10 +1785,24 @@ auto Lowering::lowerDecidedOperator(const ast::BinaryOp& n, const hir::Target& d
     // An imported implementation, as the checker named it; this unit's own
     // under the name it is emitted by: an erased distinct type's per-type
     // implementation where several types share the name.
+    const auto local = ownerNameOf(decision.owner);
+    // A trait's operator for a type declared and made in another unit
+    // (`Kex.VERSION <= v`, Comparable's `<=` for the prelude's Kex.Version):
+    // the checker names no import, the trait's default being no function of
+    // the type's own, and this unit emits none, so a local call named no
+    // function of this module. The type's module has it, and the prelude's
+    // dispatcher reaches the prelude's types.
+    const bool madeApart = decision.module.empty() && externalRecordNames.count(local) &&
+                           !localTypeModules.count(local) &&
+                           !definedFnArities.count(implementation + "/2");
     if (!decision.module.empty()) {
         call->node = Call{decision.module, implementation, 2, std::move(args), false};
+    } else if (madeApart) {
+        const auto owner = externalMethodOwners.find(local);
+        call->node = Call{
+            owner != externalMethodOwners.end() ? owner->second : names::kPreludeModule,
+            implementation, 2, std::move(args), false};
     } else {
-        const auto local = ownerNameOf(decision.owner);
         const auto owners = methodOwners.find(implementation);
         const bool erased = owners != methodOwners.end() &&
                             std::ranges::find(owners->second, local) != owners->second.end() &&

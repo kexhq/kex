@@ -1,0 +1,24 @@
+# `using Mock` brings in `Mock.IO`, a module whose last name is the prelude's
+# `IO`. A plain `IO.printLine` still means the prelude's: the name as written
+# has the function, which comes before a module a `using` reaches. The walker
+# called `Mock.IO.printLine` and failed at run time.
+using Mock
+
+describe("using Mock") do
+  it("leaves IO meaning the prelude's IO") do
+    Mock.IO.start()
+    IO.printLine("captured")
+    let printed = Mock.IO.output()
+    Mock.IO.stop()
+    assert(printed == "captured\n")
+  end
+
+  it("still reaches Mock's own modules qualified") do
+    Mock.IO.start()
+    IO.print("a")
+    IO.print("b")
+    let printed = Mock.IO.output()
+    Mock.IO.stop()
+    assert(printed == "ab")
+  end
+end

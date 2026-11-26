@@ -731,6 +731,25 @@ int main() {
             }
         });
 
+        it("prints nothing for a comment-only or blank line", []() {
+            // A lone comment was wrapped as an expression: on BEAM it ate the
+            // wrapper's closing line ("unexpected token: end"), and the
+            // walker printed `=> None : Optional`.
+            const std::string input = "# hello\n"
+                                      "   # indented\n"
+                                      "\n"
+                                      "  \n"
+                                      "1 + 2 # trailing\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("unexpected token") == std::string::npos, out);
+                assertTrue(out.find("=> None") == std::string::npos, out);
+                assertTrue(out.find("rror") == std::string::npos, out);
+                assertTrue(out.find("=> 3 : Integer") != std::string::npos, out);
+                // Each of the five lines answers at most once: one result.
+                assertTrue(out.find("=>") == out.rfind("=>"), out);
+            }
+        });
+
         it("supports compound assignment to a persisted var", []() {
             // kexhq/kex#604: the BEAM REPL spotted `n = ...` textually and
             // ran it as a statement, but `n += 1` fell through to the
