@@ -166,7 +166,8 @@ end
   `any?`, `all?`, `eachIndexed`, `mapIndexed`, on a list, a map, a string or a
   range such as `1..10`. `3.times { |i| ... }` counts.
 - A block takes a tuple apart by naming its parts: `{ |word, count| ... }`
-  over a list of pairs or a map. `{ |(word, count)| ... }` is an error.
+  over a list of pairs or a map. A tuple pattern does the same and also works
+  next to another parameter: `reduce(0) { |sum, (word, count)| sum + count }`.
 - Recursion with one clause per case is the normal way to walk a structure.
 - `while cond do ... end` and `loop do ... end` are for work driven by a
   `var`. `loop do |i|` counts passes from 0. `break` leaves the loop and

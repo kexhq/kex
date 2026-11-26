@@ -816,10 +816,17 @@ static char** kexCompletion(const char* text, int start, int end) {
     // readline's word starts at `start`; the completed word at `replaceFrom`
     // (after the dot of a member). Readline inserts whole words, so carry the
     // text between the two — `pa.` — in front of every match.
-    const std::string line(rl_line_buffer);
-    const auto completion = replCompleteAt(line, static_cast<size_t>(end), false);
+    const std::string fullLine(rl_line_buffer);
+    // The code after `/type ` or `/help ` completes as it would on its own.
+    const auto codeStart = kex::replCodeArgumentStart(fullLine);
+    const size_t skip =
+        codeStart == std::string::npos || codeStart > static_cast<size_t>(end) ? 0 : codeStart;
+    const auto line = fullLine.substr(skip);
+    auto completion = replCompleteAt(line, static_cast<size_t>(end) - skip, false);
+    completion.replaceFrom += skip;
     const auto from = std::max(completion.replaceFrom, static_cast<size_t>(start));
-    const auto lead = line.substr(static_cast<size_t>(start), from - static_cast<size_t>(start));
+    const auto lead =
+        fullLine.substr(static_cast<size_t>(start), from - static_cast<size_t>(start));
     g_completionMatches.clear();
     for (const auto& match : completion.matches) {
         if (from == completion.replaceFrom) {

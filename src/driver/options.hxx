@@ -68,6 +68,8 @@ struct Options {
     bool replEval = false;
     bool compileRun = false;
     bool skipPrelude = false;
+    // `--no-inspect`: the REPL prints no `=> value` echo for an input.
+    bool noInspect = false;
     bool collapseReport = false;
     bool allowMocks = false;
     kex::interpreter::Evaluator::TestReportMode testReportMode =

@@ -1198,6 +1198,42 @@ int main() {
             assertTrue(std::holds_alternative<ast::Lambda>(map.args[0]->kind));
         });
 
+        // kexhq/kex#612: `|(a, b)|` is a tuple pattern. It becomes a hidden
+        // parameter and a leading `let (a, b) = <it>` in the body.
+        it("parses a tuple block parameter as a destructuring let", []() {
+            for (const auto* source :
+                 {"main do\n  let f = { |(a, b)| a + b }\nend",
+                  "main do\n  let f = do |(a, b)|\n    a + b\n  end\nend"}) {
+                auto program = parse(source);
+                auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+                auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+                auto& lambda = std::get<ast::Lambda>(let.value->kind);
+                assertEqual(lambda.params.size(), size_t(1));
+                assertTrue(lambda.params[0].name.starts_with("__tuple"));
+                assertEqual(lambda.body.size(), size_t(2));
+                auto& destructure = std::get<ast::LetExpr>(lambda.body[0]->kind);
+                assertTrue(std::holds_alternative<ast::TuplePattern>(destructure.pattern->kind));
+                auto& argument = std::get<ast::Identifier>(destructure.value->kind);
+                assertEqual(argument.name, lambda.params[0].name);
+            }
+        });
+
+        it("parses tuple block parameters beside names and nested", []() {
+            auto program = parse("main do\n  xs.reduce(0) { |acc, (a, (b, _)), (c, d)| acc }\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& call = std::get<ast::MethodCall>(main->body[0]->kind);
+            const auto& block = call.block ? *call.block : call.args.back();
+            auto& lambda = std::get<ast::Lambda>(block->kind);
+            assertEqual(lambda.params.size(), size_t(3));
+            assertEqual(lambda.params[0].name, std::string("acc"));
+            assertTrue(lambda.params[1].name != lambda.params[2].name);
+            // Two destructuring lets, then the written body.
+            assertEqual(lambda.body.size(), size_t(3));
+        });
+
+        it("rejects an unclosed tuple block parameter",
+           []() { assertTrue(parseFails("main do\n  xs.each { |(a, b| a }\nend")); });
+
         it("rejects &.operator — capture is spelled with ~(op)", []() {
             assertTrue(parseFails("main do\n  let x = list.map(&.+ 1)\nend"));
             assertTrue(parseFails("main do\n  let x = list.reduce(0, &.+)\nend"));
@@ -1486,6 +1522,53 @@ int main() {
         it("rejects unclosed module", []() { assertTrue(parseFails("module Foo do\n")); });
 
         it("rejects invalid token at top level", []() { assertTrue(parseFails("+ 5")); });
+
+        // One diagnostic with `code`, and every function still defined with
+        // a body, so no later stage reports a follow-on error.
+        auto reportsOnceAndKeepsBodies = [](const std::string& source, diag::Code code,
+                                            size_t functions) {
+            Lexer lexer(source);
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            assertEqual(parser.diagnostics().size(), size_t(1));
+            if (!parser.diagnostics().empty()) {
+                assertTrue(parser.diagnostics()[0].code == code);
+            }
+            size_t defined = 0;
+            for (const auto& item : program.items) {
+                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                    for (const auto& clause : (*fn)->clauses) {
+                        assertFalse(clause.body.empty());
+                    }
+                    ++defined;
+                }
+            }
+            assertEqual(defined, functions);
+        };
+
+        // kexhq/kex#805: `=` then a newline. The body goes in `do ... end`.
+        it("says a body on the line after `=` goes in do ... end", [=]() {
+            reportsOnceAndKeepsBodies(
+                "let double(n: Integer) -> Integer =\n  n * 2\n\nlet one() = 1\n",
+                diag::Code::FunctionBodyOnNextLine, 2);
+            reportsOnceAndKeepsBodies(
+                "let add(a, b) =\n  a + b\n", diag::Code::FunctionBodyOnNextLine, 1);
+        });
+
+        it("still accepts `=` opening the next line, and a body on the `=` line", []() {
+            assertFalse(parseFails("let add(a, b)\n  = a + b\n"));
+            assertFalse(parseFails("let add(a, b) -> Integer = a + b\n"));
+        });
+
+        // kexhq/kex#806: a `when` guard on a function clause.
+        it("says a function clause cannot have a when guard", [=]() {
+            reportsOnceAndKeepsBodies(
+                "let size(n) when n < 0 = \"negative\"\nlet other(_) = \"other\"\n",
+                diag::Code::GuardOnFunctionClause, 2);
+            reportsOnceAndKeepsBodies(
+                "let sign(n) -> String when f(n, [1, 2]) do\n  \"positive\"\nend\n",
+                diag::Code::GuardOnFunctionClause, 1);
+        });
 
         it("accepts rescue pipe catch-all", []() {
             assertFalse(parseFails(

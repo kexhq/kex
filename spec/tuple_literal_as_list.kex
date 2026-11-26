@@ -1,0 +1,10 @@
+# `.as(List)` on a tuple literal is the bare list of its elements, joined
+# into one element type as a list literal's are.
+main do
+  let numbers = (1, 2, 3).as(List)
+  IO.printLine(numbers.inspected)
+  IO.printLine(numbers.sum)
+  IO.printLine((:a, :b).as(List).map(&.string).inspected)
+  IO.printLine(("x", 1).as(List).inspected)
+  IO.printLine((1, (2, 3).as(List).length).as(List).inspected)
+end

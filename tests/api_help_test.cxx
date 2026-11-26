@@ -4,6 +4,7 @@
 // it is shown rather than the wording of any one stdlib doc comment; the last
 // group asks the real binary about the real library.
 #include "test.hxx"
+#include "../src/common/color.hxx"
 #include "../src/help/api_help.hxx"
 #include <array>
 #include <cstdio>
@@ -105,6 +106,8 @@ auto runKex(const std::string& args) -> std::string {
 } // namespace
 
 int main() {
+    // The cases below pin the text; tests/color_cli_test.cxx pins the colors.
+    kex::color::enabled = false;
     const auto index = indexOf("shapes");
 
     // Cases run after every describe has returned, so what they share lives
@@ -183,6 +186,45 @@ int main() {
 
         it("is found by its bare name",
            [&]() { assertTrue(has(topic(index, "lead"), "List.lead  (make [Point])")); });
+    });
+
+    describe("doc tags", [&]() {
+        const std::string doc = "Splits the text.\n"
+                                "\n"
+                                "@param separator [String] where to cut\n"
+                                "  the text, never empty\n"
+                                "@param limit [Integer] at most this many\n"
+                                "@return [[String]] the pieces\n"
+                                "\n"
+                                "@example On a comma\n"
+                                "  \"a,b\".split(\",\")   # => [\"a\", \"b\"]\n"
+                                "@example\n"
+                                "  \"\".split(\",\")";
+        it("lists the parameters, without the brackets around a type", [doc]() {
+            const auto shown = kex::help::renderDoc(doc);
+            assertTrue(
+                has(shown, "Parameters:\n"
+                           "  separator  String   where to cut the text, never empty\n"
+                           "  limit      Integer  at most this many"),
+                shown);
+        });
+
+        it("says what is returned on one line", [doc]() {
+            assertTrue(has(kex::help::renderDoc(doc), "Returns: [String]  the pieces"));
+        });
+
+        it("shows each example as code, under its title", [doc]() {
+            const auto shown = kex::help::renderDoc(doc);
+            assertTrue(
+                has(shown, "Examples:\n  On a comma\n  \"a,b\".split(\",\")   # => [\"a\", \"b\"]\n"
+                           "  \"\".split(\",\")"),
+                shown);
+            assertFalse(has(shown, "@"), shown);
+        });
+
+        it("keeps the prose first", [doc]() {
+            assertTrue(kex::help::renderDoc(doc).rfind("Splits the text.\n\nParameters:", 0) == 0);
+        });
     });
 
     describe("a miss", [&]() {

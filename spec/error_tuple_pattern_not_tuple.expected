@@ -1,0 +1,12 @@
+spec/error_tuple_pattern_not_tuple.kex:9:7: [KEXET-0523]: Error, a tuple pattern never matches a value of type `Integer`
+  |
+9 |   let (a, b) = n
+  |       ^^^^^^
+spec/error_tuple_pattern_not_tuple.kex:12:30: [KEXET-0523]: Error, a tuple pattern never matches a value of type `Integer`
+   |
+12 |   IO.printLine([1, 2].map { |(x, y)| x + y })
+   |                              ^^^^^^
+spec/error_tuple_pattern_not_tuple.kex:14:18: [KEXET-0523]: Error, a tuple pattern never matches a value of type `String`
+   |
+14 |   ["a"].each do |(s, t)|
+   |                  ^^^^^^

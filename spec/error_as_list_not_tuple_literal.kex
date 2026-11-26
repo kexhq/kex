@@ -1,0 +1,12 @@
+# kex: check-only
+# `.as(List)` makes the list from a tuple literal's elements, which the
+# compiler sees. A tuple known only at run time keeps its per-position types:
+# `.items` or `.to(List)` is the conversion that gives them up.
+pair : Integer -> (Integer, String)
+let pair(n) = (n, "x")
+
+main do
+  let p = pair(1)
+  IO.inspect(p.as(List))
+  IO.inspect(p.items)
+end

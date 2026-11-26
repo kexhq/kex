@@ -215,6 +215,11 @@ public:
     auto successWrappers() const -> const std::unordered_map<const ast::Expr*, std::string>& {
         return m_successWrappers;
     }
+    // The arguments passed wrapped in `Just`: a plain `T` given for a
+    // defaulted `T?` parameter (kexhq/kex#446).
+    auto justArguments() const -> const std::unordered_set<const ast::Expr*>& {
+        return m_justArguments;
+    }
     auto stringPatterns() const -> const std::unordered_set<const ast::Pattern*>& {
         return m_stringPatterns;
     }
@@ -251,6 +256,18 @@ public:
     // Canonical source-facing rendering. Internal inference variable IDs are
     // deliberately normalized to A, B, C, ... for diagnostics and tooling.
     auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
+    // A function NAMED, not called (`f`, `Geo.area`, `List.first`): every
+    // clause the name has, found in the tables `Type.of(f)` reads — the
+    // program's own signatures, then the imported functions — and, for
+    // `Type.name`, the `make Type` functions of this program. `owner` is
+    // where the function is declared: its module, or the type a `make` gives
+    // it ("" for a top-level function). Empty when the name is no function's.
+    struct NamedFunction {
+        std::string name;
+        std::string owner;
+        Signature signature;
+    };
+    auto functionsNamed(const std::string& written) const -> std::vector<NamedFunction>;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
     // The module of the imported function a call by name runs (`Math` for
@@ -1030,7 +1047,8 @@ private:
         TypePtr type,
         bool isVar,
         SourceLocation where,
-        SourceLocation named = {}) -> void;
+        SourceLocation named = {},
+        std::optional<ConstantNumber> constant = std::nullopt) -> void;
     auto lookupVar(const std::string& name) const -> TypePtr;
     // How the nearest binding of `name` was made, or null.
     auto bindingOf(const std::string& name) const -> const TypeEnv::Binding*;
@@ -1766,6 +1784,22 @@ private:
     // The functions with no declared result whose `.try` can fail: each
     // answers its successful value wrapped, `Just` or `Ok` (successWrappers).
     std::unordered_map<const ast::Expr*, std::string> m_successWrappers;
+    // Arguments a defaulted `T?` parameter takes as `Just(value)` (justArguments).
+    std::unordered_set<const ast::Expr*> m_justArguments;
+    // A plain `T` argument where every candidate of this arity takes a
+    // defaulted `T?` in its slot is passed as `Just(value)` (kexhq/kex#446):
+    // its type becomes the Optional, and the argument is recorded for the
+    // backends. `slots` are the argument expressions laid out as `argTypes`.
+    auto wrapDefaultedOptionals(
+        const std::vector<Signature>& candidates,
+        std::vector<TypePtr>& argTypes,
+        const std::vector<const ast::Expr*>& slots) -> void;
+    // The number `expr` always evaluates to, when the checker knows it: a
+    // literal, `+`, `-` and `*` of known numbers, or a `let` bound to one.
+    auto constantNumber(const ast::Expr& expr) const -> std::optional<ConstantNumber>;
+    // Warns on a `/`, `%`, `div`, `modulo` or `divmod` whose divisor is a
+    // known 0 (kexhq/kex#702).
+    auto warnDivisionByZero(const ast::Expr& expr) -> void;
     int m_tryBelowBlock = 0;
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.

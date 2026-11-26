@@ -1166,6 +1166,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
         expect(TokenType::RParen, diag::Code::ExpectedRParenAfterParameters);
     }
     clause.hasParamList = hasParamList;
+    skipClauseGuard();
 
     // The return type may open on the line AFTER the parameters, the same way
     // an `=` body may:
@@ -1187,6 +1188,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
         clause.returnAnnotation = parseTypeExpr();
+        skipClauseGuard();
     }
     // A parameterless binding may annotate with `:` instead, which is how the
     // docs spell it — `foul lines : Feed<String> = …`. `let` reaches the same
@@ -1216,7 +1218,16 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     }
 
     // = expr (single expression body)
-    if (match(TokenType::Equals)) {
+    if (check(TokenType::Equals)) {
+        const auto equalsLocation = advance().location;
+        // `let f(x) =` with the body on the next line. `=` takes a body that
+        // fits on its line; anything longer goes in `do ... end` (STYLE.md).
+        // Said here, and the body is still parsed, so the function exists and
+        // no later stage reports it undefined (kexhq/kex#805).
+        if (check(TokenType::Newline)) {
+            report(diag::Code::FunctionBodyOnNextLine, equalsLocation);
+            skipNewlines();
+        }
         clause.body.push_back(parseExpr());
     }
     // do...end block body
@@ -1250,6 +1261,37 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     }
 
     return clause;
+}
+
+// `let size(n) when n < 0 = ...`: a function clause takes no guard (a `match`
+// arm does). Without this the clause ended at `when`, which then failed as
+// "unexpected token at top level", and the cut-off clause was checked as a
+// function with no body (kexhq/kex#806). Report the rule once, then skip the
+// guard so the body after it still parses as this clause's.
+auto Parser::skipClauseGuard() -> void {
+    if (!check(TokenType::When)) {
+        return;
+    }
+    report(diag::Code::GuardOnFunctionClause, peek().location);
+    advance(); // when
+    int depth = 0;
+    while (!atEnd()) {
+        const auto type = peek().type;
+        if (type == TokenType::LParen || type == TokenType::LBracket || type == TokenType::LBrace) {
+            ++depth;
+        } else if (
+            type == TokenType::RParen || type == TokenType::RBracket || type == TokenType::RBrace) {
+            if (depth == 0) {
+                return;
+            }
+            --depth;
+        } else if (
+            depth == 0 && (type == TokenType::Equals || type == TokenType::Do ||
+                           type == TokenType::Arrow || type == TokenType::Newline)) {
+            return;
+        }
+        advance();
+    }
 }
 
 auto Parser::parseParams() -> std::vector<ast::Param> {
@@ -3894,6 +3936,40 @@ auto Parser::parseWithExpr() -> ast::ExprPtr {
     return expr;
 }
 
+// The parameters between a block's `|`s, up to (not including) the closing
+// one. A tuple parameter is a pattern, the spelling `let` and `match` use:
+// `{ |(a, b)| a + b }` means `{ |__tuple0| let (a, b) = __tuple0; a + b }`.
+// The hidden parameter takes the whole argument and the `let`, pushed onto
+// `body` for the caller to continue, destructures it, so the checker and both
+// backends see only forms they already handle (kexhq/kex#612).
+auto Parser::parseBlockParams(std::vector<ast::ExprPtr>& body) -> std::vector<ast::LambdaParam> {
+    std::vector<ast::LambdaParam> params;
+    while (!check(TokenType::Pipe) && !atEnd()) {
+        ast::LambdaParam param;
+        param.location = peek().location;
+        if (check(TokenType::Underscore)) {
+            param.name = "_";
+            advance();
+        } else if (check(TokenType::LParen)) {
+            const auto location = peek().location;
+            auto pattern = parsePattern();
+            param.name = "__tuple" + std::to_string(m_tupleParams++);
+            auto argument = std::make_unique<ast::Expr>();
+            argument->location = location;
+            argument->kind = ast::Identifier{param.name};
+            auto destructure = std::make_unique<ast::Expr>();
+            destructure->location = location;
+            destructure->kind = ast::LetExpr{std::move(pattern), std::move(argument), std::nullopt};
+            body.push_back(std::move(destructure));
+        } else {
+            param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
+        }
+        params.push_back(std::move(param));
+        match(TokenType::Comma);
+    }
+    return params;
+}
+
 auto Parser::parseLambda() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
@@ -3902,37 +3978,12 @@ auto Parser::parseLambda() -> ast::ExprPtr {
     if (match(TokenType::LBrace)) {
         std::vector<ast::LambdaParam> params;
 
+        std::vector<ast::ExprPtr> body;
         if (match(TokenType::Pipe)) {
-            while (!check(TokenType::Pipe) && !atEnd()) {
-                ast::LambdaParam param;
-                param.location = peek().location;
-                if (check(TokenType::Underscore)) {
-                    param.name = "_";
-                    advance();
-                } else if (check(TokenType::LParen)) {
-                    // Destructured tuple param: |(a, b)|
-                    advance(); // (
-                    std::string combined;
-                    while (!check(TokenType::RParen) && !atEnd()) {
-                        if (!combined.empty() && check(TokenType::Comma)) {
-                            combined += ",";
-                            advance();
-                        } else {
-                            combined += advance().value;
-                        }
-                    }
-                    expect(TokenType::RParen, diag::Code::ExpectedRParenInTupleParam);
-                    param.name = "(" + combined + ")";
-                } else {
-                    param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
-                }
-                params.push_back(std::move(param));
-                match(TokenType::Comma);
-            }
+            params = parseBlockParams(body);
             expect(TokenType::Pipe, diag::Code::ExpectedPipeToCloseParams);
         }
 
-        std::vector<ast::ExprPtr> body;
         skipNewlines();
         while (!check(TokenType::RBrace) && !atEnd()) {
             body.push_back(parseExpr());
@@ -3949,24 +4000,13 @@ auto Parser::parseLambda() -> ast::ExprPtr {
         std::vector<ast::LambdaParam> params;
         skipNewlines();
 
+        std::vector<ast::ExprPtr> body;
         if (match(TokenType::Pipe)) {
-            while (!check(TokenType::Pipe) && !atEnd()) {
-                ast::LambdaParam param;
-                param.location = peek().location;
-                if (check(TokenType::Underscore)) {
-                    param.name = "_";
-                    advance();
-                } else {
-                    param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
-                }
-                params.push_back(std::move(param));
-                match(TokenType::Comma);
-            }
+            params = parseBlockParams(body);
             expect(TokenType::Pipe, diag::Code::ExpectedPipeToCloseParams);
         }
 
         skipNewlines();
-        std::vector<ast::ExprPtr> body;
         while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
             // A `Block<[A]>` parameter collects these, and `...expr` splices a
             // list into what it collects (see docs/dsl.md).
@@ -4159,34 +4199,10 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
 
         std::vector<ast::LambdaParam> params;
         advance(); // |
-        while (!check(TokenType::Pipe) && !atEnd()) {
-            ast::LambdaParam param;
-            param.location = peek().location;
-            if (check(TokenType::Underscore)) {
-                param.name = "_";
-                advance();
-            } else if (check(TokenType::LParen)) {
-                advance(); // (
-                std::string combined;
-                while (!check(TokenType::RParen) && !atEnd()) {
-                    if (!combined.empty() && check(TokenType::Comma)) {
-                        combined += ",";
-                        advance();
-                    } else {
-                        combined += advance().value;
-                    }
-                }
-                expect(TokenType::RParen, diag::Code::ExpectedRParenInTupleParam);
-                param.name = "(" + combined + ")";
-            } else {
-                param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
-            }
-            params.push_back(std::move(param));
-            match(TokenType::Comma);
-        }
+        std::vector<ast::ExprPtr> body;
+        params = parseBlockParams(body);
         expect(TokenType::Pipe, diag::Code::ExpectedToken, {{"expected", "'|'"}});
 
-        std::vector<ast::ExprPtr> body;
         skipNewlines();
         while (!check(TokenType::RBrace) && !atEnd()) {
             body.push_back(parseExpr());

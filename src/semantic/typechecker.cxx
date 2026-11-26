@@ -91,6 +91,7 @@ auto TypeChecker::check(
     m_typeReferences.clear();
     m_stringPatterns.clear();
     m_successWrappers.clear();
+    m_justArguments.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_captureCalls.clear();
@@ -5942,6 +5943,17 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
                          {"given", std::to_string(node.elements.size())},
                          {"type", typeToString(expected)}});
                 }
+                // `let (a, b) = 1`, or `{ |(a, b)| a }` over a list of Integers,
+                // was accepted and failed only when it ran: the walker with an
+                // undefined `a`, BEAM with a badmatch.
+                if (expected && (std::holds_alternative<PrimitiveType>(expected->kind) ||
+                                 std::holds_alternative<ListType>(expected->kind) ||
+                                 std::holds_alternative<MapType>(expected->kind) ||
+                                 std::holds_alternative<FuncType>(expected->kind))) {
+                    error(
+                        diag::Code::TuplePatternNeverMatches, pat.location,
+                        {{"type", typeToString(expected)}});
+                }
                 for (size_t i = 0; i < node.elements.size(); ++i) {
                     if (node.elements[i]) {
                         bindPatternVars(
@@ -8403,8 +8415,12 @@ auto TypeChecker::defineVar(const std::string& name, TypePtr type, TypeEnv::Bind
 }
 
 auto TypeChecker::declareVar(
-    const std::string& name, TypePtr type, bool isVar, SourceLocation where, SourceLocation named)
-    -> void {
+    const std::string& name,
+    TypePtr type,
+    bool isVar,
+    SourceLocation where,
+    SourceLocation named,
+    std::optional<ConstantNumber> constant) -> void {
     if (named.line == 0) {
         named = where;
     }
@@ -8419,7 +8435,7 @@ auto TypeChecker::declareVar(
         defineVar(name, std::move(type), first);
         return;
     }
-    defineVar(name, std::move(type), {isVar, false, named.line, named.column});
+    defineVar(name, std::move(type), {isVar, false, named.line, named.column, constant});
     if (m_recordsNames) {
         m_bindingSites.emplace_back(name, named);
     }
@@ -11123,6 +11139,7 @@ auto TypeChecker::forgetAnswers(const ast::FunctionDef& copy) -> void {
     forget(m_typeArguments, nodes);
     forget(m_importedTypeBindings, nodes);
     forget(m_successWrappers, nodes);
+    forget(m_justArguments, nodes);
     forget(m_resolvedCalls, calls);
     forget(m_staticTypeOfCalls, calls);
     forget(m_methodTypeArguments, calls);

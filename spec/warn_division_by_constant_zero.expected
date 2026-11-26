@@ -1,0 +1,25 @@
+spec/warn_division_by_constant_zero.kex:11:31: [KEXWT-0002]: Warning, division by zero: the divisor of `/` is always 0, so this fails at run time
+   |
+11 |   IO.printLine("Hello, ${22 / (HELLO - 16)}")
+   |                          ^^^^^^^^^^^^^^^^^
+spec/warn_division_by_constant_zero.kex:15:20: [KEXWT-0002]: Warning, division by zero: the divisor of `%` is always 0, so this fails at run time
+   |
+15 |   IO.printLine(7 % none)
+   |                ^^^^^^^^
+spec/warn_division_by_constant_zero.kex:16:21: [KEXWT-0002]: Warning, division by zero: the divisor of `div` is always 0, so this fails at run time
+   |
+16 |   IO.printLine(7.div(-zero))
+   |                ^^^^^^^^^^^^
+spec/warn_division_by_constant_zero.kex:17:24: [KEXWT-0002]: Warning, division by zero: the divisor of `modulo` is always 0, so this fails at run time
+   |
+17 |   IO.printLine(7.modulo(HELLO - HELLO))
+   |                ^^^^^^^^^^^^^^^^^^^^^^^
+spec/warn_division_by_constant_zero.kex:18:24: [KEXWT-0002]: Warning, division by zero: the divisor of `divmod` is always 0, so this fails at run time
+   |
+18 |   IO.printLine(7.divmod(0))
+   |                ^^^^^^^^^^^
+spec/warn_division_by_constant_zero.kex:19:22: [KEXWT-0002]: Warning, division by zero: the divisor of `/` is always 0, so this fails at run time
+   |
+19 |   IO.printLine(1.5 / 0.0)
+   |                ^^^^^^^^^
+No errors found.

@@ -3,6 +3,8 @@
 #include "../ast/ast.hxx"
 #include "../ast/convert.hxx"
 #include "../ast/type_text.hxx"
+#include "../common/color.hxx"
+#include "../common/diagnostics.hxx"
 #include "../common/mangle.hxx"
 #include "../common/string_utils.hxx"
 #include "../common/prelude_loader.hxx"
@@ -13,6 +15,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <sstream>
@@ -83,6 +86,50 @@ auto proseMarkup(const std::string& doc) -> std::string {
         }
     }
     return result;
+}
+
+auto styled(const char* code, const std::string& text) -> std::string {
+    return std::string(color::apply(code)) + text + color::apply(color::reset);
+}
+
+// A doc tag's `[Type]`, without the brackets that only delimit it: `[X?]` is
+// `X?` and `[[Y]]` is `[Y]`. `rest` receives what follows it.
+auto tagType(const std::string& text, std::string& rest) -> std::string {
+    const auto start = text.find_first_not_of(' ');
+    if (start == std::string::npos || text[start] != '[') {
+        rest = trimmed(text);
+        return {};
+    }
+    int depth = 0;
+    for (size_t at = start; at < text.size(); ++at) {
+        depth += text[at] == '[' ? 1 : text[at] == ']' ? -1 : 0;
+        if (depth == 0) {
+            rest = trimmed(text.substr(at + 1));
+            return text.substr(start + 1, at - start - 1);
+        }
+    }
+    rest = trimmed(text);
+    return {};
+}
+
+// Lines of example code, their shared indentation taken off.
+auto dedented(std::vector<std::string> lines) -> std::vector<std::string> {
+    while (!lines.empty() && trimmed(lines.back()).empty()) {
+        lines.pop_back();
+    }
+    while (!lines.empty() && trimmed(lines.front()).empty()) {
+        lines.erase(lines.begin());
+    }
+    size_t indent = std::string::npos;
+    for (const auto& line : lines) {
+        if (const auto first = line.find_first_not_of(" \t"); first != std::string::npos) {
+            indent = std::min(indent, first);
+        }
+    }
+    for (auto& line : lines) {
+        line = line.size() > indent ? line.substr(indent) : trimmed(line);
+    }
+    return lines;
 }
 
 // Where the first sentence of `paragraph` ends: at a period followed by a
@@ -505,6 +552,130 @@ private:
     std::vector<std::pair<std::string, size_t>> m_added;
 };
 
+} // namespace
+
+auto renderDoc(const std::string& doc) -> std::string {
+    struct Param {
+        std::string name;
+        std::string type;
+        std::string text;
+    };
+    struct Example {
+        std::string title;
+        std::vector<std::string> lines;
+    };
+    enum class In { Prose, Param, Return, Example };
+
+    std::vector<std::string> prose;
+    std::vector<Param> params;
+    std::optional<Param> returns;
+    std::vector<Example> examples;
+    In in = In::Prose;
+    for (const auto& line : splitLines(doc)) {
+        const auto text = trimmed(line);
+        const auto tagged = [&](std::string_view tag) {
+            return text.size() >= tag.size() && text.compare(0, tag.size(), tag) == 0 &&
+                   (text.size() == tag.size() || text[tag.size()] == ' ');
+        };
+        if (tagged("@param")) {
+            auto rest = trimmed(text.substr(6));
+            const auto space = rest.find(' ');
+            Param param{rest.substr(0, space), {}, {}};
+            param.type = tagType(space == std::string::npos ? "" : rest.substr(space), param.text);
+            params.push_back(std::move(param));
+            in = In::Param;
+        } else if (tagged("@return") || tagged("@returns")) {
+            Param result;
+            result.type = tagType(text.substr(std::min(text.find(' '), text.size())), result.text);
+            returns = std::move(result);
+            in = In::Return;
+        } else if (tagged("@example")) {
+            examples.push_back({trimmed(text.substr(std::min<size_t>(8, text.size()))), {}});
+            in = In::Example;
+        } else if (in == In::Example) {
+            examples.back().lines.push_back(line);
+        } else if (in == In::Param || in == In::Return) {
+            auto& into = in == In::Param ? params.back().text : returns->text;
+            if (text.empty()) {
+                in = In::Prose;
+            } else {
+                into += (into.empty() ? "" : " ") + text;
+            }
+        } else {
+            prose.push_back(line);
+        }
+    }
+
+    std::vector<std::string> sections;
+    {
+        std::string joined;
+        for (const auto& line : prose) {
+            joined += (joined.empty() ? "" : "\n") + line;
+        }
+        std::string text;
+        for (const auto& line : splitLines(proseMarkup(joined))) {
+            // An indented line is code, as it is in proseMarkup.
+            const bool code = !line.empty() && (line[0] == ' ' || line[0] == '\t');
+            text += (text.empty() ? "" : "\n") + (code ? diagnostics::highlightKex(line)
+                                                       : diagnostics::highlightCodeSpans(line));
+        }
+        while (!text.empty() && text.back() == '\n') {
+            text.pop_back();
+        }
+        if (!trimmed(text).empty()) {
+            sections.push_back(text);
+        }
+    }
+    const auto described = [](const std::string& text) {
+        return text.empty() ? "" : "  " + diagnostics::highlightCodeSpans(proseMarkup(text));
+    };
+    if (!params.empty()) {
+        size_t nameWidth = 0;
+        size_t typeWidth = 0;
+        for (const auto& param : params) {
+            nameWidth = std::max(nameWidth, param.name.size());
+            typeWidth = std::max(typeWidth, param.type.size());
+        }
+        std::string text = styled(color::bold, "Parameters:");
+        for (const auto& param : params) {
+            text += "\n  " + styled(color::bold, param.name) +
+                    std::string(nameWidth - param.name.size(), ' ') + "  " +
+                    diagnostics::highlightKex(param.type);
+            if (!param.text.empty()) {
+                text += std::string(typeWidth - param.type.size(), ' ') + described(param.text);
+            }
+        }
+        sections.push_back(text);
+    }
+    if (returns && (!returns->type.empty() || !returns->text.empty())) {
+        sections.push_back(
+            styled(color::bold, "Returns:") + " " + diagnostics::highlightKex(returns->type) +
+            described(returns->text));
+    }
+    if (!examples.empty()) {
+        std::string text = styled(color::bold, examples.size() == 1 ? "Example:" : "Examples:");
+        for (size_t i = 0; i < examples.size(); ++i) {
+            const auto& example = examples[i];
+            if (!example.title.empty()) {
+                text += std::string(i ? "\n" : "") + "\n  " +
+                        styled(color::dim, proseMarkup(example.title));
+            }
+            for (const auto& line : dedented(example.lines)) {
+                text += "\n" + (line.empty() ? "" : "  " + diagnostics::highlightKex(line));
+            }
+        }
+        sections.push_back(text);
+    }
+
+    std::string out;
+    for (const auto& section : sections) {
+        out += (out.empty() ? "" : "\n\n") + section;
+    }
+    return out;
+}
+
+namespace {
+
 auto kindWord(OwnerKind kind) -> std::string_view {
     switch (kind) {
         case OwnerKind::Module: return "module";
@@ -541,26 +712,33 @@ auto memberMatches(const ApiMember& member, std::string_view name) -> bool {
            (member.name.back() == '?' || member.name.back() == '!');
 }
 
+auto needsUsingLine(const std::string& module) -> std::string {
+    return "  needs " + diagnostics::highlightCodeSpans("`using " + module + "`") + "\n";
+}
+
 auto printMember(const ApiOwner& owner, const ApiMember& member, std::ostream& out) -> void {
-    out << displayName(owner) << "." << member.name;
+    out << styled(color::bold, displayName(owner) + "." + member.name);
     if (!member.group.empty()) {
-        out << "  (" << member.group << ")";
+        out << "  (" << diagnostics::highlightKex(member.group) << ")";
     }
-    out << "\n  " << member.signature << "\n";
+    out << "\n  " << diagnostics::highlightKex(member.signature) << "\n";
     const auto& needed = member.requiresUsing.empty() ? owner.requiresUsing : member.requiresUsing;
     if (!needed.empty()) {
-        out << "  needs `using " << needed << "`\n";
+        out << needsUsingLine(needed);
     }
     if (!member.doc.empty()) {
-        out << "\n" << proseMarkup(member.doc) << "\n";
+        out << "\n" << renderDoc(member.doc) << "\n";
     }
 }
 
+// Widths are measured on the unstyled text: an escape sequence takes no room
+// on the screen.
 auto printMemberLine(const ApiMember& member, size_t column, std::ostream& out) -> void {
-    out << "  " << member.signature;
-    auto summary = summaryOf(member.doc);
+    out << "  " << diagnostics::highlightKex(member.signature);
+    auto summary = diagnostics::highlightCodeSpans(summaryOf(member.doc));
     if (!member.requiresUsing.empty()) {
-        summary = "[using " + member.requiresUsing + "]" + (summary.empty() ? "" : " " + summary);
+        summary = styled(color::dim, "[using " + member.requiresUsing + "]") +
+                  (summary.empty() ? "" : " " + summary);
     }
     if (!summary.empty()) {
         if (member.signature.size() < column) {
@@ -700,7 +878,7 @@ auto ApiIndex::printOverview(std::ostream& out) const -> void {
     }
 
     const auto section = [&](std::string_view title, bool wantsUsing) {
-        out << "\n" << title << "\n";
+        out << "\n" << styled(color::bold, std::string(title)) << "\n";
         for (const auto& [name, owner] : m_owners) {
             if (owner.requiresUsing.empty() == wantsUsing) {
                 continue;
@@ -709,12 +887,13 @@ auto ApiIndex::printOverview(std::ostream& out) const -> void {
                 continue;
             }
             const auto shown = displayName(owner);
-            out << "  " << shown << std::string(column - shown.size(), ' ') << "  "
-                << kindWord(owner.kind);
+            out << "  " << styled(color::bold, shown) << std::string(column - shown.size(), ' ')
+                << "  " << styled(color::dim, std::string(kindWord(owner.kind)));
             const auto summary =
                 name.empty() ? std::string(kTopLevelSummary) : summaryOf(owner.doc);
             if (!summary.empty()) {
-                out << std::string(6 - kindWord(owner.kind).size(), ' ') << "  " << summary;
+                out << std::string(6 - kindWord(owner.kind).size(), ' ') << "  "
+                    << diagnostics::highlightCodeSpans(summary);
             }
             out << "\n";
         }
@@ -725,17 +904,18 @@ auto ApiIndex::printOverview(std::ostream& out) const -> void {
 
 auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> void {
     if (owner.name.empty()) {
-        out << kTopLevelSummary << "\n";
+        out << styled(color::bold, std::string(kTopLevelSummary)) << "\n";
     } else {
-        out << (owner.declaration.empty() ? std::string(kindWord(owner.kind)) + " " + owner.name
-                                          : owner.declaration)
+        out << diagnostics::highlightKex(
+                   owner.declaration.empty() ? std::string(kindWord(owner.kind)) + " " + owner.name
+                                             : owner.declaration)
             << "\n";
     }
     if (!owner.requiresUsing.empty()) {
-        out << "  needs `using " << owner.requiresUsing << "`\n";
+        out << needsUsingLine(owner.requiresUsing);
     }
     if (!owner.doc.empty()) {
-        out << "\n" << proseMarkup(owner.doc) << "\n";
+        out << "\n" << renderDoc(owner.doc) << "\n";
     }
 
     size_t column = 0;
@@ -754,7 +934,7 @@ auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> voi
     for (const auto& group : groups) {
         out << "\n";
         if (!group.empty()) {
-            out << group << "\n";
+            out << diagnostics::highlightKex(group) << "\n";
         }
         for (const auto& member : owner.members) {
             if (member.group == group) {
@@ -788,7 +968,8 @@ auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> voi
         if (names.empty()) {
             continue;
         }
-        out << "\nfrom " << trait->name << " (kex -s " << trait->name << "): " << names << "\n";
+        out << "\nfrom " << styled(color::bold, trait->name) << " (kex -s " << trait->name
+            << "): " << names << "\n";
     }
 
     std::string nested;
@@ -803,8 +984,45 @@ auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> voi
         nested += name;
     }
     if (!nested.empty()) {
-        out << "\nsee also: " << nested << "\n";
+        out << "\n" << styled(color::bold, "see also:") << " " << nested << "\n";
     }
+}
+
+auto ApiIndex::printEntity(
+    const std::string& owner, const std::string& member, std::ostream& out) const -> bool {
+    const auto found = m_owners.find(owner);
+    if (found == m_owners.end()) {
+        return false;
+    }
+    if (member.empty()) {
+        printOwner(found->second, out);
+        return true;
+    }
+    std::vector<std::pair<const ApiOwner*, const ApiMember*>> matches;
+    for (const auto& candidate : found->second.members) {
+        if (candidate.name == member) {
+            matches.emplace_back(&found->second, &candidate);
+        }
+    }
+    for (const auto& traitName : found->second.traits) {
+        if (!matches.empty()) {
+            break;
+        }
+        if (const auto* trait = traitOwner(traitName)) {
+            for (const auto& candidate : trait->members) {
+                if (candidate.name == member) {
+                    matches.emplace_back(trait, &candidate);
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) {
+            out << "\n";
+        }
+        printMember(*matches[i].first, *matches[i].second, out);
+    }
+    return !matches.empty();
 }
 
 auto ApiIndex::printTopic(std::string_view query, std::ostream& out, std::ostream& err) const

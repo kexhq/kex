@@ -247,6 +247,26 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
         return target;
     }
     auto source = node.receiver ? inferExpr(*node.receiver) : Type::unknown();
+    // `(1, 2).as(List)` is the list `[1, 2]`: a tuple literal's elements are
+    // all in sight, so they join into one element type as a list literal's
+    // do. A tuple known only at run time keeps its per-position typing, and
+    // `.items` or `.to(List)` is the conversion that says it gives that up.
+    const auto* written =
+        node.targetType ? std::get_if<ast::TypeName>(&node.targetType->kind) : nullptr;
+    if (written && written->dotted() == kex::names::kListType &&
+        std::holds_alternative<ListType>(resolve(target)->kind) &&
+        std::holds_alternative<TupleType>(resolve(source)->kind)) {
+        if (!node.receiver || !std::holds_alternative<ast::TupleExpr>(node.receiver->kind)) {
+            error(diag::Code::AsListNeedsTupleLiteral, expr.location);
+            return target;
+        }
+        TypePtr element = Type::unknown();
+        for (const auto& type : std::get<TupleType>(resolve(source)->kind).elements) {
+            element = joinElementType(element, type);
+        }
+        m_decidedCalls[&expr] = {CallKind::Conversion, kex::names::kListType};
+        return Type::list(element);
+    }
     const auto targetIsString = [](const TypePtr& type) {
         const auto* primitive = std::get_if<PrimitiveType>(&type->kind);
         return primitive && primitive->kind == PrimitiveType::String;

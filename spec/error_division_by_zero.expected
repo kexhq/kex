@@ -1,2 +1,5 @@
-before
-Error: spec/error_division_by_zero.kex:4:20: runtime error: division by zero
+spec/error_division_by_zero.kex:6:20: [KEXWT-0002]: Warning, division by zero: the divisor of `/` is always 0, so this fails at run time
+  |
+6 |   IO.printLine(1 / 0)
+  |                ^^^^^
+Error: spec/error_division_by_zero.kex:6:20: runtime error: division by zero

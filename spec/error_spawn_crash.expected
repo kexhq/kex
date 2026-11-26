@@ -1,1 +1,5 @@
+spec/error_spawn_crash.kex:21:34: [KEXWT-0002]: Warning, division by zero: the divisor of `/` is always 0, so this fails at run time
+   |
+21 |       Ping(who) => who.send(10 / 0)
+   |                             ^^^^^^
 Error: spec/error_spawn_crash.kex:21:34: runtime error: division by zero

@@ -1,0 +1,17 @@
+# kex: check-only
+# A tuple pattern on a value that is not a tuple never matches, and the checker
+# says so at the pattern. It was accepted: the walker then failed with an
+# undefined name and BEAM with a badmatch. A tuple block parameter,
+# `{ |(a, b)| ... }`, is the same pattern (kexhq/kex#612).
+
+main do
+  let n = 1
+  let (a, b) = n
+  IO.printLine(a + b)
+
+  IO.printLine([1, 2].map { |(x, y)| x + y })
+
+  ["a"].each do |(s, t)|
+    IO.printLine(s + t)
+  end
+end

@@ -40,6 +40,15 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
         throw LowerError(diag::Code::NestedTooDeepToCompile);
     }
     try {
+        // A plain `T` passed for a defaulted `T?` parameter is its `Just`
+        // (kexhq/kex#446), as the walker passes it.
+        if (e && hir->passedAsJust(*e)) {
+            std::vector<ExprPtr> args;
+            args.push_back(lowerNode(e));
+            auto wrapped = std::make_unique<Expr>();
+            wrapped->node = Construct{"Just", std::move(args)};
+            return wrapped;
+        }
         return lowerNode(e);
     } catch (LowerError& error) {
         // The innermost expression is where it went wrong: the first one to

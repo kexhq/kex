@@ -110,6 +110,18 @@ auto noErrorsWithInterfaces(
         });
 }
 
+// How many division-by-zero warnings checking `source` gives (#702).
+auto zeroDivisions(const std::string& source) -> std::size_t {
+    std::size_t count = 0;
+    for (const auto& d : check(source)) {
+        if (d.code == diag::Code::DivisionByConstantZero) {
+            assertTrue(d.level == semantic::Diagnostic::Level::Warning, d.message);
+            ++count;
+        }
+    }
+    return count;
+}
+
 int main() {
     describe("hir::persist — a checked program across processes", []() {
         // Saved by node position and read back onto a fresh parse of the
@@ -3532,6 +3544,90 @@ int main() {
                 "main do\n"
                 "  Resolver.custom(ResolverOptions { nameservers: [], timeout: \"soon\" })\n"
                 "end\n"));
+        });
+    });
+
+    describe("division by a constant zero (#702)", []() {
+        it("warns on a literal zero divisor", []() {
+            assertEqual(zeroDivisions("main do\n  IO.printLine(1 / 0)\nend\n"), std::size_t{1});
+            assertEqual(zeroDivisions("main do\n  IO.printLine(7 % 0)\nend\n"), std::size_t{1});
+        });
+
+        it("folds literal arithmetic and `let` bindings", []() {
+            assertEqual(
+                zeroDivisions(
+                    "main do\n"
+                    "  let HELLO = 16\n"
+                    "  IO.printLine(\"${22 / (HELLO - 16)}\")\n"
+                    "end\n"),
+                std::size_t{1});
+            assertEqual(
+                zeroDivisions(
+                    "main do\n"
+                    "  let a = 3\n"
+                    "  let b = a * 2 - 6\n"
+                    "  IO.printLine(1 / b)\n"
+                    "end\n"),
+                std::size_t{1});
+        });
+
+        it("warns on Integer's div, modulo and divmod", []() {
+            assertEqual(
+                zeroDivisions(
+                    "main do\n"
+                    "  IO.printLine(7.div(0))\n"
+                    "  IO.printLine(7.modulo(-0))\n"
+                    "  IO.printLine(7.divmod(1 - 1))\n"
+                    "end\n"),
+                std::size_t{3});
+        });
+
+        it("says nothing of a divisor not known to be zero", []() {
+            assertEqual(
+                zeroDivisions(
+                    "let f(n: Integer) -> Integer = 10 / n\n"
+                    "main do\n"
+                    "  var d = 0\n"
+                    "  d = 2\n"
+                    "  IO.printLine(10 / d)\n"
+                    "  let z = 0\n"
+                    "  [1].each do |z|\n"
+                    "    IO.printLine(10 / z)\n"
+                    "  end\n"
+                    "  IO.printLine(10 / (z + 1))\n"
+                    "  IO.printLine(f(z))\n"
+                    "end\n"),
+                std::size_t{0});
+        });
+
+        it("is a warning: the program still checks",
+           []() { assertTrue(noErrors("main do\n  IO.printLine(1 / 0)\nend\n")); });
+    });
+
+    describe("a plain T for a defaulted T? parameter (#446)", []() {
+        it("accepts the value by name and by position", []() {
+            const std::string declaration =
+                "let bigint(label: String, default: Integer? = None) -> String = "
+                "\"${label} ${default}\"\n";
+            assertTrue(noErrors(
+                declaration + "main do\n  IO.printLine(bigint(\"amount\", default: 0))\nend\n"));
+            assertTrue(noErrors(declaration + "main do\n  IO.printLine(bigint(\"a\", 0))\nend\n"));
+            assertTrue(noErrors(
+                declaration + "main do\n  IO.printLine(bigint(\"a\", default: Just(0)))\nend\n"));
+            assertTrue(noErrors(
+                declaration + "main do\n  IO.printLine(bigint(\"a\", default: None))\nend\n"));
+        });
+
+        it("still refuses a value of another type", []() {
+            assertTrue(hasError(
+                "let bigint(label: String, default: Integer? = None) -> String = \"${label}\"\n"
+                "main do\n  IO.printLine(bigint(\"amount\", default: \"zero\"))\nend\n"));
+        });
+
+        it("does not wrap for a T? parameter without a default", []() {
+            assertTrue(hasError(
+                "let bigint(label: String, default: Integer?) -> String = \"${label}\"\n"
+                "main do\n  IO.printLine(bigint(\"amount\", 0))\nend\n"));
         });
     });
 

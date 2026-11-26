@@ -1,0 +1,21 @@
+# kex: check-only
+# A function clause takes no `when` guard (a `match` arm does), and the error
+# says so, once, at the `when` (kexhq/kex#806). It used to be "Unexpected token
+# at top level: when", plus "`size` declared to return String but body returns
+# Void" from the clause cut off at `when`. Now the guard is skipped and the
+# body after it still belongs to the clause, so nothing else is reported.
+
+size : Integer -> String
+let size(n) when n < 0 = "negative"
+let size(_) = "other"
+
+let sign(n: Integer) -> String when n > 0 do
+  "positive"
+end
+
+let sign(_) -> String = "not positive"
+
+main do
+  IO.printLine(size(-1))
+  IO.printLine(sign(1))
+end

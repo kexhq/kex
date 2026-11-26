@@ -634,6 +634,7 @@ auto buildModules(
     std::vector<LoadedDep>& dependencies,
     std::string& specBaseFile,
     bool& cached,
+    bool& warned,
     EarlyErlc* early) -> std::optional<std::vector<kex::ir::EmitResult>> {
     const bool compileRun = options.compileRun;
     const bool gates = options.mode == Mode::Compile && !options.skipCheck;
@@ -694,6 +695,9 @@ auto buildModules(
         for (const auto& diagnostic : diagnostics) {
             printSemanticDiagnostic(diagnostic);
         }
+        // A run cache hit skips the check, and with it what it warned of:
+        // a build that warned is not kept, so the next run says it again.
+        warned = !diagnostics.empty();
         if (errors > 0) {
             reportAborted(compileRun, static_cast<int>(errors));
             return std::nullopt;
@@ -761,6 +765,7 @@ auto compileToBeam(
     std::vector<LoadedDep> dependencies;
     std::string specBaseFile;
     bool cached = false;
+    bool warned = false;
     if (manifestHit) {
         auto hit = tryLoadRunCacheFrom(runManifestDir(*manifestKey), options.outputDir);
         if (!hit) {
@@ -776,7 +781,7 @@ auto compileToBeam(
         }
         auto built = buildModules(
             options, filepath, program, entryRawSourceForCache, runCacheKey, chunks, dependencies,
-            specBaseFile, cached, early.get());
+            specBaseFile, cached, warned, early.get());
         if (!built) {
             return output.abandon();
         }
@@ -823,11 +828,12 @@ auto compileToBeam(
         if (early && !early->moveInto(options.outputDir)) {
             return output.abandon();
         }
-        // What the next matching invocation reuses (kexhq/kex#323).
-        if (runCacheKey) {
+        // What the next matching invocation reuses (kexhq/kex#323). Not a
+        // build that warned: a hit would start it without saying so again.
+        if (runCacheKey && !warned) {
             storeRunCache(*runCacheKey, options.outputDir, modules);
         }
-        if (manifestKey && !kex::compiled::reachedOutside()) {
+        if (manifestKey && !warned && !kex::compiled::reachedOutside()) {
             storeRunManifest(
                 *manifestKey, options.outputDir, modules,
                 runManifestFiles(filepath, specBaseFile, dependencies));

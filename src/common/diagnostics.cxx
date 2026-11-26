@@ -188,6 +188,39 @@ auto renderStyled(std::string_view text, const Style* styles, const char* plain)
 
 } // namespace
 
+auto highlightKex(const std::string& code) -> std::string {
+    if (!kex::color::enabled) {
+        return code;
+    }
+    const auto styles = stylesOf(code, "<code>");
+    return renderStyled(code, styles.data(), nullptr);
+}
+
+auto highlightCodeSpans(const std::string& text) -> std::string {
+    using namespace kex::color;
+    if (!enabled) {
+        return text;
+    }
+    std::string out;
+    out.reserve(text.size() * 2);
+    for (size_t i = 0; i < text.size();) {
+        const auto end = text[i] == '`' ? text.find('`', i + 1) : std::string::npos;
+        if (end == std::string::npos) {
+            out += text[i++];
+            continue;
+        }
+        out += apply(gray);
+        out += '`';
+        out += apply(reset);
+        out += highlightKex(text.substr(i + 1, end - i - 1));
+        out += apply(gray);
+        out += '`';
+        out += apply(reset);
+        i = end + 1;
+    }
+    return out;
+}
+
 // Syntax-highlights a diagnostic message body using a palette kept distinct
 // from Value::inspect's literal coloring: type names / type vars become cyan
 // (matching the REPL/IO.inspect type suffix), function names become bold

@@ -36,6 +36,8 @@
 #include "../common/prelude_loader.hxx"
 #include "../common/process.hxx"
 #include "../common/repl_commands.hxx"
+#include "../help/api_help.hxx"
+#include "../help/describe.hxx"
 #include "../semantic/completion_at.hxx"
 #include <functional>
 #include "../driver/build_support.hxx"
@@ -64,16 +66,102 @@ static auto replLoadFailure(const std::exception& e) -> std::string {
     }
     return kex::diagnostics::colorizeMessage(e.what());
 }
+
+// An input checked as the last statement of the session's program, and not
+// run: what `/type` and `/help` answer from (kexhq/kex#728, #729). The
+// analysis points into the program, so both are kept.
+struct ReplProbe {
+    std::unique_ptr<kex::ast::Program> program;
+    std::unique_ptr<kex::semantic::Analyzer> analyzer;
+    const kex::ast::Expr* expr = nullptr;
+};
+
+// `source` is the session program with the input last in its `main`;
+// `prepare` merges in what the session reads from disk, as an input's check
+// does. Throws on a syntax error in the input.
+static auto checkReplProbe(
+    const std::string& input,
+    const std::string& source,
+    const std::function<void(kex::ast::Program&)>& prepare) -> ReplProbe {
+    {
+        // The input on its own first, so its syntax error is reported as an
+        // evaluated line's would be.
+        kex::Lexer lexer("main do\n" + input + "\nend\n");
+        kex::Parser parser(lexer.tokenizeAll());
+        parser.parseProgram();
+        throwOnParseErrors(parser);
+    }
+    ReplProbe probe;
+    kex::Lexer lexer(source, "<repl>");
+    kex::Parser parser(lexer.tokenizeAll(), "<repl>");
+    probe.program = std::make_unique<kex::ast::Program>(parser.parseProgram());
+    throwOnParseErrors(parser);
+    prepare(*probe.program);
+    probe.analyzer = std::make_unique<kex::semantic::Analyzer>(&preludeSemanticInterfaces());
+    // The names each expression uses, which tell a binding from a function.
+    probe.analyzer->setIndexesNames(true);
+    probe.analyzer->analyze(*probe.program);
+    for (auto item = probe.program->items.rbegin(); item != probe.program->items.rend(); ++item) {
+        if (const auto* main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&*item);
+            main && *main && !(*main)->body.empty()) {
+            probe.expr = replLastStatement(**main);
+            break;
+        }
+    }
+    return probe;
+}
+
+// `/type <expr>` and `/help <name>`, for either REPL: `probe` checks an input
+// in the session, and `definitions` is the session's own declarations (what
+// `/help` documents besides the standard library).
+static auto runReplInfoCommand(
+    kex::ReplCommandKind kind,
+    const std::string& argument,
+    const std::function<ReplProbe(const std::string&)>& probe,
+    const std::vector<std::pair<std::string, std::string>>& definitions) -> void {
+    if (argument.empty()) {
+        std::cerr << "  /type takes an expression: /type List.first\n";
+        return;
+    }
+    try {
+        const auto checked = probe(argument);
+        if (!checked.expr) {
+            std::cerr << "  " << kex::diagnostics::formatBriefError("nothing to check") << "\n";
+            return;
+        }
+        if (kind == kex::ReplCommandKind::Type) {
+            kex::help::printReplType(
+                argument, *checked.analyzer, *checked.expr, std::cout, std::cerr);
+            return;
+        }
+        kex::help::ApiIndex session;
+        for (const auto& [path, source] : definitions) {
+            try {
+                session.addSource(path, source, "");
+            } catch (...) {
+                // A file changed on disk since it was loaded: its own docs go.
+            }
+        }
+        kex::help::printReplNameHelp(
+            argument, *checked.analyzer, *checked.expr,
+            {&session, &kex::help::standardLibraryIndex()}, std::cout, std::cerr);
+    } catch (const std::exception& e) {
+        std::cerr << "  " << replErrorText(e) << "\n";
+    }
+}
 // The BEAM REPL (`kex -i`, and `kex -c --run` without a file): every input is
 // lowered and evaluated in a long-lived BEAM VM. One session: that VM, and
 // everything defined in it so far.
 class BeamReplSession {
 public:
-    explicit BeamReplSession(bool skipPrelude) : m_skipPrelude(skipPrelude) {}
+    BeamReplSession(bool skipPrelude, bool inspect)
+        : m_skipPrelude(skipPrelude), m_inspect(inspect) {}
     auto run() -> int;
 
 private:
     bool m_skipPrelude;
+    // Whether an input's value is echoed as `=> value` (off: `--no-inspect`).
+    bool m_inspect;
     // Writable directory for each evaluation's beams, and the prebuilt runtime.
     std::string m_beamDir;
     std::string m_rtPaDir;
@@ -162,8 +250,8 @@ private:
     auto loadModules(const std::vector<kex::ir::EmitResult>& results) -> bool;
 };
 
-auto runBeamRepl(bool skipPrelude) -> int {
-    BeamReplSession session(skipPrelude);
+auto runBeamRepl(bool skipPrelude, bool inspect) -> int {
+    BeamReplSession session(skipPrelude, inspect);
     return session.run();
 }
 
@@ -351,6 +439,9 @@ auto BeamReplSession::define(const std::string& source) -> void {
 
     // `using M` is an import, not a definition — it is kept in m_topDefs
     // so it persists across inputs, but saying "defined M" is wrong.
+    if (!m_inspect) {
+        return;
+    }
     const bool isImport = source.rfind("using ", 0) == 0;
     std::cout << kex::color::apply(kex::color::gray) << "=> "
               << kex::color::apply(kex::color::reset) << (isImport ? "using " : "defined ") << fname
@@ -579,7 +670,11 @@ auto BeamReplSession::evaluate(
                                 : typesOfPatternNames(
                                       topDefsStr() + "main do\n" + semanticBindSource + withOpen,
                                       source, withClose, patternLetNames);
+    // `--no-inspect`: the value is still computed, just not echoed.
     const auto inspectCall = [&](const std::string& expression) {
+        if (!m_inspect) {
+            return expression;
+        }
         if (!beamSemanticType) {
             return "Kex.Intrinsic.IO.inspectRepl(" + expression + ")";
         }
@@ -972,6 +1067,31 @@ auto BeamReplSession::run() -> int {
         }
         const auto command = kex::parseReplCommand(input);
         using Command = kex::ReplCommandKind;
+        if (command.kind == Command::Type ||
+            (command.kind == Command::Help && !command.argument.empty())) {
+            std::vector<std::pair<std::string, std::string>> definitions{{"<repl>", topDefsStr()}};
+            for (const auto& file : m_loadedBeamFiles) {
+                definitions.emplace_back(file, readFile(file));
+            }
+            runReplInfoCommand(
+                command.kind, command.argument,
+                [this](const std::string& code) {
+                    std::string binds;
+                    for (const auto& [name, binding] : m_beamSemanticBinds) {
+                        binds += "  " + binding + "\n";
+                    }
+                    return checkReplProbe(
+                        code,
+                        topDefsStr() + "main do\n" + binds + replWithOpen(m_sessionWiths, "") +
+                            "  " + code + "\n" + replWithClose(m_sessionWiths, "") + "end\n",
+                        [this](kex::ast::Program& program) {
+                            expandReplProgram(program);
+                            mergeLoadedForCheck(program);
+                        });
+                },
+                definitions);
+            continue;
+        }
         if (command.kind == Command::Help) {
             kex::printReplHelp(std::cout);
             continue;
@@ -1126,11 +1246,14 @@ auto BeamReplSession::run() -> int {
 // session: the evaluator every input runs in, and what has been defined.
 class WalkerReplSession {
 public:
-    explicit WalkerReplSession(bool skipPrelude) : m_skipPrelude(skipPrelude) {}
+    WalkerReplSession(bool skipPrelude, bool inspect)
+        : m_skipPrelude(skipPrelude), m_inspect(inspect) {}
     auto run() -> int;
 
 private:
     bool m_skipPrelude;
+    // Whether an input's value is echoed as `=> value` (off: `--no-inspect`).
+    bool m_inspect;
     // Completion's index (prelude loaded once, updated on each input) and the
     // one inputs are checked in.
     ReplCompletionBase m_completionBase;
@@ -1217,7 +1340,8 @@ private:
     auto showResult(
         const kex::interpreter::ValuePtr& result,
         const std::optional<std::string>& semanticType = std::nullopt) -> void {
-        if (result && !std::holds_alternative<kex::interpreter::UnitValue>(result->data)) {
+        if (m_inspect && result &&
+            !std::holds_alternative<kex::interpreter::UnitValue>(result->data)) {
             std::cout << kex::color::apply(kex::color::gray) << "=> "
                       << kex::color::apply(kex::color::reset) << result->inspect();
             if (m_showTypes) {
@@ -1240,8 +1364,8 @@ private:
         -> void;
 };
 
-auto runWalkerRepl(bool skipPrelude) -> int {
-    WalkerReplSession session(skipPrelude);
+auto runWalkerRepl(bool skipPrelude, bool inspect) -> int {
+    WalkerReplSession session(skipPrelude, inspect);
     return session.run();
 }
 
@@ -1348,9 +1472,11 @@ auto WalkerReplSession::evaluate(
         // check, not just the latest one.
         m_replAccumSource += source + "\n";
         const bool isImport = source.rfind("using ", 0) == 0;
-        std::cout << kex::color::apply(kex::color::gray) << "=> "
-                  << kex::color::apply(kex::color::reset) << (isImport ? "using " : "defined ")
-                  << replDefinitionName(source) << "\n";
+        if (m_inspect) {
+            std::cout << kex::color::apply(kex::color::gray) << "=> "
+                      << kex::color::apply(kex::color::reset) << (isImport ? "using " : "defined ")
+                      << replDefinitionName(source) << "\n";
+        }
     } else {
         // Wrap in main for expression evaluation
         const auto withExcept = pendingWith ? pendingWith->capability : std::string();
@@ -1579,6 +1705,27 @@ auto WalkerReplSession::run() -> int {
         }
 
         // REPL commands
+        if (command.kind == Command::Type ||
+            (command.kind == Command::Help && !command.argument.empty())) {
+            runReplInfoCommand(
+                command.kind, command.argument,
+                [this](const std::string& code) {
+                    std::string binds;
+                    for (const auto& [_, binding] : m_replBindings) {
+                        binds += binding + "\n";
+                    }
+                    return checkReplProbe(
+                        code,
+                        m_replAccumSource + "main do\n" + binds + replWithOpen(m_sessionWiths, "") +
+                            code + "\n" + replWithClose(m_sessionWiths, "") + "end\n",
+                        [this](kex::ast::Program& program) {
+                            expandReplProgram(program);
+                            prepareSession(program);
+                        });
+                },
+                {{"<repl>", m_replAccumSource}});
+            continue;
+        }
         if (command.kind == Command::Help) {
             kex::printReplHelp(std::cout, setOptionsHelp);
             continue;
