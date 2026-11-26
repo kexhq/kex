@@ -10302,10 +10302,10 @@ auto TypeChecker::missesTraitArity(
                 continue;
             }
             for (const auto& clause : function->clauses) {
-                const bool explicitReceiver =
-                    !clause.params.empty() && clause.params.front().pattern &&
-                    std::holds_alternative<ast::ThisPattern>(
-                        (*clause.params.front().pattern)->kind);
+                const bool explicitReceiver = !clause.params.empty() &&
+                                              clause.params.front().pattern &&
+                                              std::holds_alternative<ast::ThisPattern>(
+                                                  (*clause.params.front().pattern)->kind);
                 const std::size_t receivers = explicitReceiver ? 0 : 1;
                 std::size_t least = clause.params.size();
                 while (least > 0 && clause.params[least - 1].defaultValue) {
