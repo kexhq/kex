@@ -1939,8 +1939,8 @@ auto Parser::parseMultiplication() -> ast::ExprPtr {
 }
 
 auto Parser::parseUnary() -> ast::ExprPtr {
-    // Note: `not` is handled at parseNot() (lower precedence, Python-style)
-    // rather than here — see parseNot() for why.
+    // Prefix `-` and `!`. There is no `not` keyword (nor `and` / `or`); `!`
+    // is the only logical negation.
     if (check(TokenType::Minus) || check(TokenType::Bang)) {
         auto loc = currentLocation();
         auto opType = advance().type;

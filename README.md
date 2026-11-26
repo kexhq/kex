@@ -736,7 +736,6 @@ Planned or incomplete:
 
 - Compiling Kex itself to WASM (today only the interpreter is compiled to wasm, for the in-browser REPL)
 - Richer supervision DSL and generated child specifications for typed servers
-- A full module system across BEAM modules
 - `is?` / `as` type introspection and explicit conversion
 - Namespace/import resolution beyond `using` blocks
 - Compiled metaprogramming beyond the parser/design sketch

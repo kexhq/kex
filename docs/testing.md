@@ -210,7 +210,7 @@ records are what the results and inline failure markers are read from.
 
 ## Not Yet Implemented
 
-- `using Test` / `using` blocks in general — currently a no-op everywhere in the interpreter
+- `using Test` — there is no `Test` module: `describe`, `it`, `before` and `after` are global, and `Assert` is used qualified
 - `kex test` — a dedicated CLI subcommand for running specs (today, specs are just run like any other `.kex` file: `kex spec/foo.spec.kex`)
 
 ```kex
