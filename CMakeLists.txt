@@ -27,6 +27,21 @@ if(KEX_SANITIZE)
     # themselves (src/interpreter/fiber.cxx): Boost.Context's own support
     # (BOOST_USE_ASAN) covers only its ucontext variant, not the fcontext
     # one used here.
+    # That file alone keeps its locals on the real stack, not on ASan's fake
+    # one (detect_stack_use_after_return). Boost's frames compiled there
+    # (fiber_entry, fiber_record::run) start before a fiber's first switch is
+    # finished and run on after its last one has begun: on a fake stack they
+    # were left on one no longer current, or already freed. What the fibers
+    # run is compiled elsewhere and keeps the check.
+    if(KEX_SANITIZE MATCHES "address")
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            set(KEX_FIBER_NO_FAKE_STACK --param=asan-use-after-return=0)
+        else()
+            set(KEX_FIBER_NO_FAKE_STACK -fsanitize-address-use-after-return=never)
+        endif()
+        set_source_files_properties(src/interpreter/fiber.cxx PROPERTIES
+            COMPILE_OPTIONS "${KEX_FIBER_NO_FAKE_STACK}")
+    endif()
 endif()
 
 # ── Build revision ──────────────────────────────────────────────────────

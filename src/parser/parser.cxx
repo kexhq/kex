@@ -322,6 +322,7 @@ auto Parser::parseProgram() -> ast::Program {
     program.blank = atEnd();
 
     while (!atEnd()) {
+        const int itemStart = m_pos;
         try {
             if ((check(TokenType::Module) || check(TokenType::Capability) ||
                  (check(TokenType::Foul) && peekNext().type == TokenType::Module)) &&
@@ -336,7 +337,13 @@ auto Parser::parseProgram() -> ast::Program {
             m_deferredTopLevelItems.clear();
         } catch (const ParseError&) {
             // Diagnostic already recorded in m_diagnostics; skip to the next
-            // safe top-level keyword and continue parsing.
+            // safe top-level keyword and continue parsing. An item refused at
+            // its first token (`let` too deep to parse) starts at such a
+            // keyword: past it first, or the same item failed forever, each
+            // time adding a diagnostic, until memory ran out.
+            if (m_pos == itemStart) {
+                advance();
+            }
             syncToTopLevel();
         }
         skipNewlines();
