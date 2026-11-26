@@ -367,6 +367,24 @@ let inspected(value: Inspectable) = value.inspectValue(Console.enabled?)
 inspect : A -> A
 let inspect(value) = IO.inspect(value)
 
+# Returns a function that applies +f+, then +g+ to what +f+ returned.
+#
+# @param f [A -> B] the function applied first
+# @param g [B -> C] the function applied to what +f+ returns
+# @return [A -> C] the composed function
+#
+# @example
+#   let inc(n: Integer) -> Integer = n + 1
+#   let double(n: Integer) -> Integer = n * 2
+#
+#   (~inc).followedBy(~double)(3)   # => 8
+#   (~double).followedBy(~inc)(3)   # => 7
+#
+# @example Building a step for +map+
+#   [1, 2].map((~double).followedBy { |n| "#${n}" })   # => ["#2", "#4"]
+followedBy : (A -> B) -> (B -> C) -> (A -> C)
+let followedBy(f, g) = { |x| g(f(x)) }
+
 # Returns +true+ when +value+ is an atom, such as +:ok+. Universal:
 # reachable on every type through UFCS, so it answers where the static type
 # is +Any+. A +Bool+, +None+ and a constructor such as +Red+ are values of
