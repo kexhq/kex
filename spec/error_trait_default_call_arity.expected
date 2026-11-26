@@ -1,0 +1,20 @@
+spec/error_trait_default_call_arity.kex:34:21: [KEXET-0472]: Error, `min` expects 2 argument(s), got 1
+   |
+34 |   IO.printLine(a.min().major)
+   |                ^^^^^^^
+spec/error_trait_default_call_arity.kex:35:21: [KEXET-0472]: Error, `max` expects 2 argument(s), got 1
+   |
+35 |   IO.printLine(a.max.major)
+   |                ^^^^^
+spec/error_trait_default_call_arity.kex:36:23: [KEXET-0472]: Error, `clamp` expects 3 argument(s), got 2
+   |
+36 |   IO.printLine(a.clamp(b).major)
+   |                ^^^^^^^^^^
+spec/error_trait_default_call_arity.kex:37:34: [KEXET-0472]: Error, `twice` expects 2 argument(s), got 1
+   |
+37 |   IO.printLine(Box { n: 2 }.twice())
+   |                ^^^^^^^^^^^^^^^^^^^^
+spec/error_trait_default_call_arity.kex:38:35: [KEXET-0472]: Error, `thrice` expects 2 argument(s), got 3
+   |
+38 |   IO.printLine(Box { n: 2 }.thrice(1, 2))
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^

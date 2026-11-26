@@ -2,8 +2,8 @@
 # A function a trait gives a type, as a default body or a requirement, takes
 # the values it is declared with, whichever type answers it. `a.min()` on a
 # Comparable record checked clean and failed at run time on both backends:
-# the walker with "'this' used outside of a method context", BEAM with
-# "undefined method: min for Version" (found by `make fuzz-metamorphic`).
+# the walker ran `min` with no `this` to compare, and BEAM found no `min`
+# for Version to call (found by `make fuzz-metamorphic`).
 
 record Version do
   major : Integer
