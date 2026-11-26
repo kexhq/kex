@@ -741,7 +741,14 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
             const auto passed = resolve(hint);
             paramTypes.push_back(isOpenType(passed) ? freshTypeVar() : passed);
         }
-        const bool ofType = namesKnownType(ce->module);
+        // A function of the module the type names comes first, as the capture
+        // case below picks it: `~Binary.fromHex` is `Binary.fromHex(text)`, a
+        // String in, not a function of a Binary receiver.
+        const auto qualified =
+            kex::mangle::qualify(resolveModulePath(ce->module, ce->name), ce->name);
+        const bool ofModule =
+            m_userSignatures.count(qualified) || !importedCandidateSignatures(qualified).empty();
+        const bool ofType = !ofModule && namesKnownType(ce->module);
         // A type's own function takes a value of that type, whichever other
         // type has a function of the name.
         if (const auto owner = ofType ? typeNamed(ce->module, blockExpr.location) : nullptr;
@@ -759,7 +766,8 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
         const auto result =
             ofType ? checkCall(ce->name, paramTypes, blockExpr.location, /*isMethodCall=*/true)
                    : checkCall(
-                         kex::mangle::qualify(ce->module, ce->name), paramTypes, blockExpr.location,
+                         ofModule ? qualified : kex::mangle::qualify(ce->module, ce->name),
+                         paramTypes, blockExpr.location,
                          /*isMethodCall=*/false);
         return Type::func(std::move(paramTypes), resolve(result));
     }
@@ -2491,6 +2499,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // (`Parser.parse(text)`) takes the type as its receiver, as both
                 // backends run it: an ordinary method call, not a namespace one.
                 bool throughTypeName = false;
+                // `List.identity`: the type itself is the receiver (below).
+                bool typeIsReceiver = false;
                 TypePtr aliasedType;
                 // The same through an alias read as the module (`Team.handle?(text)`
                 // under `using App.Models.Team, as: Team`): a module named like its
@@ -2569,6 +2579,52 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }();
                 if (structuralAlias) {
                     callName = node.method;
+                    // A function of the type that takes nothing but its receiver
+                    // (`Monoid`'s `identity`) is called through the type's name
+                    // with no value at all: `List.identity`, `Map.identity`. The
+                    // receiver is then the type, as `Integer.identity`'s is; it
+                    // was checked as a call of `identity` with no arguments.
+                    const auto named = typeNamed(
+                        std::get<ast::UpperIdentifier>(node.receiver->kind).name, expr.location);
+                    const auto shape = named ? expandTypeAliases(resolve(named)) : nullptr;
+                    const auto freshOfShape = [&](const TypePtr& type) -> TypePtr {
+                        const auto receiver = resolve(type);
+                        if (std::holds_alternative<ListType>(receiver->kind) &&
+                            std::holds_alternative<ListType>(shape->kind)) {
+                            return Type::list(freshTypeVar());
+                        }
+                        if (std::holds_alternative<MapType>(receiver->kind) &&
+                            std::holds_alternative<MapType>(shape->kind)) {
+                            return Type::map(freshTypeVar(), freshTypeVar());
+                        }
+                        return nullptr;
+                    };
+                    TypePtr typeReceiver;
+                    bool takesArguments = false;
+                    const auto consider = [&](const Signature& signature) {
+                        if (signature.params.empty() || !freshOfShape(signature.params.front())) {
+                            return;
+                        }
+                        if (signature.params.size() == node.args.size()) {
+                            takesArguments = true;
+                        } else if (signature.params.size() == node.args.size() + 1) {
+                            typeReceiver = freshOfShape(signature.params.front());
+                        }
+                    };
+                    if (shape && node.namedArgs.empty() && !node.block) {
+                        if (const auto own = m_methodSignatures.find(node.method);
+                            own != m_methodSignatures.end()) {
+                            std::for_each(own->second.begin(), own->second.end(), consider);
+                        }
+                        for (const auto* function : importedCandidates(node.method)) {
+                            consider(function->signature);
+                        }
+                    }
+                    if (typeReceiver && !takesArguments) {
+                        aliasedType = typeReceiver;
+                        isNamespaceCall = false;
+                        typeIsReceiver = true;
+                    }
                 } else if (isImportedNamespace || isLocalNamespace) {
                     callName = kex::mangle::qualify(*importedPath, node.method);
                     // A private function is its module's own, through its path
@@ -2873,6 +2929,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         resolved->second.passesReceiver = false;
                     }
                 }
+                // ...unless the type is the receiver (`List.identity`): the backends
+                // pass the type's atom, as for `Integer.identity`, which no value
+                // of the type is.
+                if (typeIsReceiver) {
+                    m_resolvedCalls.erase(&node);
+                }
                 // Nothing chose a target and the receiver's type is not known
                 // (or is a trait's `This`, in its default bodies): the method is
                 // looked up on the value when the call runs.
@@ -2985,29 +3047,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return Type::list(elemType);
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
-                // Keys and values join as a list's elements do, and where they
-                // share nothing the map holds `Any`: `{"id": "u1", "width": 3}`
-                // is ordinary data (a decoder's input, a `{String: Any}`). The
-                // first of each was taken and the rest never looked at, so
-                // `{ "ada": 36, "bob": "old" }` was a `{String: Integer}` holding
-                // a String, and reading `"bob"` as an Integer passed
-                // (kexhq/kex#771).
-                // A map keyed by atoms is a set of named fields, not a
-                // collection: a serving slot's `{ new, reply: new.count }`
-                // holds the state and the reply. Its values keep their own
-                // types. A spread's value is the spread map, not one value.
-                const bool atomKeyed =
-                    std::any_of(node.entries.begin(), node.entries.end(), [](const auto& entry) {
-                        return entry.key &&
-                               std::holds_alternative<ast::AtomLiteral>(entry.key->kind);
-                    });
                 // Keys and values of different types join into their union, as a
                 // list's elements do: `{ "ada": 36, "bob": "old" }` is a
                 // `{String: Integer | String}`, so reading `"bob"` as an Integer
-                // is an error. They widened to `Any` before, which let it through.
-                // An atom-keyed map still takes its first value's type: until
-                // #200 types serving transitions, the checker reads one as named
-                // fields (docs/typechecker-hm-plan.md, decision 7).
+                // is an error. They widened to `Any` before, which let it through
+                // (kexhq/kex#771). A map keyed by atoms is no exception: `{ host:
+                // "localhost", port: 8080 }` took its first value's type, a
+                // `{Atom: String}`, so reading `:port` with an Integer default,
+                // or putting an Integer there, was rejected. A serving slot's
+                // `{ new, reply: new.count }` is recognised by its keys, not its
+                // type. A spread brings the spread map's keys and values.
                 TypePtr keyType = Type::unknown();
                 TypePtr valueType = Type::unknown();
                 for (const auto& entry : node.entries) {
@@ -3018,9 +3067,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         continue;
                     }
                     auto value = inferExpr(*entry.value);
-                    if (atomKeyed || entry.spread) {
-                        if (isUndetermined(valueType) && !entry.spread) {
-                            valueType = value;
+                    if (entry.spread) {
+                        if (const auto* spread = std::get_if<MapType>(&resolve(value)->kind)) {
+                            keyType = joinElementType(keyType, spread->key);
+                            valueType = joinElementType(valueType, spread->value);
                         }
                         continue;
                     }
@@ -3882,6 +3932,26 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
         },
         expr.kind);
+    // `s.pop!` rebinds `s` to what `pop` returns, so that has to be a value
+    // `s` can hold: a Stack's `pop` answers an Optional pair, and the next use
+    // of `s` failed at run time on both backends.
+    if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
+        call && call->mutating && call->receiver && result) {
+        if (const auto* ident = std::get_if<ast::Identifier>(&call->receiver->kind)) {
+            const auto* binding = bindingOf(ident->name);
+            const auto held = binding && binding->isVar ? lookupVar(ident->name) : nullptr;
+            const auto answered = resolve(result);
+            if (held && !containsOpenType(resolve(held)) && !containsOpenType(answered) &&
+                !argMatchesParam(answered, resolve(held))) {
+                error(
+                    diag::Code::BangResultNotReceiverType, expr.location,
+                    {{"name", call->method},
+                     {"variable", ident->name},
+                     {"actual", typeToString(answered)},
+                     {"expected", typeToString(resolve(held))}});
+            }
+        }
+    }
     m_typeMap[&expr] = result;
     warnDivisionByZero(expr);
     return result;
@@ -7788,6 +7858,9 @@ auto TypeChecker::checkCallCore(
         // has no signature of its own: the type answers it (OwnMethod).
         if (callExpr && isMethodCall && !argTypes.empty()) {
             if (const auto own = ownTypeAnswers(argTypes, name)) {
+                if (missesTraitArity(argTypes, name, loc)) {
+                    return Type::unknown();
+                }
                 m_decidedCalls[callExpr] = own->decision();
                 return Type::unknown();
             }
@@ -7796,6 +7869,9 @@ auto TypeChecker::checkCallCore(
         // Monoid's default on String): the value picks the body at run time.
         if (callExpr && isMethodCall && concreteReceiver &&
             m_traits.declaresMethod(m_traits.implementorKey(argTypes[0]), name)) {
+            if (missesTraitArity(argTypes, name, loc)) {
+                return Type::unknown();
+            }
             decideDispatch(callExpr, name);
             return Type::unknown();
         }
@@ -8232,6 +8308,9 @@ auto TypeChecker::checkCallCore(
         // A default the type inherits answers the call: the type's own.
         if (!anyFirstParamPlausible && traitProvides && callExpr) {
             if (const auto own = ownTypeAnswers(argTypes, name)) {
+                if (missesTraitArity(argTypes, name, loc)) {
+                    return Type::unknown();
+                }
                 m_decidedCalls[callExpr] = own->decision();
                 return Type::unknown();
             }
@@ -10151,6 +10230,92 @@ auto TypeChecker::missesRequiredArity(
     const auto least =
         (none ? 0 : required.requiredParams.value_or(required.params.size())) + receivers;
     if (given >= least && given <= most) {
+        return false;
+    }
+    error(
+        diag::Code::WrongArgumentCount, loc,
+        {{"name", sourceName(name)},
+         {"expected", std::to_string(most)},
+         {"actual", std::to_string(given)}});
+    return true;
+}
+
+// A function a trait gives the receiver's type, required or a default body,
+// takes as many values as it is declared with, whichever type answers it:
+// `a.min()` for Comparable's `let min(other: This)` lacks its argument, and
+// was waved through as the type's own answer, to fail at run time on both
+// backends (found by `make fuzz-metamorphic`).
+auto TypeChecker::missesTraitArity(
+    const std::vector<TypePtr>& argTypes, const std::string& name, SourceLocation loc) -> bool {
+    if (argTypes.empty()) {
+        return false;
+    }
+    const auto receiver = resolve(argTypes.front());
+    // The type's own function of the name, at this count, answers it instead.
+    if (const auto own = m_methodSignatures.find(name); own != m_methodSignatures.end()) {
+        for (const auto& signature : own->second) {
+            if (signature.params.size() == argTypes.size() && !signature.params.empty() &&
+                !std::holds_alternative<ConstrainedType>(signature.params.front()->kind) &&
+                argMatchesParam(receiver, signature.params.front())) {
+                return false;
+            }
+        }
+    }
+    if (const auto [trait, required] = m_traits.requiredMethod(receiver, name); required) {
+        return missesRequiredArity(*required, argTypes.size(), name, loc);
+    }
+    const auto given = argTypes.size();
+    bool defined = false;
+    bool fits = false;
+    std::size_t most = 0;
+    const auto consider = [&](std::size_t least, std::size_t upper) {
+        defined = true;
+        most = std::max(most, upper);
+        fits = fits || (given >= least && given <= upper);
+    };
+    // A default of a trait compiled apart is filed with the receiver functions,
+    // its receiver the trait itself (`Comparable`'s `min`).
+    if (m_importedInterfaces) {
+        if (const auto functions = m_importedInterfaces->receiverFunctions.find(name);
+            functions != m_importedInterfaces->receiverFunctions.end()) {
+            for (const auto& function : functions->second) {
+                const auto& signature = function.signature;
+                const auto* constrained =
+                    signature.params.empty()
+                        ? nullptr
+                        : std::get_if<ConstrainedType>(&signature.params.front()->kind);
+                if (constrained && m_traits.satisfies(receiver, constrained->traitName)) {
+                    consider(
+                        signature.requiredParams.value_or(signature.params.size()),
+                        signature.params.size());
+                }
+            }
+        }
+    }
+    // One of this program's traits: its default's clauses, as written.
+    for (const auto& [traitName, functions] : m_traitDefaults) {
+        if (!m_traits.satisfies(receiver, traitName)) {
+            continue;
+        }
+        for (const auto* function : functions) {
+            if (!function || function->name != name) {
+                continue;
+            }
+            for (const auto& clause : function->clauses) {
+                const bool explicitReceiver = !clause.params.empty() &&
+                                              clause.params.front().pattern &&
+                                              std::holds_alternative<ast::ThisPattern>(
+                                                  (*clause.params.front().pattern)->kind);
+                const std::size_t receivers = explicitReceiver ? 0 : 1;
+                std::size_t least = clause.params.size();
+                while (least > 0 && clause.params[least - 1].defaultValue) {
+                    least--;
+                }
+                consider(least + receivers, clause.params.size() + receivers);
+            }
+        }
+    }
+    if (!defined || fits) {
         return false;
     }
     error(

@@ -1,0 +1,14 @@
+# An opt-in module named by its full path needs no `using`: the build pulls
+# it in, as it does `FS` (spec/module_constructor_spelled_out.kex). BEAM ran
+# these, while the walker failed with "undefined function: Digest.sha256": it
+# kept a native placeholder for each module whose functions its intrinsics
+# back (Digest, Bits, Evaluator, Regex, Node), and took that for the module
+# instead of loading its source.
+
+main do
+  IO.printLine(Digest.sha256("hello"))
+  IO.printLine(Digest.fileSha256("spec/opt_in_module_qualified_without_using.kex").ok?)
+  IO.printLine(Bits.and(6, 3))
+  IO.printLine(Regex.regex("a+").ok?)
+  IO.printLine(Node.alive?)
+end

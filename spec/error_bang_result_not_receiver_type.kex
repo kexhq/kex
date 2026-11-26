@@ -1,0 +1,22 @@
+# kex: check-only
+# `s.pop!` rebinds `s` to what `pop` returns. A Stack's `pop` returns
+# `(A, Stack<A>)?`, so `s` became that Optional and its next use failed at
+# run time on both backends ("undefined function: elements for
+# Optional<Tuple>"). A `!` call is accepted only when the function returns a
+# value of the variable's type.
+using Data.Stack
+
+main do
+  var s = Stack.from([1, 2, 3])
+  s.pop!
+  IO.printLine(s.count)
+  var xs = [3, 1, 2]
+  xs.first!
+  var name = "ada"
+  name.length!
+  # These return the receiver's own type, and are fine.
+  s.push!(4)
+  xs.sort!
+  name.upperCase!
+  IO.printLine("${s.count} ${xs} ${name}")
+end

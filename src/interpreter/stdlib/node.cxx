@@ -7,7 +7,6 @@ namespace kex::interpreter {
 // BEAM node gives, so a program that checks `Node.alive?` first behaves the
 // same on both backends.
 auto Evaluator::registerNodeBuiltins() -> void {
-    defineModule("Node");
     defineIntrinsic("Node.self", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::atom("nonode@nohost");
     });

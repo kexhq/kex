@@ -1,0 +1,12 @@
+spec/error_bang_result_not_receiver_type.kex:11:9: [KEXET-0524]: Error, `pop!` rebinds `s` to what `pop` returns, (Integer, Data.Stack<Integer>)?, but `s` is Data.Stack<Integer>: bind the result with `let` instead, or call a function that returns Data.Stack<Integer>
+   |
+11 |   s.pop!
+   |   ^^^^^^
+spec/error_bang_result_not_receiver_type.kex:14:12: [KEXET-0524]: Error, `first!` rebinds `xs` to what `first` returns, Integer?, but `xs` is [Integer]: bind the result with `let` instead, or call a function that returns [Integer]
+   |
+14 |   xs.first!
+   |   ^^^^^^^^^
+spec/error_bang_result_not_receiver_type.kex:16:15: [KEXET-0524]: Error, `length!` rebinds `name` to what `length` returns, Integer, but `name` is String: bind the result with `let` instead, or call a function that returns String
+   |
+16 |   name.length!
+   |   ^^^^^^^^^^^^

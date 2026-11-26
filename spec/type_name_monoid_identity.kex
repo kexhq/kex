@@ -1,0 +1,18 @@
+# `identity` is Monoid's (src/stdlib/algebra.kex), a function of the type
+# that takes nothing but its receiver, so it is called through the type's
+# name. `Integer.identity` and `String.identity` checked, while
+# `List.identity` and `Map.identity` were rejected ("`identity` expects 1
+# argument(s), got 0"): `List` and `Map` name structural aliases, and the
+# call was checked as `identity` with no receiver at all.
+
+main do
+  IO.printLine(Integer.identity)
+  IO.printLine(String.identity.length)
+  let none: [Integer] = List.identity
+  IO.printLine(none)
+  IO.printLine([1].combine(List.identity))
+  let empty: {Atom: Integer} = Map.identity
+  IO.printLine(empty.count)
+  IO.printLine({ a: 1 }.combine(Map.identity).count)
+  IO.printLine(List.first([4, 5]))
+end

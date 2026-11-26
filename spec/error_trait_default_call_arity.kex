@@ -1,0 +1,44 @@
+# kex: check-only
+# A function a trait gives a type, as a default body or a requirement, takes
+# the values it is declared with, whichever type answers it. `a.min()` on a
+# Comparable record checked clean and failed at run time on both backends:
+# the walker ran `min` with no `this` to compare, and BEAM found no `min`
+# for Version to call (found by `make fuzz-metamorphic`).
+
+record Version do
+  major : Integer
+end
+
+make Version, implement: Comparable do
+  let compare(other: Version) -> Ordering = @major.compare(other.major)
+end
+
+trait Doubler do
+  base :> Integer
+  twice :> Integer -> Integer
+  let twice(n) = this.base * n
+  let thrice(n: Integer) -> Integer = this.base * n * 3
+end
+
+record Box do
+  n : Integer
+end
+
+make Box, implement: Doubler do
+  let base -> Integer = @n
+end
+
+main do
+  let a = Version { major: 1 }
+  let b = Version { major: 2 }
+  IO.printLine(a.min().major)
+  IO.printLine(a.max.major)
+  IO.printLine(a.clamp(b).major)
+  IO.printLine(Box { n: 2 }.twice())
+  IO.printLine(Box { n: 2 }.thrice(1, 2))
+  # These take what they are declared with, and are fine.
+  IO.printLine(a.min(b).major)
+  IO.printLine(a.clamp(a, b).major)
+  IO.printLine(Box { n: 2 }.twice(3))
+  IO.printLine(Box { n: 2 }.thrice(3))
+end
