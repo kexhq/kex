@@ -12,46 +12,45 @@ auto Environment::erase(const std::string& name) -> void {
     m_bindings.erase(name);
 }
 
+// The lookups walk the scope chain in a loop: it can grow with the calls that
+// are still running, and recursing up it overflowed the stack wherever the
+// compiler did not turn the tail call into a jump (an ASan build).
 auto Environment::set(const std::string& name, ValuePtr value) -> bool {
-    auto it = m_bindings.find(name);
-    if (it != m_bindings.end()) {
-        it->second.value = std::move(value);
-        return true;
-    }
-    if (m_parent) {
-        return m_parent->set(name, std::move(value));
+    for (auto* scope = this; scope; scope = scope->m_parent.get()) {
+        auto it = scope->m_bindings.find(name);
+        if (it != scope->m_bindings.end()) {
+            it->second.value = std::move(value);
+            return true;
+        }
     }
     return false;
 }
 
 auto Environment::get(const std::string& name) const -> ValuePtr {
-    auto it = m_bindings.find(name);
-    if (it != m_bindings.end()) {
-        return it->second.value;
-    }
-    if (m_parent) {
-        return m_parent->get(name);
+    for (const auto* scope = this; scope; scope = scope->m_parent.get()) {
+        auto it = scope->m_bindings.find(name);
+        if (it != scope->m_bindings.end()) {
+            return it->second.value;
+        }
     }
     return nullptr;
 }
 
 auto Environment::has(const std::string& name) const -> bool {
-    if (m_bindings.count(name)) {
-        return true;
-    }
-    if (m_parent) {
-        return m_parent->has(name);
+    for (const auto* scope = this; scope; scope = scope->m_parent.get()) {
+        if (scope->m_bindings.count(name)) {
+            return true;
+        }
     }
     return false;
 }
 
 auto Environment::isMutable(const std::string& name) const -> bool {
-    auto it = m_bindings.find(name);
-    if (it != m_bindings.end()) {
-        return it->second.isMutable;
-    }
-    if (m_parent) {
-        return m_parent->isMutable(name);
+    for (const auto* scope = this; scope; scope = scope->m_parent.get()) {
+        auto it = scope->m_bindings.find(name);
+        if (it != scope->m_bindings.end()) {
+            return it->second.isMutable;
+        }
     }
     return false;
 }
