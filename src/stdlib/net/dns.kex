@@ -1,9 +1,9 @@
-# Typed DNS lookup with explicit resolver ownership and bounded caching.
+# DNS lookups, with resolvers that own a bounded cache.
 #
-# Use +DNS.addresses+ for an occasional hostname lookup. Own a +Resolver+ when
-# a service performs repeated lookups, needs cache statistics, or must query a
-# particular nameserver. Resolver ownership makes both caching and cleanup
-# visible instead of hiding process-wide state behind every lookup.
+# Use +DNS.addresses+ for an occasional lookup. Open a +Resolver+ when a
+# service looks names up repeatedly, wants cache statistics or must query a
+# particular nameserver; the cache lives in the resolver and is freed when you
+# close it. On the interpreter (+kex -R+), lookups work only through a mock.
 #
 #   using Net.DNS
 #
@@ -13,51 +13,54 @@
 #   resolver.close
 module Net.DNS
 
-# A validated DNS name with caller-facing and IDNA ASCII spellings.
+# A validated DNS name, in the caller's spelling and in IDNA ASCII.
 #
-# +display+ keeps the readable form supplied by the caller; +ascii+ is the
-# wire-safe IDNA form used in DNS queries. Keeping both lets an error message
-# say what the user typed without sending noncanonical labels to a resolver.
+# +display+ is the name as the caller wrote it, for messages. +ascii+ is the
+# IDNA form sent in queries.
 record Name do
   display : String
   ascii : String
 end
 
-# Record families supported by +Resolver.lookup+.
+# The record types +Resolver.lookup+ can ask for.
 type RecordType = A | AAAA | CNAME | MX | TXT | SRV | PTR
 
-# DNSSEC state reported by the underlying resolver. Kex does not independently
-# validate DNSSEC and therefore commonly reports +Indeterminate+.
+# The DNSSEC state the system resolver reported. Kex does not validate DNSSEC
+# itself, so this is often +Indeterminate+.
 type DNSSECStatus = Secure | Insecure | Bogus | Indeterminate
 
-# Typed DNS resource records, preserving MX/SRV priorities and TXT chunks.
+# A DNS resource record. MX and SRV records keep their priorities (and SRV
+# its weight and port), and a TXT record keeps its separate strings.
 type DNSRecord = AddressRecord(Net.IP.Address) | CanonicalName(Name) | MailExchange(Integer, Name) | TextRecord([String]) | ServiceRecord(Integer, Integer, Net.Port, Name) | PointerRecord(Name)
 
-# Records and the reported DNSSEC state from one lookup.
+# The records from one lookup and their DNSSEC state.
 record LookupResponse do
   records : [DNSRecord]
   dnssec : DNSSECStatus
 end
 
-# Bounds for a resolver-owned positive and negative cache.
+# Limits for a resolver's cache.
 #
-# Positive answers honor their DNS TTL up to +maximumTtl+. Failed lookups are
-# cached for +negativeTtl+, preventing a missing hostname from hammering the
-# configured nameserver on every request.
+# +entries+ caps the number of cached names. An answer is kept for its DNS TTL,
+# but no longer than +maximumTtl+. A failed lookup is kept for +negativeTtl+,
+# so a missing hostname is not sent to the nameserver on every request.
 record CacheOptions do
   entries : Integer = 1024
   maximumTtl : Duration = 1.hour
   negativeTtl : Duration = 30.second
 end
 
-# One DNS server used by a custom resolver.
+# A DNS server for +Resolver.custom+ to query.
 record Nameserver do
   address : Net.IP.Address
   port : Net.Port
 end
 
-# Isolated resolver configuration. An empty search list only queries the name
-# as written; search domains are tried in order for single-label names.
+# Settings for +Resolver.custom+.
+#
+# With an empty +search+ list only the name as written is queried. Otherwise
+# the search domains are tried in order for a name with a single label.
+# +retries+ and +timeout+ apply to each query.
 record ResolverOptions do
   cache : CacheOptions = CacheOptions {}
   nameservers : [Nameserver]
@@ -66,11 +69,12 @@ record ResolverOptions do
   timeout : Duration = 2.second
 end
 
-# Lifetime cache counters. +clear+ empties entries but keeps these counters.
+# A resolver's cache counters, counted since it was opened. +entries+ is the
+# current number of cached names; +clear+ resets it but not the counters.
 #
-# Compare +hits+ with +misses+ when tuning +entries+ or TTL bounds. A rising
-# +evictions+ count means the resolver is seeing more distinct names than its
-# cache can retain.
+# Compare +hits+ with +misses+ when tuning +CacheOptions+. A rising
+# +evictions+ count means the resolver sees more distinct names than its cache
+# holds.
 record CacheStatistics do
   entries : Integer
   hits : Integer
@@ -79,15 +83,15 @@ record CacheStatistics do
   evictions : Integer
 end
 
-# An opaque, process-safe resolver that owns its cache.
+# A resolver and its cache. Any process may use it.
 type Resolver
 
-# Validation and IDNA conversion for DNS names.
+# Parsing DNS names.
 module Name do
-  # Validates a name and converts Unicode labels to IDNA ASCII.
+  # Parses a hostname, converting Unicode labels to IDNA ASCII.
   #
   # @param text [String] a dotted hostname, optionally with a trailing dot
-  # @return [Result<Name, NetError>] the name, or +Parse+
+  # @return [Result<Name, NetError>] the name, or a +Parse+ error
   #
   # @example Preparing a user-supplied hostname for lookup
   #   let name = Name.parse("münich.example").try
@@ -97,12 +101,13 @@ module Name do
   let parse(text) = Kex.Intrinsic.NetDNS.name(text)
 end
 
-# Constructors for long-lived, cache-owning resolvers.
+# Opening resolvers.
 module Resolver do
-  # Opens a resolver using system configuration and default cache bounds.
+  # Opens a resolver that uses the system's DNS configuration and the default
+  # +CacheOptions+.
   #
-  # Reuse the returned resolver for the lifetime of a service so repeated
-  # names benefit from its bounded cache, then close it during shutdown.
+  # Keep it for the life of a service so repeated names are answered from its
+  # cache, and close it at shutdown.
   #
   # @return [Result<Resolver, NetError>] a resolver handle
   #
@@ -112,24 +117,25 @@ module Resolver do
   #   resolver.close
   foul system() -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolverDefault()
 
-  # Opens a system resolver with explicit cache bounds.
+  # Opens a resolver that uses the system's DNS configuration and the given
+  # cache limits.
   #
   # @param cache [CacheOptions] entry and TTL limits
-  # @return [Result<Resolver, NetError>] a resolver, or +Parse+
+  # @return [Result<Resolver, NetError>] a resolver, or a +Parse+ error
   #
   # @example Bounding DNS memory in a small worker
   #   Resolver.system(CacheOptions { entries: 128 }).try
   foul system(cache: CacheOptions) -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolver(cache)
 
-  # Opens an isolated resolver with typed nameservers and query bounds.
+  # Opens a resolver that queries the given nameservers.
   #
-  # This does not inherit the machine's search domains or nameservers. It is
-  # useful for tests, service discovery, and applications with their own DNS
-  # policy.
+  # It ignores the machine's nameservers and search domains. Use it for tests,
+  # service discovery, or an application with its own DNS settings.
   #
   # @param options [ResolverOptions] nameservers, search domains, retry count,
   #   per-query timeout, and cache bounds
-  # @return [Result<Resolver, NetError>] a resolver, or +Parse+
+  # @return [Result<Resolver, NetError>] a resolver, or a +Parse+ error
+  #
   # @example Querying a DNS server used by a local integration test
   #   let nameserver = Nameserver {
   #     address: Net.IP.Address.parse("127.0.0.1").try,
@@ -145,61 +151,64 @@ end
 make Resolver do
   # Resolves AAAA and A records, returning IPv6 addresses first.
   #
-  # This is the convenient operation for connecting to a host. Use +lookup+
-  # when record type, TTL-related behavior, or DNSSEC status matters.
+  # Use it to find a host to connect to. Use +lookup+ for other record types
+  # or the DNSSEC state.
   #
   # @param name [Name] the validated hostname
-  # @return [Result<[Net.IP.Address], NetError>] addresses or +Resolve+
+  # @return [Result<[Net.IP.Address], NetError>] the addresses, or a
+  #   +Resolve+ error
+  #
   # @example Resolving an application upstream
   #   let host = Name.parse("api.example.com").try
   #   let addresses = resolver.addresses(host).try
   foul addresses(name: Name) -> Result<[Net.IP.Address], NetError> = Kex.Intrinsic.NetDNS.resolverAddresses(this, name)
-  # Looks up one supported resource-record family.
+  # Looks up the records of one type for +name+.
   #
-  # @param kind [RecordType] the requested family
-  # @param name [Name] the validated owner name
-  # @return [Result<LookupResponse, NetError>] typed records or +Resolve+
+  # @param kind [RecordType] the record type to ask for
+  # @param name [Name] the validated name
+  # @return [Result<LookupResponse, NetError>] the records, or a +Resolve+
+  #   error
   #
   # @example Discovering a domain's mail exchangers
   #   let response = resolver.lookup(MX, Name.parse("example.com").try).try
   #   response.records.each { |record| IO.inspect(record) }
   foul lookup(kind: RecordType, name: Name) -> Result<LookupResponse, NetError> = Kex.Intrinsic.NetDNS.lookup(this, kind, name)
-  # Empties cached entries without resetting lifetime counters.
-  #
-  # Existing statistics remain meaningful across a manual refresh, while the
-  # next lookup is forced back to DNS.
+  # Empties the cache, so the next lookup of each name goes to DNS. The
+  # +statistics+ counters are kept.
   #
   # @return [Void]
   #
   # @example Refreshing service discovery after configuration changes
   #   resolver.clear
   foul clear() -> Void = Kex.Intrinsic.NetDNS.clear(this)
-  # Reports current occupancy and lifetime cache counters.
+  # Returns the number of cached names and the cache counters.
   #
-  # @return [CacheStatistics] current entries and lifetime counters
+  # @return [CacheStatistics] the cache's size and counters
   #
   # @example Reporting whether the cache is doing useful work
   #   let stats = resolver.statistics
   #   IO.printLine("DNS cache: ${stats.hits} hits, ${stats.misses} misses")
   foul statistics() -> CacheStatistics = Kex.Intrinsic.NetDNS.statistics(this)
-  # Idempotently closes the resolver.
+  # Closes the resolver and frees its cache.
   #
-  # Calls after closing fail with +Closed+; closing again is harmless.
+  # Lookups after closing fail with a +Closed+ error. Closing twice is
+  # harmless.
   #
   # @return [Void]
   foul close() -> Void = Kex.Intrinsic.NetDNS.close(this)
 end
 
-# Convenience lookup operations for callers that do not need resolver
-# ownership or cache reuse.
+# One-off lookups, for callers that do not need a +Resolver+ of their own.
 module DNS do
-  # Resolves a name once with a short-lived system resolver.
+  # Resolves a name to its addresses with a resolver opened for this one
+  # lookup.
   #
-  # Prefer this for command-line tools and one-off checks. A server that looks
-  # up names repeatedly should own a +Resolver+ so it can reuse cached answers.
+  # Use it in command-line tools and one-off checks. A server that looks up
+  # names repeatedly should open a +Resolver+, which caches answers.
   #
   # @param name [Name] the validated hostname
-  # @return [Result<[Net.IP.Address], NetError>] addresses or +Resolve+
+  # @return [Result<[Net.IP.Address], NetError>] the addresses, or a
+  #   +Resolve+ error
   #
   # @example Resolving one host in a short-lived command
   #   let addresses = DNS.addresses(Name.parse("example.com").try).try

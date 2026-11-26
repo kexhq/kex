@@ -1,31 +1,26 @@
 # A last-in-first-out stack.
 #
-# Opt-in: nothing here is in scope until `using Data.Stack`.
+# Nothing here is in scope until +using Data.Stack+.
 #
 #   using Data.Stack
 #
-# Elements are stored top first, so +push+, +pop+ and +peek+ are all
-# list-head operations: none of them pay for the size of the stack. +items+
-# reverses that internal order, so it reads bottom-to-top, the order you would
-# have pushed them in:
+# +push+, +pop+ and +peek+ take constant time. +items+ lists the elements
+# bottom to top, the order they were pushed in:
 #
 #   let s = Stack.from([1, 2, 3])
-#   s.peek                # => Just(3)
-#   s.push(4).items       # => [1, 2, 3, 4]
-#   s.pop                 # => Just((3, Stack(1, 2)))
-#   Stack.empty.pop       # => None
+#   s.peek                                         # => Just(3)
+#   s.push(4).items                                # => [1, 2, 3, 4]
+#   s.pop.map { |top, rest| (top, rest.items) }    # => Just((3, [1, 2]))
+#   Stack.empty.pop                                # => None
 #
-# Updates return a new stack rather than changing the receiver.
-# +push!+ and +pop!+ come free from the +!+ rebinding form, the same as
-# +add!+/+delete!+ do for +Data.Set+: they build a new stack and rebind the
-# receiver variable rather than modifying anything in place.
+# Every update returns a new stack. +push!+ rebinds the variable to the
+# result, as +add!+ does for +Data.Set+.
 module Data
 
-# A stack of elements, held top first.
+# A stack of elements.
 #
-# Build one with +Stack.from+ rather than by hand: the record literal takes
-# elements in storage order (top first), which reads backwards from the
-# +items+ a caller normally thinks in.
+# Build one with +Stack.from+. The record literal takes its elements top
+# first, the reverse of +items+.
 #
 #   Stack.from([1, 2, 3]).items   # => [1, 2, 3]
 record Stack<A> do
@@ -34,7 +29,7 @@ end
 
 # Constructors for +Stack+.
 module Stack do
-  # Builds a stack from a list, read bottom-to-top: the last element is on
+  # Builds a stack from a list read bottom to top, so the last element is on
   # top.
   #
   # @param items [[A]] the elements, bottom first
@@ -44,7 +39,7 @@ module Stack do
   #   Stack.from([1, 2, 3]).peek   # => Just(3)
   let from(items: [A]) -> Stack<A> = Stack { elements: items.reverse }
 
-  # The stack with no elements. Also the +Monoid+ identity.
+  # Returns an empty stack.
   #
   # @return [Stack<A>] the empty stack
   #
@@ -54,10 +49,8 @@ module Stack do
 end
 
 make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
-  # Folds from the bottom up to the top: the order +items+ lists them in, so
-  # +map+, +each+ and +items+ all agree.
-  #
-  # This is +Stack+'s +Enumerable+/+Foldable+ primitive.
+  # Folds the elements from bottom to top, the order of +items+. +map+,
+  # +each+ and the other +Enumerable+ functions use the same order.
   #
   # @param acc [B] the initial accumulator
   # @param f [B -> A -> B] combines the accumulator with each element
@@ -68,14 +61,14 @@ make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = this.items.reduce(acc, f)
 
-  # The empty stack: the +Monoid+ identity.
+  # Returns the empty stack, the +Monoid+ identity.
   #
   # @return [Stack<A>] the empty stack
   identity :> Stack<A>
   let identity = Stack { elements: [] }
 
-  # Combines two stacks by pushing the argument's elements on top of this
-  # one, top element last.
+  # Pushes the elements of +other+ onto this stack, bottom first, so the top
+  # of +other+ ends up on top.
   #
   # @param other [Stack<A>] the stack to push on top
   # @return [Stack<A>] this stack with +other+ stacked above it
@@ -85,8 +78,7 @@ make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   combine :> Stack<A> -> Stack<A>
   let combine(other) = Stack { elements: other.elements + @elements }
 
-  # Returns the elements bottom-to-top: the order you would have pushed
-  # them in.
+  # Returns the elements bottom to top, the order they were pushed in.
   #
   # @return [[A]] the elements, bottom first
   #
@@ -97,7 +89,7 @@ make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 
   # Returns a new stack with +value+ pushed on top.
   #
-  # Use +push!+ to rebind the receiver variable.
+  # +s.push!(value)+ rebinds +s+ to the result.
   #
   # @param value [A] the element to push
   # @return [Stack<A>] a stack with +value+ on top
@@ -107,21 +99,20 @@ make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   push :> A -> Stack<A>
   let push(value) = Stack { elements: [value | @elements] }
 
-  # Returns the top element and the stack without it, wrapped in +Just+, or
-  # +None+ for an empty stack.
-  #
-  # Use +pop!+ to rebind the receiver variable.
+  # Returns the top element and the stack without it, or +None+ for an empty
+  # stack.
   #
   # @return [(A, Stack<A>)?] the top element and the rest, or +None+
   #
   # @example
-  #   Stack.from([1, 2, 3]).pop   # => Just((3, Stack(1, 2)))
-  #   Stack.empty.pop             # => None
+  #   Stack.from([1, 2, 3]).pop.map { |top, rest| (top, rest.items) }
+  #   # => Just((3, [1, 2]))
+  #   Stack.empty.pop   # => None
   pop :> (A, Stack<A>)?
   let pop(@Stack { elements: [] }) = None
   let pop(@Stack { elements: [top | rest] }) = Just((top, Stack { elements: rest }))
 
-  # Returns the top element wrapped in +Just+, or +None+ for an empty stack.
+  # Returns the top element, or +None+ for an empty stack.
   #
   # @return [A?] the top element, or +None+
   #
@@ -151,23 +142,23 @@ make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   empty? :> Bool
   let empty? = @elements.empty?
 
-  # Pushes another stack's elements, or a plain list's, on top.
+  # Pushes the elements of another stack or of a list onto this one.
   #
-  # The list form reads bottom-to-top, the same as +Stack.from+: the last
-  # element of the list ends up on top.
+  # A list is read bottom to top, as by +Stack.from+, so its last element
+  # ends up on top.
   #
   # @param other [Stack<A> | [A]] the elements to push
   # @return [Stack<A>] this stack with +other+ pushed above it
   #
   # @example
-  #   Stack.from([1, 2]) + [3, 4]             # => Stack(1, 2, 3, 4)
-  #   Stack.from([1, 2]) + Stack.from([3])    # => Stack(1, 2, 3)
+  #   (Stack.from([1, 2]) + [3, 4]).items            # => [1, 2, 3, 4]
+  #   (Stack.from([1, 2]) + Stack.from([3])).items   # => [1, 2, 3]
   + :> Stack<A> -> Stack<A>
   let +(other: Stack<A>) -> Stack<A> = this.combine(other)
   + :> [A] -> Stack<A>
   let +(other: [A]) -> Stack<A> = this.combine(Stack.from(other))
 
-  # Renders the stack as +Stack(...)+, bottom-to-top.
+  # Writes the stack as +Stack(...)+, bottom to top.
   #
   # @return [String] the rendered stack
   #
@@ -178,8 +169,7 @@ make Stack<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
 end
 
 make Stack<A>, implement: Blankable do
-  # Returns +true+ when the stack has no elements. The +Blankable+ view of
-  # +empty?+.
+  # Returns +true+ when the stack has no elements, like +empty?+.
   #
   # @return [Bool] +true+ for the empty stack
   #

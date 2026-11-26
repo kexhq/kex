@@ -1,16 +1,18 @@
-# Calendar spans: +1.month+, +2.year+, resolved by the calendar they are
-# added on. Fixed elapsed time is a +Duration+, in duration.kex.
+# Calendar spans such as +1.month+ and +2.year+, whose length depends on the
+# date they are added to. Elapsed time is a +Duration+, in duration.kex.
 
-# A calendar span. Months and years have no fixed length: February is 28 days
-# or 29, a year 365 or 366, so they cannot live in a `Duration`, which is a
-# count of seconds and nothing else. A Period carries the calendar fields
-# themselves and lets the calendar resolve them:
+# A span of calendar years, months and days.
 #
-#   Date.of(2026, 1, 31).try + 1.month        # 2026-02-28, not 2026-03-03
+# February has 28 or 29 days and a year 365 or 366, so a month or a year is not
+# a fixed number of seconds and cannot be a +Duration+. A +Period+ keeps the
+# calendar fields, and adding it to a date clamps the day to the end of a
+# shorter month:
+#
+#   Date.of(2026, 1, 31).try + 1.month        # 2026-02-28
 #   Date.of(2024, 2, 29).try + 1.year         # 2025-02-28
 #
-# Use a Duration for elapsed time (`36.hour` is always 129600 seconds) and a
-# Period for calendar steps (`1.month` is however long that month is).
+# Use a +Duration+ for elapsed time (+36.hour+ is always 129600 seconds) and a
+# +Period+ for calendar steps.
 record Period do
   # The number of whole years in the span.
   years : Integer
@@ -22,12 +24,13 @@ record Period do
   days : Integer
 end
 
-# Calendar spans on +Integer+: +1.month+, +2.year+. A +Period+, not a
-# +Duration+: +4.week+ is exactly 28 days, +1.month+ one calendar month,
-# however long that month turns out to be. The time units (+5.second+,
-# +90.minute+, +2.week+) are in units.kex.
+# The calendar spans +1.month+ and +2.year+ on +Integer+.
+#
+# These return a +Period+. The fixed time units (+5.second+, +90.minute+,
+# +2.week+) return a +Duration+ and live in units.kex; +4.week+ is always 28
+# days.
 make Integer do
-  # This many calendar months, as a +Period+.
+  # Returns a +Period+ of this many calendar months.
   #
   # @return [Period] the calendar span
   #
@@ -38,7 +41,7 @@ make Integer do
   #   (Date.of(2026, 1, 31).try + 1.month).iso   # => "2026-02-28"
   let month -> Period = Period { years: 0, months: this, days: 0 }
 
-  # This many calendar years, as a +Period+.
+  # Returns a +Period+ of this many calendar years.
   #
   # @return [Period] the calendar span
   #
@@ -48,9 +51,9 @@ make Integer do
 end
 
 
-# Building calendar spans.
+# Constructors for +Period+.
 module Period do
-  # A span of nothing.
+  # Returns the empty span.
   #
   # @return [Period] the zero span
   #
@@ -59,7 +62,7 @@ module Period do
   #   Period.zero().zero?   # => true
   let zero() -> Period = Period { years: 0, months: 0, days: 0 }
 
-  # A span of the given years, months and days together.
+  # Returns a span of the given years, months and days.
   #
   # @param years [Integer] whole years
   # @param months [Integer] whole months
@@ -70,7 +73,7 @@ module Period do
   #   Period.of(1, 2, 3).iso   # => "P1Y2M3D"
   let of(years: Integer, months: Integer, days: Integer) -> Period = Period { years: years, months: months, days: days }
 
-  # A span of +count+ calendar years.
+  # Returns a span of +count+ calendar years.
   #
   # @param count [Integer] how many years
   # @return [Period] the calendar span
@@ -79,7 +82,7 @@ module Period do
   #   (Date.of(2024, 2, 29).try + Period.years(1)).iso   # => "2025-02-28"
   let years(count: Integer) -> Period = Period { years: count, months: 0, days: 0 }
 
-  # A span of +count+ calendar months.
+  # Returns a span of +count+ calendar months.
   #
   # @param count [Integer] how many months
   # @return [Period] the calendar span
@@ -88,7 +91,7 @@ module Period do
   #   (Date.of(2026, 1, 31).try + Period.months(1)).iso   # => "2026-02-28"
   let months(count: Integer) -> Period = Period { years: 0, months: count, days: 0 }
 
-  # A span of +count+ days, as a calendar step.
+  # Returns a span of +count+ calendar days.
   #
   # @param count [Integer] how many days
   # @return [Period] the calendar span
@@ -97,7 +100,7 @@ module Period do
   #   Period.days(10).iso   # => "P10D"
   let days(count: Integer) -> Period = Period { years: 0, months: 0, days: count }
 
-  # A span of +count+ weeks, recorded as that many times seven days.
+  # Returns a span of +count+ weeks, stored as +count * 7+ days.
   #
   # @param count [Integer] how many weeks
   # @return [Period] the calendar span
@@ -108,14 +111,14 @@ module Period do
 end
 
 make Period, implement: Inspectable, Showable do
-  # Renders the period structurally, for debugging output.
+  # Returns the period's fields, for debugging output.
   #
   # @param colors [Bool] whether to include ANSI color escapes
   # @return [String] the rendered period
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
 
-  # Renders the period as its ISO 8601 form, so interpolation and
-  # +IO.printLine+ show +P1Y2M3D+.
+  # Returns the ISO 8601 form, which is what interpolation and +IO.printLine+
+  # show.
   #
   # @return [String] the ISO 8601 duration
   #
@@ -123,7 +126,7 @@ make Period, implement: Inspectable, Showable do
   #   "due in ${Period.of(0, 1, 0)}"   # => "due in P1M"
   let showValue -> String = this.iso
 
-  # Adds two calendar spans, field by field.
+  # Returns the sum of two spans, field by field.
   #
   # @param other [Period] the span to add
   # @return [Period] the total
@@ -132,7 +135,8 @@ make Period, implement: Inspectable, Showable do
   #   (Period.of(1, 2, 3) + 1.year).iso   # => "P2Y2M3D"
   let +(other: Period) -> Period = Period { years: this.years + other.years, months: this.months + other.months, days: this.days + other.days }
 
-  # Subtracts a calendar span, field by field. Fields may go negative.
+  # Returns the difference of two spans, field by field. Fields can go
+  # negative.
   #
   # @param other [Period] the span to subtract
   # @return [Period] the difference
@@ -141,7 +145,7 @@ make Period, implement: Inspectable, Showable do
   #   (Period.of(1, 2, 3) - 1.year).iso   # => "P2M3D"
   let -(other: Period) -> Period = Period { years: this.years - other.years, months: this.months - other.months, days: this.days - other.days }
 
-  # The same span with every field's sign flipped: a step backwards.
+  # Returns the span with the sign of every field flipped.
   #
   # @return [Period] the negated span
   #
@@ -149,7 +153,7 @@ make Period, implement: Inspectable, Showable do
   #   Period.of(1, 2, 3).negated.iso   # => "P-1Y-2M-3D"
   let negated -> Period = Period { years: 0 - this.years, months: 0 - this.months, days: 0 - this.days }
 
-  # Multiplies every field by +factor+.
+  # Returns the span with every field multiplied by +factor+.
   #
   # @param factor [Integer] the factor to multiply by
   # @return [Period] the scaled span
@@ -158,7 +162,7 @@ make Period, implement: Inspectable, Showable do
   #   (Period.of(1, 2, 3) * 2).iso   # => "P2Y4M6D"
   let *(factor: Integer) -> Period = Period { years: this.years * factor, months: this.months * factor, days: this.days * factor }
 
-  # Returns +true+ when every field is zero.
+  # Returns whether every field is zero.
   #
   # @return [Bool] +true+ for a zero span
   #
@@ -167,11 +171,10 @@ make Period, implement: Inspectable, Showable do
   #   Period.of(0, 1, 0).zero?     # => false
   let zero? -> Bool = this.years == 0 && this.months == 0 && this.days == 0
 
-  # The years and months of the span, as one count of months.
+  # Returns the years and months of the span as one count of months.
   #
-  # Years and months are one quantity for arithmetic: a month is 1/12 of a
-  # year exactly, unlike days, which are not a fixed fraction of a month. This
-  # is why `date + span` applies them together rather than one after the other.
+  # A year is always 12 months, while a month has no fixed number of days, so
+  # +date + span+ adds the years and months in one step and the days after.
   #
   # @return [Integer] the total months, ignoring days
   #
@@ -179,10 +182,10 @@ make Period, implement: Inspectable, Showable do
   #   Period.of(1, 2, 3).totalMonths   # => 14
   let totalMonths -> Integer = this.years * 12 + this.months
 
-  # The same span with excess months carried into years.
+  # Returns the span with whole years of months carried into +years+.
   #
-  # 14 months becomes 1 year 2 months. Days are left alone: there is no fixed
-  # number of them in a month to carry by.
+  # 14 months becomes 1 year 2 months. Days are not carried, since a month has
+  # no fixed number of them.
   #
   # @return [Period] the normalised span
   #
@@ -193,17 +196,16 @@ make Period, implement: Inspectable, Showable do
     return Period { years: (total - total.modulo(12)) / 12, months: total.modulo(12), days: this.days }
   end
 
-  # The span as an ISO 8601 duration, +P1Y2M3D+.
+  # Returns the span as an ISO 8601 duration such as +P1Y2M3D+.
   #
-  # A zero period is +P0D+, the shortest spelling the grammar allows: +P+
-  # alone is not valid.
+  # The empty span is +P0D+, because a bare +P+ is not valid ISO 8601.
   #
   # @return [String] the ISO 8601 duration
   #
   # @example
   #   Period.of(1, 2, 3).iso   # => "P1Y2M3D"
   #   Period.zero().iso        # => "P0D"
-  #   2.month.iso             # => "P2M"
+  #   2.month.iso              # => "P2M"
   let iso -> String do
     return "P0D" if this.zero?
     let years = this.years != 0 then "${this.years}Y" else ""

@@ -1,32 +1,26 @@
-# Buffered HTTP clients, responses, and a small declaration-ordered server
-# router. Requests never follow redirects or perform generic retries implicitly.
+# Buffered HTTP clients and responses, and a small server whose router tries
+# routes in the order they were declared. Requests never follow redirects or
+# retry on their own.
 #
 #   using Net.HTTP
 #
 #   let response = HTTP.get("https://example.test/").try
 #   response.status.success?   # => true
 #
-# For connection reuse and statistics, own a client explicitly:
+# To reuse connections and read statistics, open a client:
 #
 #   let client = Client.open.try
 #   let response = client.get("https://example.test/").try
 #   client.close.try
 module Net.HTTP
 
-# An insertion-ordered HTTP field collection. Names compare case-insensitively
-# and duplicate fields are preserved.
+# HTTP header fields in insertion order. Names compare case-insensitively, and
+# a name may appear more than once.
 #
-# A list of pairs rather than a +{String: String}+ map, and deliberately so.
-# A map cannot hold the same name twice, and +Set-Cookie+ needs exactly that:
-# RFC 6265 does not define it as a comma-separated list, so two cookies must
-# travel as two fields and cannot be joined into one. A map interface would
-# read as the obvious one right up to the first response that sets two
-# cookies, then silently keep one — the same class of quiet data loss this
-# module's +Result+-returning builders exist to avoid.
-#
-# Order is kept for the same reason. RFC 9110 makes order insignificant
-# BETWEEN different names but significant between fields sharing a name, and
-# a map has no order to keep.
+# Headers are a list of pairs, not a map, because some fields must repeat:
+# two cookies are two +Set-Cookie+ fields and cannot be joined into one
+# (RFC 6265). The order of fields sharing a name is significant (RFC 9110), so
+# it is kept too.
 record Headers do
   entries : [(String, String)]
 end
@@ -36,14 +30,14 @@ record Status do
   code : Integer
 end
 
-# A typed HTTP response envelope whose body representation is explicit.
+# An HTTP response: status, headers and a body of type +B+.
 record Response<B> do
   status : Status
   headers : Headers
   body : B
 end
 
-# A typed HTTP request envelope whose body representation is explicit.
+# An HTTP request: method, target, headers and a body of type +B+.
 record Request<B> do
   method : String
   target : URI
@@ -51,7 +45,7 @@ record Request<B> do
   body : B
 end
 
-# Route captures decoded after path segmentation.
+# The named and wildcard captures of the matched route, already decoded.
 record RouteContext do
   parameters : Map<String, String> = {}
 end
@@ -61,11 +55,12 @@ record Context do
   route : RouteContext
 end
 
-# A buffered HTTP route handler. Handling a request is effectful: routes may
-# read files, query a database, send messages, or perform other application IO.
+# A route handler: a +foul+ function from a +Request<Binary>+ and its
+# +Context+ to a +Response<Binary>+. Being +foul+, it may read files, query a
+# database or send messages.
 type Handler = Type.of(handlerType)
 
-# One declared route; routers preserve declaration order.
+# One declared route.
 record Route do
   method : String
   path : String
@@ -75,12 +70,13 @@ record Route do
   maximumBodyBytes : Integer? = None
 end
 
-# An immutable, declaration-ordered HTTP router.
+# An HTTP router. The first declared route that matches a request handles it.
 record Router do
   routes : [Route] = []
 end
 
-# Counts and elapsed time from graceful server shutdown.
+# What a graceful server shutdown did: requests completed, failed and forced
+# down, and how long it took.
 record ShutdownReport do
   completed : Integer
   failed : Integer
@@ -88,23 +84,23 @@ record ShutdownReport do
   elapsedMilliseconds : Integer
 end
 
-# Bounded HTTP server resources, default graceful-shutdown duration and
-# request body limit.
+# Server limits: concurrent handlers, the accept backlog, the default grace
+# period on shutdown, and the request body limit.
 record ServerOptions do
   maximumHandlers : Integer = 1024
-  # Connections the kernel queues before the server accepts them. 1,024, as
-  # Cowboy's Ranch and Bandit's Thousand Island use: at 128, a burst of a
-  # thousand clients connecting at once overflows it, and the ones dropped
-  # retry a second later. Linux caps it at net.core.somaxconn.
+  # Connections the kernel queues before the server accepts them. The default
+  # of 1,024 matches Ranch and Thousand Island; at 128, a burst of a thousand
+  # clients overflows the queue and the dropped ones retry a second later.
+  # Linux caps it at +net.core.somaxconn+.
   backlog : Integer = 1024
   gracefulShutdown : Duration = 10.second
   # The largest request body a route reads, in bytes, unless the route sets
-  # its own. A request declaring a longer +Content-Length+ is answered
+  # its own. A request declaring a longer +Content-Length+ gets
   # +413 Payload Too Large+ before any of its body is read.
   maximumBodyBytes : Integer = 10485760
 end
 
-# How long one client request may take, and how large an answer it accepts.
+# How long one client request may take, and how large a response it accepts.
 #
 # A request over a size limit is a +Limit+ error, and one over a time limit a
 # +Timeout+.
@@ -119,7 +115,7 @@ record RequestOptions do
   # The largest response body accepted, in bytes.
   maximumBodyBytes : Integer = 16777216
   # The largest response header block accepted, in bytes. +HTTP.request+
-  # leaves header parsing to the runtime and does not apply it.
+  # ignores this limit.
   maximumHeaderBytes : Integer = 65536
 end
 
@@ -138,7 +134,8 @@ record ClientOptions do
   request : RequestOptions = RequestOptions {}
 end
 
-# Lifetime request/reuse counters plus current pooled connections.
+# A client's open pooled connections, and how many requests it has made and
+# how many reused a connection.
 record ClientStatistics do
   openConnections : Integer
   requests : Integer
@@ -150,29 +147,30 @@ record ClientCloseReport do
   closedConnections : Integer
 end
 
-# The pooled HTTP client. An opaque handle over the connection pool that
-# owns it; `Client.open` makes one and `client.close` releases it.
+# An HTTP client with its own connection pool. +Client.open+ makes one and
+# +close+ releases it.
 type Client
 
-# Construction and parsing of validated HTTP header collections.
+# Builds and parses validated +Headers+.
 module Headers do
   # Returns a field collection with no entries.
   #
   # @return [Headers] an empty field collection
   #
-  # @example Building request headers immutably
+  # @example Building request headers
   #   Headers.empty
   #     .add("Accept", "application/json").try
   #     .add("User-Agent", "inventory-sync/1.0").try
   empty : Headers
   let empty = Headers { entries: [] }
 
-  # Validates header names and values without folding duplicates.
+  # Builds headers from name-value pairs, validating each one.
   #
-  # Duplicate fields stay in their original order. Invalid names and values
-  # containing line breaks are rejected instead of creating a malformed or
-  # injectable HTTP message.
+  # Repeated names stay as separate fields, in order. An invalid name, or a
+  # value containing a line break, is a +Parse+ error, so a value cannot inject
+  # extra header lines.
   #
+  # @param entries [[(String, String)]] the fields, in order
   # @return [Result<Headers, NetError>] validated fields, or +Parse+
   #
   # @example Forwarding an explicitly selected set of request headers
@@ -183,15 +181,12 @@ module Headers do
   from : [(String, String)] -> Result<Headers, NetError>
   let from(entries) = Kex.Intrinsic.NetHTTP.headers(entries)
 
-  # Validates header names and values from unordered pairs, for the common
-  # case where every name is used once. Do not use this for `Set-Cookie` or
-  # any other field that legitimately repeats — a `Map` cannot hold a name
-  # twice, so unlike the list form above, a second value for the same name
-  # here does not add a second field; it silently replaces the first (see
-  # this module's own +Headers+ record doc for why that specific field
-  # cannot be folded into one entry). Reach for the ordered list form for
-  # anything that might repeat a name.
+  # Builds headers from a map, validating each field.
   #
+  # A map holds each name once, so use the list form for +Set-Cookie+ or any
+  # other field that can repeat.
+  #
+  # @param entries [Map<String, String>] the fields
   # @return [Result<Headers, NetError>] validated fields, or +Parse+
   #
   # @example Forwarding a set of request headers that are each sent once
@@ -201,9 +196,10 @@ module Headers do
 
   # Parses CRLF- or LF-separated header fields.
   #
-  # Use this at a protocol boundary when headers arrive as text. Application
-  # code normally builds them with +from+, +add+, and +set+.
+  # Use it when headers arrive as text. To build headers in code, use +from+
+  # and +add+.
   #
+  # @param text [String] the header block
   # @return [Result<Headers, NetError>] fields in source order, or +Parse+
   #
   # @example Parsing headers captured from a diagnostic fixture
@@ -212,9 +208,9 @@ module Headers do
   let parse(text) = Kex.Intrinsic.NetHTTP.parseHeaders(text)
 end
 
-# Validation for numeric HTTP status codes.
+# Builds a validated +Status+ from a number.
 module Status do
-  # Validates an HTTP status code.
+  # Returns the status for +code+, or a +Parse+ error outside +100..599+.
   #
   # @param code [Integer] a status in +100..599+
   # @return [Result<Status, NetError>] the status, or +Parse+
@@ -226,14 +222,14 @@ module Status do
   let from(code) = Kex.Intrinsic.NetHTTP.status(code)
 end
 
-# Buffered response constructors for route handlers.
+# Builds the responses a route handler returns.
 module Response do
-  # Builds a buffered binary response with validated headers.
+  # Builds a response with a binary body and the given headers.
   #
   # @example Returning a downloaded file without decoding it as text
   #   Response.binary(200, archive, Headers.empty.add("Content-Type", "application/zip").try)
   foul binary(status: Integer, body: Binary, headers: Headers) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseBinary(status, body, headers)
-  # Builds a UTF-8 text response with an explicit text/plain content type.
+  # Builds a UTF-8 text response with a +text/plain+ content type.
   #
   # @example A small health endpoint
   #   Response.text(200, "ok")
@@ -245,9 +241,12 @@ module Response do
   foul empty(status: Integer) -> Response<Binary> = Kex.Intrinsic.NetHTTP.responseEmpty(status)
 end
 
-# The empty starting point for an immutable route declaration chain.
+# Starts a route declaration chain.
 module Router do
+  # Returns a router with no routes, to declare routes on.
+  #
   # @return [Router] a router with no routes
+  #
   # @example Build a health endpoint
   #   Router.build.get("/health", do |request, context|
   #     Response.text(200, "ok")
@@ -257,46 +256,47 @@ module Router do
 end
 
 make Router do
-  # Appends a route; earlier matching declarations win.
+  # Adds a route for any HTTP method. Routes declared earlier win.
   #
-  # Use this for a method without a convenience function. Paths may include
+  # Use it for a method that has no function of its own. Paths may include
   # named or wildcard captures, which the handler reads from +RouteContext+.
   #
   # @example Adding a custom method
   #   router.route("PURGE", "/cache/:key", ~purge)
   let route(method: String, path: String, handler: Handler) -> Router = this.limited(method, path, handler, None)
-  # Appends a route that reads request bodies up to +maximumBodyBytes+,
-  # instead of the server's +ServerOptions.maximumBodyBytes+.
+  # Adds a route with its own request body limit, replacing the server's
+  # +ServerOptions.maximumBodyBytes+ for this route.
   #
-  # A request declaring a longer body is answered +413 Payload Too Large+
-  # before any of it is read, and the handler never runs.
+  # A request declaring a longer body gets +413 Payload Too Large+ before any
+  # of it is read, and the handler does not run.
   #
-  # @example An upload route allowing more than every other route
+  # @example Upload routes with larger limits than the rest
   #   Router.build
   #     .post("/avatar", ~avatar, maximumBodyBytes: 2097152)
   #     .post("/upload", ~upload, maximumBodyBytes: 524288000)
   let route(method: String, path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.limited(method, path, handler, Just(maximumBodyBytes))
-  # Appends a GET route. GET also supplies automatic HEAD fallback.
+  # Adds a GET route, which also answers HEAD requests unless a HEAD route is
+  # declared.
   let get(path: String, handler: Handler) -> Router = this.route("GET", path, handler)
-  # Appends a GET route with its own request body limit.
+  # Adds a GET route with its own request body limit.
   let get(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("GET", path, handler, maximumBodyBytes: maximumBodyBytes)
-  # Appends an explicit HEAD route, overriding automatic GET fallback.
+  # Adds a HEAD route, used in place of the GET route's automatic HEAD answer.
   let head(path: String, handler: Handler) -> Router = this.route("HEAD", path, handler)
-  # Appends an explicit OPTIONS route, overriding generated OPTIONS.
+  # Adds an OPTIONS route, used in place of the generated OPTIONS answer.
   let options(path: String, handler: Handler) -> Router = this.route("OPTIONS", path, handler)
-  # Appends a POST route.
+  # Adds a POST route.
   let post(path: String, handler: Handler) -> Router = this.route("POST", path, handler)
-  # Appends a POST route with its own request body limit.
+  # Adds a POST route with its own request body limit.
   let post(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("POST", path, handler, maximumBodyBytes: maximumBodyBytes)
-  # Appends a PUT route.
+  # Adds a PUT route.
   let put(path: String, handler: Handler) -> Router = this.route("PUT", path, handler)
-  # Appends a PUT route with its own request body limit.
+  # Adds a PUT route with its own request body limit.
   let put(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("PUT", path, handler, maximumBodyBytes: maximumBodyBytes)
-  # Appends a PATCH route.
+  # Adds a PATCH route.
   let patch(path: String, handler: Handler) -> Router = this.route("PATCH", path, handler)
-  # Appends a PATCH route with its own request body limit.
+  # Adds a PATCH route with its own request body limit.
   let patch(path: String, handler: Handler, maximumBodyBytes: Integer) -> Router = this.route("PATCH", path, handler, maximumBodyBytes: maximumBodyBytes)
-  # Appends a DELETE route.
+  # Adds a DELETE route.
   let delete(path: String, handler: Handler) -> Router = this.route("DELETE", path, handler)
 
   private do
@@ -306,15 +306,15 @@ make Router do
   end
 end
 
-# Starting, observing, and gracefully stopping HTTP servers.
+# Starts, watches and stops HTTP servers.
 module Server do
-  # An opaque asynchronous HTTP server handle.
+  # A handle to a server running in the background.
   type Running
-  # Starts a server with conservative defaults and returns immediately.
+  # Starts a server with the default +ServerOptions+ and returns at once.
   #
-  # The returned handle owns the listener and active handlers. Use +start+
-  # when the process has other work to do; use +serve+ for a foreground server
-  # whose main job is handling HTTP.
+  # The handle owns the listener and the running handlers. Use +start+ when
+  # the process has other work to do, and +serve+ when serving HTTP is all it
+  # does.
   #
   # @example
   #   let router = Router.build.get("/health", do |request, context|
@@ -324,30 +324,34 @@ module Server do
   #   let server = Server.start(endpoint, router).try
   #   Server.stop(server).try
   foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router)
-  # Starts a server with explicit concurrency, backlog, and shutdown bounds.
+  # Starts a server with the given +ServerOptions+ and returns at once.
   foul start(endpoint: Net.Socket.TCP.Endpoint, router: Router, options: ServerOptions) -> Result<Running, NetError> = Kex.Intrinsic.NetHTTPServer.start(endpoint, router, options)
-  # Starts with defaults and blocks until the server stops.
+  # Starts a server with the default options and blocks until it stops.
   foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router)
-  # Starts with options and blocks until the server stops.
+  # Starts a server with the given options and blocks until it stops.
   foul serve(endpoint: Net.Socket.TCP.Endpoint, router: Router, options: ServerOptions) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.serve(endpoint, router, options)
 
-  # Gracefully stops using the duration captured at start.
+  # Stops the server gracefully, with the grace period from its
+  # +ServerOptions+.
   #
-  # New requests stop being accepted while in-flight handlers get their grace
-  # period to finish. The report says how much work completed or was forced
-  # down during shutdown.
+  # The server stops accepting requests, and handlers already running get the
+  # grace period to finish. The report counts what completed and what was
+  # forced down.
   #
   # @example Shutting down from an application lifecycle hook
   #   let report = Server.stop(server).try
   #   IO.printLine("closed after ${report.completed} requests")
   foul stop(server: Running) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server)
-  # Gracefully stops with an operation-specific grace duration.
+  # Stops the server gracefully, giving running handlers +grace+ to finish.
   foul stop(server: Running, grace: Duration) -> Result<ShutdownReport, NetError> = Kex.Intrinsic.NetHTTPServer.stop(server, grace)
-  # Waits until the server owner exits.
+  # Waits until the server stops.
   foul join(server: Running) -> Result<Void, NetError> = Kex.Intrinsic.NetHTTPServer.join(server)
-  # @return [Bool] whether the server owner is alive
+  # Returns +true+ while the server is running.
+  #
+  # @return [Bool] whether the server is still running
   foul running?(server: Running) -> Bool = Kex.Intrinsic.NetHTTPServer.running?(server)
-  # Returns the bound address, including an operating-system-assigned port.
+  # Returns the address the server is bound to, with the actual port when the
+  # operating system picked it.
   #
   # @return [Net.Socket.TCP.Endpoint] the bound address
   #
@@ -357,12 +361,12 @@ module Server do
   foul localAddress(server: Running) -> Net.Socket.TCP.Endpoint = Kex.Intrinsic.NetHTTPServer.localAddress(server)
 end
 
-# Constructors for explicitly owned, connection-pooling HTTP clients.
+# Opens HTTP clients.
 module Client do
-  # Opens an explicit pooled client with conservative defaults.
+  # Opens a client with the default +ClientOptions+.
   #
-  # Reuse one client for related requests so keep-alive connections and DNS
-  # work can be reused. Close it when the owning service shuts down.
+  # Send related requests through one client so they reuse its connections,
+  # and close it when the service shuts down.
   #
   # @example Fetching several pages through one connection pool
   #   let client = Client.open.try
@@ -371,16 +375,16 @@ module Client do
   #   client.close.try
   open : Result<Client, NetError>
   foul open() = Kex.Intrinsic.NetHTTPClient.open(ClientOptions {})
-  # Opens an explicit client owning the supplied pool policy.
+  # Opens a client with the given pool and request options.
   open : ClientOptions -> Result<Client, NetError>
   foul open(options) = Kex.Intrinsic.NetHTTPClient.open(options)
 end
 
 make Client do
-  # Sends a buffered request. Redirects and generic retries are not implicit.
+  # Sends a request and reads the whole response.
   #
-  # This keeps policy with the caller: inspect a redirect before following it,
-  # and retry only methods and failures your application knows are safe.
+  # Redirects are not followed and failures are not retried; a redirect comes
+  # back as a +3xx+ response for you to act on.
   #
   # @example Sending JSON with an idempotency key
   #   let headers = Headers.empty
@@ -388,19 +392,19 @@ make Client do
   #     .add("Idempotency-Key", requestId).try
   #   client.request("POST", url, headers, JSON.stringify(order).to(Binary).try)
   foul request(method: String, url: String, headers: Headers, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body)
-  # Sends a buffered request with its own limits instead of the client's.
+  # Sends a request with its own limits in place of the client's.
   #
   # @example A link preview that gives up after two seconds
   #   let quick = RequestOptions { timeout: 2.second, maximumBodyBytes: 262144 }
   #   client.request("GET", url, Headers.empty, Binary.empty, quick)
   foul request(method: String, url: String, headers: Headers, body: Binary, options: RequestOptions) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body, options)
-  # Sends a buffered GET request.
+  # Sends a GET request.
   foul get(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.get(this, url)
-  # Sends a buffered binary POST request.
+  # Sends a POST request with a binary body.
   foul post(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.post(this, url, body)
-  # Sends a buffered binary PUT request.
+  # Sends a PUT request with a binary body.
   foul put(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "PUT", url, Headers.empty, body)
-  # Sends a buffered binary PATCH request.
+  # Sends a PATCH request with a binary body.
   foul patch(url: String, body: Binary) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "PATCH", url, Headers.empty, body)
   # Sends a DELETE request with an empty body.
   foul delete(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "DELETE", url, Headers.empty, Binary.empty)
@@ -408,7 +412,7 @@ make Client do
   foul head(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "HEAD", url, Headers.empty, Binary.empty)
   # Sends an OPTIONS request.
   foul options(url: String) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, "OPTIONS", url, Headers.empty, Binary.empty)
-  # Reports current pool occupancy and lifetime request counters.
+  # Returns the client's open connections and request counts.
   #
   # @return [ClientStatistics] current pool and lifetime request counters
   #
@@ -416,24 +420,23 @@ make Client do
   #   let stats = client.statistics
   #   IO.printLine("HTTP reuse: ${stats.reusedConnections}/${stats.requests}")
   foul statistics -> ClientStatistics = Kex.Intrinsic.NetHTTPClient.statistics(this)
-  # Idempotently closes the client and every idle pooled connection.
+  # Closes the client and its idle pooled connections.
   #
-  # Further requests fail with +Closed+; a second close is harmless.
+  # Later requests fail with +Closed+. Closing twice is not an error.
   foul close -> Result<ClientCloseReport, NetError> = Kex.Intrinsic.NetHTTPClient.close(this)
 end
 
 make Headers, implement: Showable, Inspectable do
   # Appends a field, keeping existing fields of the same name.
   #
-  # Repeats are how +Set-Cookie+ works: it is not a comma-separated list, so
-  # two cookies must be two fields. For replace-semantics, +remove+ first.
+  # Adding a name that is already there gives a second field, which is how two
+  # +Set-Cookie+ fields are sent. To replace a field, +remove+ it first.
   #
-  # An invalid name or value is an +Error+, not a silent drop. Rejecting
-  # +"a\r\nX: y"+ is what stops response splitting, but dropping it quietly
-  # left the caller holding a valid +Headers+ that simply lacked the field it
-  # asked for, and a response with no +Content-Type+ invites MIME sniffing.
-  # +from+ and +parse+ already answer with a +Result+ for this same input.
+  # An invalid name, or a value with a line break such as +"a\r\nX: y"+, is a
+  # +Parse+ error, which stops header injection.
   #
+  # @param name [String] the field name
+  # @param value [String] the field value
   # @return [Result<Headers, NetError>] the extended fields, or +Parse+
   #
   # @example Two cookies on one response
@@ -444,42 +447,59 @@ make Headers, implement: Showable, Inspectable do
   # @example Replacing a field
   #   headers.remove("Content-Type").add("Content-Type", "application/json").try
   let add(name: String, value: String) -> Result<Headers, NetError> = Kex.Intrinsic.NetHTTP.addHeader(this, name, value)
-  # Removes every field matching +name+ case-insensitively.
+  # Removes every field named +name+, ignoring case.
+  #
+  # @param name [String] the field name
   #
   # @example Stripping hop-by-hop state before forwarding
   #   let forwarded = incoming.remove("Connection")
   let remove(name: String) -> Headers = Kex.Intrinsic.NetHTTP.removeHeader(this, name)
-  # Returns the first matching field value.
+  # Returns the value of the first field named +name+, ignoring case, or
+  # +None+.
+  #
+  # @param name [String] the field name
   #
   # @example Selecting a response decoder
   #   let contentType = response.headers.get("Content-Type").or("application/octet-stream")
   let get(name: String) -> String? = Kex.Intrinsic.NetHTTP.getHeader(this, name)
-  # Returns every matching value in insertion order.
+  # Returns the values of every field named +name+, in insertion order.
+  #
+  # @param name [String] the field name
   #
   # @example Preserving every Set-Cookie field
   #   let cookies = response.headers.getAll("Set-Cookie")
   let getAll(name: String) -> [String] = Kex.Intrinsic.NetHTTP.getAllHeaders(this, name)
-  # Renders fields while replacing authorization and cookie values with +***+.
+  # Renders the fields, with authorization and cookie values shown as +***+.
   let showValue -> String = Kex.Intrinsic.NetHTTP.redactedHeaders(this)
-  # Structural inspection uses the same credential-safe rendering.
+  # Renders the fields as +showValue+ does, with credentials hidden.
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.NetHTTP.redactedHeaders(this)
 end
 
 make Status do
+  # Returns +true+ for a +1xx+ status.
+  #
   # @return [Bool] whether the status is in +100..199+
   let informational? -> Bool = @code >= 100 && @code < 200
+  # Returns +true+ for a +2xx+ status.
+  #
   # @return [Bool] whether the status is in +200..299+
   let success? -> Bool = @code >= 200 && @code < 300
+  # Returns +true+ for a +3xx+ status.
+  #
   # @return [Bool] whether the status is in +300..399+
   let redirect? -> Bool = @code >= 300 && @code < 400
+  # Returns +true+ for a +4xx+ status.
+  #
   # @return [Bool] whether the status is in +400..499+
   let clientError? -> Bool = @code >= 400 && @code < 500
+  # Returns +true+ for a +5xx+ status.
+  #
   # @return [Bool] whether the status is in +500..599+
   let serverError? -> Bool = @code >= 500 && @code < 600
 end
 
 make RouteContext do
-  # Returns one decoded named or wildcard route capture.
+  # Returns the decoded value of a named or wildcard route capture.
   #
   # @param name [String] the capture name declared in the route
   # @return [Result<String, NetError>] the capture, or +Parse+ when absent
@@ -492,50 +512,58 @@ make RouteContext do
   end
 end
 
-# Stateless HTTP convenience calls for scripts and occasional requests.
+# One-off HTTP requests, each through its own short-lived client. Use
+# +Client+ for a service that makes repeated calls.
 module HTTP do
-  # Sends one stateless buffered request with no redirect or hidden retry.
+  # Sends a request and reads the whole response, without following
+  # redirects or retrying.
   #
-  # Each call owns a short-lived client. This is convenient for scripts and
-  # occasional requests; use +Client+ for a service making repeated calls.
+  # Each call opens and closes its own client, which suits scripts and
+  # occasional requests. A service making repeated calls should use +Client+.
+  #
+  # @param method [String] the HTTP method, such as +"GET"+
+  # @param url [String] the URL to request
+  # @param headers [Headers] the request headers, empty by default
+  # @param body [Binary] the request body, empty by default
   #
   # @example A one-off authenticated request in a command-line tool
   #   let headers = Headers.empty.add("Authorization", "Bearer ${token}").try
   #   HTTP.request("GET", url, headers).try
   request : String -> String -> Headers -> Binary -> Result<Response<Binary>, NetError>
   let request(method, url, headers = Headers.empty, body = Binary.empty) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body)
-  # Sends one stateless buffered request with its own time and size limits.
+  # Sends a one-off request with its own time and size limits.
   #
-  # For status 200 and 206, the runtime streams the body and abandons the
-  # request once it passes +maximumBodyBytes+. Other statuses are buffered
-  # by the runtime before their body size is checked. Use +Client.request+
-  # to bound body reads for every status.
+  # For status 200 and 206 the request is abandoned as soon as the body passes
+  # +maximumBodyBytes+. Bodies with other statuses are read in full before the
+  # limit is checked; +Client.request+ enforces it while reading for every
+  # status.
   #
   # @example
   #   HTTP.request("GET", url, Headers.empty, Binary.empty, RequestOptions { timeout: 2.second })
   request : String -> String -> Headers -> Binary -> RequestOptions -> Result<Response<Binary>, NetError>
   let request(method, url, headers, body, options) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body, options)
-  # Sends one stateless buffered GET.
+  # Sends a one-off GET request.
+  #
   # @example
   #   HTTP.get("https://example.test/").try
   get : String -> Result<Response<Binary>, NetError>
   let get(url) = Kex.Intrinsic.NetHTTP.get(url)
-  # Sends one stateless DELETE with an empty body.
+  # Sends a one-off DELETE request with an empty body.
   delete : String -> Result<Response<Binary>, NetError>
   let delete(url) = request("DELETE", url, Headers.empty, Binary.empty)
-  # Sends one stateless HEAD and returns an empty response body.
+  # Sends a one-off HEAD request; the response body is empty.
   head : String -> Result<Response<Binary>, NetError>
   let head(url) = request("HEAD", url, Headers.empty, Binary.empty)
-  # Sends one stateless OPTIONS request.
+  # Sends a one-off OPTIONS request.
   options : String -> Result<Response<Binary>, NetError>
   let options(url) = request("OPTIONS", url, Headers.empty, Binary.empty)
-  # Sends one stateless buffered binary POST.
+  # Sends a one-off POST request with a binary body.
   post : String -> Binary -> Result<Response<Binary>, NetError>
   let post(url, body) = request("POST", url, Headers.empty, body)
-  # Sends one stateless buffered binary PUT.
+  # Sends a one-off PUT request with a binary body.
   put : String -> Binary -> Result<Response<Binary>, NetError>
   let put(url, body) = request("PUT", url, Headers.empty, body)
-  # Sends one stateless buffered binary PATCH.
+  # Sends a one-off PATCH request with a binary body.
   patch : String -> Binary -> Result<Response<Binary>, NetError>
   let patch(url, body) = request("PATCH", url, Headers.empty, body)
 end

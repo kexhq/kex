@@ -1,10 +1,13 @@
-# Pure, and declared so. Reading and writing `tey.lock` is somebody else's
-# job — this module only turns the text into a LockState and back, which is
-# what makes the whole format testable without a disk (tey/spec/lockfile.spec.kex).
+# Encoding and decoding +tey.lock+.
+#
+# The functions here are pure: they turn the file's text into a +LockState+
+# and back, and never touch the disk.
 module Tey.Lockfile
 
 using JSON
 
+# One locked package: where it came from, the exact commit or path, and its
+# content hash.
 record Dependency do
   name : String
   version : String = ""
@@ -21,18 +24,18 @@ record Dependency do
   workspace? : Bool = false
 end
 
+# Everything +tey.lock+ records: the toolchain, the workspace and every locked
+# package.
 record LockState do
   kexRequirement : String
   kexVersion : String
-  # The OTP constraint the resolve was made under, and the release that
-  # satisfied it. Recorded so a checkout on a different Erlang is a DETECTED
-  # difference rather than one discovered later as an opaque `undef` — a
-  # lockfile that pins every dependency to a commit and says nothing about the
-  # runtime that will load them is only half a lock.
+  # The OTP requirement the lock was resolved under, and the release that met
+  # it, so that a checkout on a different Erlang is noticed instead of failing
+  # later with an +undef+.
   #
-  # Empty requirement and 0 release mean "this lockfile predates the field",
-  # which is not an error: a package with no otp(...) has no opinion, and a
-  # toolchain that cannot report its floor is a fact about the toolchain.
+  # An empty requirement and a release of 0 mean the lockfile predates these
+  # fields, the package has no +otp(...)+ requirement, or the toolchain could
+  # not report its OTP release. None of these is an error.
   otpRequirement : String = ""
   otpRelease : Integer = 0
   workspaceMembers : {String: String} = {}
@@ -41,6 +44,7 @@ record LockState do
   pluginApprovals : {String: String} = {}
 end
 
+# Returns the text of +tey.lock+ for +lock+, with packages sorted by name.
 let encode(lock: LockState) -> String do
   let ordered = lock.lockedDependencies.sort do |a, b|
     a.name < b.name
@@ -81,6 +85,11 @@ let dependencyListLine(dep: Dependency) -> String do
   return "${dep.name} ${dep.resolved} (${dep.commit})"
 end
 
+# Parses the text of +tey.lock+.
+#
+# It is an error when the text is not JSON, the format version is not 1, the
+# workspace or toolchain section is missing, or a package lacks the fields its
+# source needs.
 let decode(text: String) -> LockState or! String do
   let root = match JSON.parse(text) do
     Error(_) => return Error("invalid tey.lock JSON")

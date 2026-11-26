@@ -1,4 +1,4 @@
-# Validated, canonical IP addresses and CIDR networks.
+# IP addresses and CIDR networks, checked and stored in canonical form.
 #
 #   using Net.IP
 #
@@ -7,41 +7,46 @@
 #   network.contains?(address)   # => true
 module Net.IP
 
-# A canonical IPv4 or IPv6 address.
+# An IPv4 or IPv6 address.
 #
-# The stored spelling is normalized, so addresses that arrived in different
-# forms compare and print consistently. Zone identifiers such as +%en0+ are
-# properties of socket endpoints and do not belong here.
+# The text is stored in canonical form, so two spellings of the same address
+# compare equal and print the same. +Address.parse+ rejects zone
+# identifiers such as +%en0+.
 record Address do
   source : String
 end
 
-# A canonical CIDR network with host bits cleared.
+# A CIDR network, stored with its host bits cleared.
 #
-# Parsing +192.0.2.9/24+ therefore produces +192.0.2.0/24+. This makes a
-# +Network+ suitable for access-control rules and routing tables: its identity
-# is the range, not whichever host address happened to describe it.
+# Parsing +192.0.2.9/24+ gives +192.0.2.0/24+, so two spellings of the same
+# range are equal.
 record Network do
   source : String
 end
 
-# Strict parsing and canonicalization of individual IP addresses.
+# Parsing IP addresses.
 module Address do
-  # Parses IPv4 or IPv6 text and canonicalizes its spelling.
+  # Parses an IPv4 or IPv6 address. Invalid text is a +NetError+ of kind
+  # +Parse+.
+  #
   # @param text [String] an IPv4 dotted quad or IPv6 address
   # @return [Result<Address, NetError>] the address, or +Parse+
-  # @example Canonicalize an IPv6 address
-  #   Address.parse("2001:db8::42").try.string   # => "2001:db8::42"
+  #
+  # @example
+  #   Address.parse("2001:0db8::0042").try.string   # => "2001:db8::42"
   parse : String -> Result<Address, NetError>
   let parse(text) = Kex.Intrinsic.NetIP.address(text)
 end
 
-# Strict parsing and canonicalization of CIDR networks.
+# Parsing CIDR networks.
 module Network do
-  # Parses a CIDR and clears host bits.
+  # Parses an address and prefix length such as +192.0.2.0/24+, clearing the
+  # host bits. Invalid text is a +NetError+ of kind +Parse+.
+  #
   # @param text [String] an address followed by a prefix length
   # @return [Result<Network, NetError>] the network, or +Parse+
-  # @example Normalize a host address to its network
+  #
+  # @example
   #   Network.parse("192.0.2.9/24").try.string   # => "192.0.2.0/24"
   parse : String -> Result<Network, NetError>
   let parse(text) = Kex.Intrinsic.NetIP.network(text)
@@ -66,10 +71,8 @@ make Address do
   version :> Integer
   let version -> Integer = Kex.Intrinsic.NetIP.version(this)
 
-  # Returns +true+ for an address that routes back to this host.
-  #
-  # This covers the IPv4 +127.0.0.0/8+ block as well as IPv6 +::1+; it is not
-  # limited to the familiar +127.0.0.1+ spelling.
+  # Returns +true+ for a loopback address: anything in +127.0.0.0/8+, or
+  # +::1+.
   #
   # @return [Bool] whether this is a loopback address
   #
@@ -80,20 +83,20 @@ make Address do
 
   # Returns +true+ for an address reserved for private networks.
   #
-  # Use this as one signal in a network policy, not as proof that a peer is
-  # trusted: private addresses can still belong to another machine.
+  # A private address can still belong to another machine, so it does not
+  # prove that a peer is trusted.
   #
   # @return [Bool] whether this is a private-use address
   #
-  # @example Rejecting a public target in an internal-only configuration
-  #   Error("target must be private") if !target.private?
+  # @example Requiring an internal target
+  #   die("target must be a private address") if !target.private?
   private? :> Bool
   let private? -> Bool = Kex.Intrinsic.NetIP.private?(this)
 
   # Returns +true+ for the all-zero address: +0.0.0.0+ or +::+.
   #
-  # On a listening endpoint this usually means "all local interfaces". It is
-  # not a usable remote destination.
+  # On a listening endpoint it usually means all local interfaces. It cannot
+  # be used as a remote destination.
   #
   # @return [Bool] whether every address bit is zero
   #
@@ -113,7 +116,7 @@ make Address do
 end
 
 make Network do
-  # Returns canonical CIDR text, including the prefix length.
+  # Returns the canonical CIDR text, including the prefix length.
   #
   # @return [String] canonical CIDR text
   #
@@ -124,8 +127,8 @@ make Network do
 
   # Returns +true+ when +address+ falls within this network.
   #
-  # An address from the other family is simply outside the network; callers do
-  # not need to compare +version+ first.
+  # An address of the other IP version is never inside, so there is no need
+  # to compare +version+ first.
   #
   # @param address [Address] the address to test
   # @return [Bool] whether +address+ belongs to this network
@@ -145,8 +148,7 @@ make Network do
   prefix :> Integer
   let prefix -> Integer = Kex.Intrinsic.NetIP.prefix(this)
 
-  # Returns the first address in the range: the address with all host bits
-  # cleared.
+  # Returns the first address in the range, with all host bits cleared.
   #
   # @return [Address] the first address in the range
   #
@@ -155,10 +157,8 @@ make Network do
   first :> Address
   let first -> Address = Kex.Intrinsic.NetIP.first(this)
 
-  # Returns the last address in the range: the address with all host bits set.
-  #
-  # This is the IPv4 broadcast-shaped endpoint of the mathematical range; the
-  # API does not decide whether a protocol permits assigning it to a host.
+  # Returns the last address in the range, with all host bits set. For IPv4
+  # this is the broadcast address, which is usually not assignable to a host.
   #
   # @return [Address] the last address in the range
   #

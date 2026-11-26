@@ -1,14 +1,14 @@
-# What Tey has put in `${TEY_HOME}/bin`, and who owns each file there.
+# Records what Tey has installed in +${TEY_HOME}/bin+, and which package
+# owns each file there.
 #
 # Every package whose targets Tey installs gets a receipt at
-# `${TEY_HOME}/programs/<name>/receipt.json`. The receipt is the only
-# authority for ownership: a file in the bin directory that no receipt lists
-# is not Tey's to overwrite or delete. Without one, a second package declaring
-# the same target name silently replaced the first package's program, and
-# nothing could say what a file in there was or where it had come from.
+# +${TEY_HOME}/programs/<name>/receipt.json+. Ownership is decided by the
+# receipts alone: a file in the bin directory that no receipt lists is not
+# Tey's to overwrite or delete, and a second package declaring a target name
+# that another package installed is refused unless +--force+ is given.
 #
-# Keyed by PACKAGE, not by binary: one package may install several targets,
-# and reinstalling or removing it acts on all of them together.
+# Receipts are kept per package, not per program: one package can install
+# several targets, and reinstalling or removing it acts on all of them.
 module Tey.Programs
 
 using JSON
@@ -16,21 +16,23 @@ using JSON
 record Receipt do
   name : String
   version : String = ""
-  # Where the program was built from. Only "path" (a checkout on this
-  # machine) for now; Git sources add their URL, selector and commit here.
+  # Where the program was built from: +"path"+ for a checkout on this
+  # machine, +"git"+ for a repository. +sourcePath+ holds the directory or
+  # the repository URL.
   sourceKind : String = "path"
   sourcePath : String = ""
   # The content digest of the tree the program was built from (see
-  # Tey.Snapshot.contentDigest), so reinstalling an unchanged path can say
-  # so. Empty for a project's own `tey install`, which builds in place.
+  # +Tey.Snapshot.contentDigest+), so reinstalling an unchanged path can say
+  # there is nothing to do. Empty for a project's own +tey install+, which
+  # builds in place.
   sourceDigest : String = ""
-  # A Git source's pin, as `--tag`, `--branch` or `--ref` asked for it, and
-  # the commit that resolved to. Empty for a path.
+  # A Git source's pin: the selector (+tag+, +branch+ or +ref+), the name
+  # that was asked for, and the commit it resolved to. Empty for a path.
   sourceSelector : String = ""
   sourceRequested : String = ""
   sourceCommit : String = ""
-  # The targets `--target` limited the install to, so updating it installs
-  # the same ones; empty when every target was installed.
+  # The targets +--target+ limited the install to, so an update installs the
+  # same ones. Empty when every target was installed.
   selectedTargets : [String] = []
   targets : [String] = []
   kex : String = ""
@@ -38,14 +40,16 @@ record Receipt do
   installedAt : String = ""
 end
 
-# How `tey install <argument>` was asked to install a program: the workspace
-# member (`--package`), the Git pin (`--tag`/`--branch`/`--ref`, "ref" of
-# "HEAD" when none), which targets (`--target`, all when empty), whether to
-# take over others' programs (`--force`), and whether to re-resolve rather
-# than use the program's committed lock (`--fresh`).
+# The options +tey install <argument>+ was given: the workspace member
+# (+--package+), the Git pin (+--tag+, +--branch+ or +--ref+; a +ref+ of
+# +HEAD+ when none is given), the targets (+--target+; all of them when
+# empty), whether to take over names other packages own (+--force+), and
+# whether to resolve dependencies again instead of using the program's
+# committed lock (+--fresh+).
 #
-# `pinned?` says a pin was given at all — reinstalling by name keeps the
-# receipt's unless one is. `rebuild?` rebuilds even when nothing moved.
+# +pinned?+ is true when any pin was given; reinstalling by name keeps the
+# receipt's pin otherwise. +rebuild?+ forces a rebuild even when nothing has
+# changed.
 record InstallOptions do
   packageName : String = ""
   force? : Bool = false
@@ -55,13 +59,15 @@ record InstallOptions do
   targets : [String] = []
   fresh? : Bool = false
   rebuild? : Bool = false
-  # `--approve-plugins`: approve the program's plugins without asking.
+  # +--approve-plugins+: approves the program's plugins without asking.
   approvePlugins? : Bool = false
 end
 
-# Why reinstalling `receipt` by name has nothing to do, or None when it must
-# be rebuilt. A tag or an exact commit is a pin the user chose: it stays,
-# with a pointer at moving it. Pure, so the whole rule is testable.
+# Returns the message explaining why reinstalling +receipt+ by name has
+# nothing to do, or +None+ when it has to be rebuilt.
+#
+# A program pinned to a tag or an exact commit stays where the user put it,
+# and the message says how to move it. A branch, or +HEAD+, is rebuilt.
 let pinnedReason(receipt: Receipt, options: InstallOptions) -> String? do
   return None if options.rebuild? || options.pinned? || receipt.sourceKind != "git"
   let exact = receipt.sourceSelector == "ref" && receipt.sourceRequested != "HEAD"
@@ -69,14 +75,17 @@ let pinnedReason(receipt: Receipt, options: InstallOptions) -> String? do
   return Just("${receipt.name} is pinned at ${Tey.Programs.pinText(receipt)}; pass --tag, --branch or --ref to move it")
 end
 
-# What `tey install <argument>` names. `tey add` is how a dependency is added,
-# so an argument to `tey install` always means a program.
+# What the argument to +tey install+ names: a path, a Git URL or the name of
+# an installed program. It always names a program; dependencies are added
+# with +tey add+.
 type ProgramSource =
   | PathSource(String)
   | GitSource(String)
   | InstalledName(String)
 
-# What installing one target name would do to the bin directory.
+# What installing one target name would do to the bin directory: the name is
+# free, already this package's, an old Tey-built file to adopt, reserved for
+# Tey, owned by another package, or a file Tey did not install.
 type Claim =
   | Free
   | Mine
@@ -85,18 +94,18 @@ type Claim =
   | OwnedBy(String)
   | Foreign
 
-# Names that are Tey's own and never a package's to take: the `kex` shim
-# lives in this directory, and replacing it would change which compiler every
-# shell runs.
+# Returns the target names no package may take. The +kex+ shim lives in the
+# bin directory, and replacing it would change which compiler every shell
+# runs.
 let reservedNames -> [String] = ["kex"]
 
 foul directory -> String do
   return "${Tey.Toolchain.home}/programs"
 end
 
-# A path when it starts like one (`.`, `/`, `~`), a Git URL when it has a
-# scheme or is scp-like (`git@host:owner/repo`), and otherwise the name of an
-# installed program.
+# Decides what +argument+ names: a path when it starts with +.+, +/+ or +~+,
+# a Git URL when it has a scheme or looks like +git@host:owner/repo+, and
+# otherwise the name of an installed program.
 let classify(argument: String) -> ProgramSource do
   let pathLike = [".", "/", "~"].any? { |prefix| argument.startsWith?(prefix) }
   return PathSource(argument) if pathLike
@@ -105,14 +114,17 @@ let classify(argument: String) -> ProgramSource do
   return InstalledName(argument)
 end
 
-# Where a program's staged build tree ends up once it is installed.
+# Returns the directory that holds a program's build tree once it is
+# installed.
 foul buildDirectory(name: String) -> String do
   return FS.Path.join(Tey.Programs.directory, name, "build")
 end
 
-# A fresh directory to build a program in before it is installed. Beside
-# `programs/` rather than in it, so a half-built tree is never listed as a
-# program, and on the same filesystem, so publishing it is a rename.
+# Creates a new, empty directory to build a program in before it is
+# installed.
+#
+# It sits beside +programs/+, so a half-built tree is never listed as a
+# program, and on the same filesystem, so installing it is a rename.
 foul stagingDirectory -> String or! String do
   let root = FS.Path.join(Tey.Toolchain.home, "staging")
   return Error("could not create ${root}") if !FS.Directory.create(root).ok?
@@ -122,9 +134,9 @@ foul stagingDirectory -> String or! String do
   return Ok(path)
 end
 
-# Copies the tree at `root` into `destination`: what a snapshot would hold,
-# plus a committed `tey.lock` — the dependency versions the program's author
-# tested, which a snapshot leaves out.
+# Copies the tree at +root+ into +destination+: the files a snapshot would
+# hold, plus a committed +tey.lock+, which a snapshot leaves out. The lock
+# holds the dependency versions the program's author tested.
 foul stage(root: String, destination: String) -> Void or! String do
   let lock = FS.File.file?(FS.Path.join(root, "tey.lock")) then ["tey.lock"] else []
   let files = [...Tey.Snapshot.sourceFiles(root), ...lock]
@@ -146,9 +158,10 @@ foul copyInto(root: String, relative: String, destination: String) -> Void or! S
   end
 end
 
-# Replaces a program's build tree with the one it was just installed from.
-# The old tree is moved aside first and removed last, so a failure part way
-# leaves one of the two in place.
+# Replaces a program's build tree with the staged one it was just built in.
+#
+# The old tree is moved aside first and deleted last, so if a step fails,
+# one of the two trees is still in place.
 foul publishBuild(name: String, staged: String) -> Void or! String do
   let destination = Tey.Programs.buildDirectory(name)
   return Error("could not create ${FS.Path.dirname(destination)}") if !FS.Directory.create(FS.Path.dirname(destination)).ok?
@@ -209,13 +222,13 @@ let decode(text: String) -> Receipt or! String do
   })
 end
 
-# The decision for one target name, given every receipt and what is on disk.
-# Pure, so the whole rule is testable without a bin directory.
+# Decides what installing +target+ for +packageName+ would do, given every
+# receipt and whether a file of that name already exists.
 #
-# `teyBuilt?` covers the programs a project-local `tey install` put here
-# before receipts existed: they are escripts Tey itself wrote, so taking them
-# into a receipt loses nothing, where refusing would make every existing
-# installation demand `--force` on its next reinstall.
+# +teyBuilt?+ covers programs that a project's own +tey install+ put in the
+# bin directory before receipts existed. Tey wrote those itself, so they are
+# adopted into the receipt; refusing them would make every such installation
+# need +--force+ on its next reinstall.
 let claim(target: String, packageName: String, receipts: [Receipt],
           exists?: Bool, teyBuilt?: Bool) -> Claim do
   return Reserved if Tey.Programs.reservedNames.contains?(target)
@@ -234,9 +247,11 @@ let claim(target: String, packageName: String, receipts: [Receipt],
   return Foreign
 end
 
-# Why a claim stops the install, or None when it may go ahead. `--force`
-# takes a name over from another package or from an unowned file, but never
-# from Tey itself.
+# Returns the message explaining why +claim+ stops the install, or +None+
+# when it can go ahead.
+#
+# +--force+ takes a name over from another package or from a file Tey did
+# not install, but never a name reserved for Tey.
 let refusal(target: String, claim: Claim, path: String, force?: Bool) -> String? do
   match claim do
     Reserved => Just("`${target}` is reserved for Tey's own launcher; rename the target")
@@ -256,8 +271,11 @@ foul load(name: String) -> Receipt? do
   end
 end
 
-# Every receipt, by package name. An unreadable one is reported rather than
-# skipped silently: skipping it would make the files it owns look unowned.
+# Returns every receipt, sorted by package name.
+#
+# A receipt that cannot be parsed is skipped with a warning on stderr, since
+# skipping it quietly would make the files it owns look unowned. A receipt
+# file that cannot be read at all is skipped without one.
 foul all -> [Receipt] do
   let names = FS.Directory.directories(Tey.Programs.directory).or([]).sort
   return names.into do |name|
@@ -275,8 +293,11 @@ foul all -> [Receipt] do
   end
 end
 
-# Written beside the final file and renamed into place, so a reader never
-# sees half a receipt and a failed write leaves the previous one intact.
+# Writes +receipt+ to its file.
+#
+# The receipt is written to a file beside it and renamed into place, so a
+# reader never sees half a receipt and a failed write leaves the old one
+# intact.
 foul save(receipt: Receipt) -> Void or! String do
   let path = Tey.Programs.receiptPath(receipt.name)
   let staging = "${path}.new"
@@ -291,9 +312,9 @@ foul remove(name: String) -> Void or! String do
   return FS.Directory.deleteAll(path).ok? then Ok(()) else Error("could not remove ${path}")
 end
 
-# Whether `path` is an escript Tey's own target build wrote: its emulator
-# line starts Kex's escript launcher, or names `kex_main` directly as an escript
-# built before the launcher did.
+# Returns whether +path+ is an escript that Tey's target build wrote: its
+# emulator line starts Kex's escript launcher, or names +kex_main+ directly,
+# as escripts built before the launcher existed do.
 foul teyBuilt?(path: String) -> Bool do
   match Process.run("head", ["-n", "2", "--", path]) do
     Error(_) => false
@@ -307,15 +328,16 @@ foul teyBuilt?(path: String) -> Bool do
   end
 end
 
-# The line `tey list` prints for one installed program.
+# Returns the line +tey list+ prints for one installed program.
 let listLine(receipt: Receipt) -> String do
   let version = receipt.version == "" then "" else " ${receipt.version}"
   let pin = receipt.sourceKind != "git" then "" else " @ ${Tey.Programs.pinText(receipt)}"
   return "${receipt.name}${version} (${receipt.targets.join(", ")}) from ${receipt.sourcePath}${pin}"
 end
 
-# `v0.4.0`, `main (3f9c1a2)`, or a short commit — what a Git install is pinned
-# to, as `tey list` shows it.
+# Returns what a Git install is pinned to, as +tey list+ shows it: a tag
+# such as +v0.4.0+, a branch or ref with its commit such as
+# +main (3f9c1a2)+, or a short commit id when an exact commit was asked for.
 let pinText(receipt: Receipt) -> String do
   let short = receipt.sourceCommit.take(7)
   return receipt.sourceRequested if receipt.sourceSelector == "tag"

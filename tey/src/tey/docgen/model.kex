@@ -1,9 +1,8 @@
-# The canonical documentation model.
+# The records +tey docs+ extracts from source, from which the Markdown, the
+# JSON and the search index are all produced.
 #
-# Extraction produces these records; Markdown, JSON and the search index are
-# all derived from them. Field names avoid `type` (a keyword after `.`), so
-# every field is dot-accessible; JSON keys are chosen at the emission
-# boundary in Tey.Docgen.Json.
+# No field is called +type+, because +type+ after a dot is read as a keyword.
+# The JSON key names are chosen in +Tey.Docgen.Json+.
 
 module Tey.Docgen.Model do
 
@@ -102,8 +101,7 @@ module Tey.Docgen.Model do
     # The result type the source declares (annotation or inline `-> T`),
     # or "" when it declares none.
     returnType : String = ""
-    # Declared `foul`: it may touch the outside world, and only foul code
-    # may call it.
+    # Whether the function is declared +foul+.
     foul? : Bool = false
   end
 
@@ -129,16 +127,18 @@ module Tey.Docgen.Model do
     urlPath : String
     title : String
     entities : [Entity]
-    # The file's opening comment when it stands apart from the first
-    # declaration (a blank line between them): prose about the FILE, which
-    # the AST reader would otherwise glue onto whatever is declared first.
+    # The file's opening comment, when a blank line separates it from the
+    # first declaration. Without this the comment would be taken as that
+    # declaration's doc.
     intro : String = ""
   end
 
-  # One `make` block seen from the type it extends: where it is, what it
-  # adds, and which traits it declares. A type's methods are spread over
-  # many files (`make Integer` lives in number.kex, period.kex, units.kex and
-  # algebra.kex), and these rows are what put them back together.
+  # One +make+ block as seen from the type it extends: where it is, the
+  # names it adds and the traits it declares.
+  #
+  # A type's functions can be spread over many files (there is a +make
+  # Integer+ in number.kex, period.kex, units.kex and others), and these rows
+  # gather them on the type's page.
   record Extension do
     target : String
     urlPath : String
@@ -148,9 +148,10 @@ module Tey.Docgen.Model do
     names : [String]
   end
 
-  # Everything the package says about one type, across files. `homePath` is
-  # the page a reader should land on for the type — the one declaring it, or
-  # the one named after it for builtins such as Integer and String.
+  # Everything the package says about one type, across files.
+  #
+  # +homePath+ is the type's main page: the one declaring it, or for a builtin
+  # such as Integer or String the one named after it.
   record TypeFacts do
     name : String
     homePath : String
@@ -171,10 +172,10 @@ module Tey.Docgen.Model do
     implementors : [Extension]
   end
 
-  # The navigation unit: one per module in the package, pointing at the page
-  # its entities live on. The sidebar and the module index of model.json are
-  # built from these — a FILE is where source lives, a MODULE is what a
-  # reader navigates by, and the two only coincide by accident.
+  # One module of the package and the page its entities are on.
+  #
+  # The sidebar and the module index of model.json are built from these.
+  # Readers navigate by module, and a module need not match a file.
   record ModuleIndexEntry do
     qualifiedName : String
     summary : String
@@ -182,17 +183,16 @@ module Tey.Docgen.Model do
     members : [MemberEntry]
   end
 
-  # One documented member of a module, with the anchor its section renders
-  # at — the sidebar's expanded list and the JSON index both use these.
+  # One documented member of a module and the anchor of its section, for the
+  # sidebar and the JSON index.
   record MemberEntry do
     name : String
     anchor : String
   end
 
-  # One row of the cross-link index: a name a type reference elsewhere in
-  # the package may mention ("String", "FS.Path") and where it lands. The
-  # index is what makes interlinked docs possible without per-renderer
-  # guesswork: every renderer resolves names against the same list.
+  # One row of the cross-link index: a name that a type reference may
+  # mention, such as "String" or "FS.Path", and where it links to. Every
+  # renderer resolves names against this one list.
   record LinkEntry do
     name : String
     urlPath : String
@@ -200,6 +200,8 @@ module Tey.Docgen.Model do
     kind : String
   end
 
+  # Everything extracted from one package: its pages, modules, links and
+  # cross-file relations.
   record PackageModel do
     package : String
     version : String
@@ -209,13 +211,12 @@ module Tey.Docgen.Model do
     pages : [SourcePage]
     modules : [ModuleIndexEntry] = []
     links : [LinkEntry] = []
-    # The modules a `prelude.kex` in the source tree makes visible without an
-    # import. Empty for a package that has no prelude — then every module is
-    # reached the same way and the index says nothing about it.
+    # The modules a +prelude.kex+ in the source tree makes visible without
+    # +using+. Empty for a package without a prelude.
     preludeModules : [String] = []
-    # That file's own path (so its page can be recognised) and its opening
-    # comment, which is the only prose anyone has written about what the
-    # prelude IS. It declares no entities, so without this its page is blank.
+    # The prelude's path, so its page can be recognised, and its opening
+    # comment. The prelude declares nothing, so without the comment its page
+    # would be empty.
     preludeSource : String = ""
     preludeDoc : String = ""
     # Cross-file relations (Tey.Docgen.Relations): every type's extensions
@@ -224,11 +225,11 @@ module Tey.Docgen.Model do
     traits : [TraitFacts] = []
   end
 
-  # A flattened search row: one per entity (and per function inside traits,
-  # makes and modules), joining name/kind/signature to the page URL. The
-  # `types` are the type names the entity is about — the types its signature
-  # mentions — so search can answer by name AND by type; `anchor` is the
-  # section id a result deep-links to.
+  # One row of the search index, for an entity or for a function inside a
+  # trait, make or module.
+  #
+  # +types+ are the type names its signature mentions, so a search can match
+  # by type as well as by name. +anchor+ is the section a result links to.
   record SearchEntry do
     name : String
     qualifiedName : String
@@ -241,9 +242,9 @@ module Tey.Docgen.Model do
     line : Integer
   end
 
-  # One row of versions.json. The file accumulates across builds — the
-  # output directory IS the site, so each build upserts its (package, id)
-  # entry into whatever is already published there.
+  # One row of versions.json. Each build adds or replaces its own
+  # +(package, id)+ row in the file already in the output directory, so the
+  # file lists every version built there.
   record VersionEntry do
     id : String
     label : String
@@ -251,7 +252,8 @@ module Tey.Docgen.Model do
     package : String
   end
 
-  # The kind label used in indexes and JSON for each entity variant.
+  # Returns the kind label an entity has in indexes and JSON, such as
+  # +"record"+ or +"make"+.
   let kindOf(entity: Entity) -> String do
     match entity do
       TypeDecl(_) => "type"
@@ -264,7 +266,7 @@ module Tey.Docgen.Model do
     end
   end
 
-  # The primary display name of an entity (a make's is its target type).
+  # Returns an entity's display name; a make's is its target type.
   let nameOf(entity: Entity) -> String do
     match entity do
       TypeDecl(e) => e.name
@@ -301,9 +303,10 @@ module Tey.Docgen.Model do
     end
   end
 
-  # The anchor id an entity's HTML section renders at. Lives here — not in
-  # the HTML renderer — because the cross-link index and the sidebar compute
-  # the same ids, and the HTML must match whatever they resolved to.
+  # Returns the id of an entity's HTML section.
+  #
+  # It is here, not in the HTML renderer, because the cross-link index and the
+  # sidebar need the same ids.
   let anchorOf(entity: Entity) -> String do
     match entity do
       MakeDecl(e) => return "make-${ownerSlugOf(e.target)}"
@@ -311,9 +314,8 @@ module Tey.Docgen.Model do
     end
   end
 
-  # A make's anchor is keyed by its full target spelling (type params
-  # included), a module's by its qualified name — the section ids are
-  # derived from the same texts.
+  # Returns the text an entity's anchor is made from: a make's full target,
+  # type parameters included, or otherwise the qualified name.
   let anchorNameOf(entity: Entity) -> String do
     match entity do
       MakeDecl(e) => e.target
@@ -321,17 +323,17 @@ module Tey.Docgen.Model do
     end
   end
 
-  # The anchor of a function documented inside a trait or make section:
-  # scoped by its owner, because `count` is a member of both `[X]` and
-  # `String`, and one page can hold several owners.
+  # Returns the anchor of a function documented inside a trait or make
+  # section. It includes the owner, because one page can hold several owners
+  # with a +count+, such as +[X]+ and +String+.
   let memberAnchorOf(owner: String, name: String) -> String do
     return "${ownerSlugOf(owner)}-${slugOf(name)}"
   end
 
-  # An owner spelled as a type: `[X]` -> "list", `[Number]` -> "list-number",
-  # `FileHandle<CanRead, W>` -> "filehandle-canread". Type variables (a lone
-  # capital, optionally numbered) say nothing about WHICH methods these are,
-  # so they are dropped rather than baked into every anchor.
+  # Returns the slug of an owner type: +[X]+ gives "list", +[Number]+ gives
+  # "list-number" and +FileHandle<CanRead, W>+ gives "filehandle-canread".
+  # Type variables (a capital letter, optionally followed by a digit) are
+  # dropped.
   let ownerSlugOf(owner: String) -> String do
     let spelled = owner.replace("[", " List ").replace("{", " Map ")
     let words = Tey.Docgen.Model.wordsOf(spelled).reject { |w| typeVariable?(w) }
@@ -345,7 +347,7 @@ module Tey.Docgen.Model do
     return head.upperCase == head && head.lowerCase != head && word.drop(1).all? { |c| c.digit? }
   end
 
-  # Identifier-ish runs of a type text: letters, digits, `_`, `?`, `!`.
+  # Returns the runs of letters, digits, +_+, +?+ and +!+ in a type's text.
   let wordsOf(text: String) -> [String] do
     return text.split(" ").into { |part| wordSplit(part, "", []) }.reject { |w| w.empty? }
   end
@@ -359,17 +361,16 @@ module Tey.Docgen.Model do
     return wordSplit(rest.drop(1), "", out + [word])
   end
 
-  # An id-safe spelling of a name: lower case, every run of punctuation one
-  # dash. `?` and `!` survive — they are part of Kex names (`empty?`) and
-  # legal in a fragment.
+  # Returns a name spelled for an HTML id: lower case, with each run of
+  # punctuation turned into one dash. +?+ and +!+ are kept, as in +empty?+.
   let slugOf(name: String) -> String do
     let words = wordsOf(name.replace(".", " ").replace("/", " "))
     return operatorSlug(name) if words.empty?
     return words.map { |w| w.lowerCase }.join("-")
   end
 
-  # An operator method has no letters to slug: `+` is "op-plus", `<=>` is
-  # "op-lt-eq-gt" — distinct, stable and readable in a URL.
+  # Returns the slug of an operator, which has no letters of its own: +<=>+
+  # gives "op-lt-eq-gt" and a plus sign "op-plus".
   let operatorSlug(name: String) -> String do
     let names = name.chars.map { |c| operatorCharName(c) }.reject { |n| n.empty? }
     return "op-" + names.join("-")
@@ -397,9 +398,9 @@ module Tey.Docgen.Model do
     end
   end
 
-  # "[X]" -> "List", "{K: V}" -> "Map", "FileHandle<R, W>" -> "FileHandle",
-  # "Map<K, V>" -> "Map": the type a make block extends, whatever
-  # specialisation it spells.
+  # Returns the type a make block extends, without its type arguments:
+  # "[X]" gives "List", "{K: V}" and "Map<K, V>" give "Map", and
+  # "FileHandle<R, W>" gives "FileHandle".
   let baseTypeOf(target: String) -> String do
     let t = target.trim
     return "List" if t.startsWith?("[")

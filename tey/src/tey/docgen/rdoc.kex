@@ -1,6 +1,7 @@
-# RDoc-style doc-comment text → structured documentation (typed).
+# Parses the text of an RDoc-style doc comment into a
+# +Tey.Docgen.Model.Doc+ record.
 #
-# A doc comment is free prose followed by directive paragraphs:
+# A doc comment is prose followed by directive lines:
 #
 #   # Sums all elements. Returns +0+ for an empty list.
 #   #
@@ -9,8 +10,8 @@
 #   # @example
 #   #   [1, 2].sum   # => 3
 #
-# Inline `+code+` pairs are rewritten to `` `code` ``. The result is a
-# Tey.Docgen.Model.Doc record.
+# In prose, a word or phrase between two plus signs becomes Markdown inline
+# code.
 
 module Tey.Docgen.Rdoc do
   using Tey.Docgen.Model, only: [Doc, Param, Return, Example, emptyDoc]
@@ -20,6 +21,7 @@ module Tey.Docgen.Rdoc do
     rest : String
   end
 
+  # Parses a doc comment's text, or returns +None+ for empty text.
   let parseDoc(text: String) -> Doc? do
     if text.empty?
       return None
@@ -28,6 +30,7 @@ module Tey.Docgen.Rdoc do
     return classifyBlocks(rewriteProseBlocks(blocks), "", [], None, [], None)
   end
 
+  # Parses a doc comment's text, giving an empty +Doc+ for empty text.
   let parseOrEmpty(text: String) -> Doc do
     match parseDoc(text) do
       Just(doc) => doc
@@ -35,13 +38,13 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  # `+code+` is prose markup, so it is rewritten per prose block — after the
-  # split, not before it. Rewriting the whole comment at once paired a `+`
-  # operator inside an indented code sample (say `1 + 1`) with the next prose
-  # pair (`+describe+`), turning the operator into a stray backtick and eating
-  # the markup. Verbatim blocks and `@example` code are Kex source and are
-  # left alone; `@param`/`@return` descriptions are prose and still rewrite.
-  # Pairing never crosses a block: each block is rewritten on its own.
+  # Rewrites plus-sign code markup in each prose block separately, leaving
+  # verbatim blocks and +@example+ code alone. +@param+ and +@return+
+  # descriptions are prose and are rewritten.
+  #
+  # A pair never spans two blocks. Rewriting the whole comment at once would
+  # pair the plus sign of an addition in a code sample with the next markup
+  # in the prose.
   let rewriteProseBlocks(blocks: [[String]]) -> [[String]] do
     return blocks.map { |block| rewriteProseBlock(block) }
   end
@@ -78,10 +81,10 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  # A `+...+` pair is markup only when it reads as one: content with no space
-  # against either delimiter (so `1 + 1` stays an addition), no backtick
-  # inside (so converted spans never nest), and a non-identifier character on
-  # both sides (so `a+b` stays put even if it ever reaches here).
+  # Returns +true+ when a pair of plus signs around +inner+ is markup. There
+  # must be no space just inside either sign, so an addition with spaces
+  # stays as written; no backtick inside, so spans never nest; and no letter
+  # or digit just outside, so an addition without spaces stays too.
   let plusPair?(head: String, inner: String, tail: String) -> Bool do
     if inner.empty?
       return false
@@ -117,12 +120,10 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  # Splits lines into paragraphs (blocks). Prose groups until a blank line;
-  # directives are LINE-based, so each `@param`/`@return`/`@example` line
-  # begins its own paragraph — consecutive `@param a` / `@param b` lines must
-  # not merge into one block, or only the first would be parsed. An
-  # `@example`'s indented code lines follow it and stay in its block (they
-  # do not open with `@`).
+  # Splits lines into blocks. Prose runs until a blank line. Every line that
+  # starts with +@+ opens a block of its own, so consecutive +@param+ lines
+  # stay separate, and the indented lines after a directive (an example's
+  # code) belong to it.
   let splitParagraphs(lines: [String], current: [String], accum: [[String]]) -> [[String]] do
     if lines.empty?
       return accum if current.empty?
@@ -165,17 +166,15 @@ module Tey.Docgen.Rdoc do
     return !line.trim.empty? && indentWidth(line) >= 2
   end
 
-  # RDoc's verbatim marker is indentation: a prose block whose every line is
-  # indented is code — or a hand-laid-out table — that the author positioned
-  # deliberately. Reflowing it into a paragraph loses both the line breaks and
-  # the highlighting, so it is carried through the summary as a fenced block
-  # instead, which both renderers turn back into a highlighted `<pre>`.
-
-  # Leading-space count of a line.
+  # Returns the number of leading spaces in a line.
   let indentWidth(s: String) -> Integer do
     return s.chars.takeWhile { |c| c == ' ' }.count
   end
 
+  # Returns +true+ for a verbatim block: one whose every non-blank line is
+  # indented by at least two spaces, as RDoc marks code or a hand-laid-out
+  # table. Such a block keeps its line breaks and is carried into the
+  # summary as a fenced code block.
   let verbatim?(lines: [String]) -> Bool do
     let content = lines.reject { |l| l.trim.empty? }
     if content.empty?
@@ -184,8 +183,8 @@ module Tey.Docgen.Rdoc do
     return content.all? { |l| indentWidth(l) >= 2 }
   end
 
-  # Strips the common indentation shared by every non-blank line, so a block
-  # written at two spaces (or nested deeper) renders flush left.
+  # Removes the indentation shared by every non-blank line, so a block
+  # renders flush left.
   let dedent(lines: [String]) -> [String] do
     let content = lines.reject { |l| l.trim.empty? }
     if content.empty?
@@ -202,8 +201,8 @@ module Tey.Docgen.Rdoc do
     return (["```kex"] + dedent(lines) + ["```"]).join("\n")
   end
 
-  # A blank line inside a verbatim block ends a paragraph but not the block,
-  # so adjacent verbatim blocks are re-joined with the blank line between them.
+  # Joins adjacent verbatim blocks back together with a blank line between
+  # them, since a blank line inside a code sample does not end it.
   let mergeVerbatim(blocks: [[String]], accum: [[String]]) -> [[String]] do
     if blocks.empty?
       return accum
@@ -270,7 +269,7 @@ module Tey.Docgen.Rdoc do
     return ([first] + continuation).join(" ").trim
   end
 
-  # @param name [Type] description
+  # Reads a +@param name [Type] description+ directive.
   let parseParam(lines: [String]) -> Param do
     let body = directiveBody(lines, 7)
     match body.indexOf(' ') do
@@ -289,7 +288,7 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  # Reads a `@return [Type] description` directive.
+  # Reads a +@return [Type] description+ directive.
   let parseReturn(lines: [String]) -> Return do
     let body = directiveBody(lines, 8)
     match parseBracketed(body) do
@@ -304,8 +303,9 @@ module Tey.Docgen.Rdoc do
     return Example { caption: caption, code: code }
   end
 
-  # "[...]" prefix → Bracketed. None when the text does not open with a
-  # bracketed group.
+  # Splits text that opens with a bracketed group, such as +[Integer] the
+  # count+, into the group's content and the rest. Returns +None+ when the
+  # text does not open with one.
   let parseBracketed(s: String) -> Bracketed? do
     if s.empty?
       return None

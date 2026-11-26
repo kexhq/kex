@@ -2,6 +2,8 @@ module Tey.Cache
 
 using Tey.Git, only: [execute]
 
+# Returns the cache directory: +TEY_CACHE+, or +~/.cache/tey+, or
+# +.tey-cache+ when +HOME+ is not set.
 foul root -> String do
   match ENV.get("TEY_CACHE") do
     Just(path) => path
@@ -12,8 +14,11 @@ foul root -> String do
   end
 end
 
-# Include the source URL in the cache identity: two packages with the same
-# display name must never share a checkout.
+# Returns where a dependency's package lives in the cache.
+#
+# A Git checkout is stored under a hash of its URL and then its commit, so two
+# packages with the same name from different sources never share one. A
+# +path+ dependency's location comes from +Tey.Snapshot+.
 foul packagePath(dep: Tey.Lockfile.Dependency) -> String do
   return Tey.Snapshot.cachedPath(dep) if dep.source == "path"
   let checkout = Tey.Cache.repositoryPath(dep)
@@ -25,6 +30,10 @@ foul repositoryPath(dep: Tey.Lockfile.Dependency) -> String do
   return "${sourceRoot(dep)}/${Tey.Lockfile.dependencyCommit(dep)}"
 end
 
+# Makes sure a dependency is in the cache, cloning it at its locked commit if
+# needed, and returns its package path.
+#
+# A workspace package is an error, since it is never cached.
 foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   return Tey.Snapshot.verify(dep) if dep.source == "path"
   return Error("workspace package `${dep.name}` is not fetched into the cache") if dep.source == "workspace"
@@ -81,6 +90,11 @@ foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   end
 end
 
+# Checks that a cached dependency matches the SHA-256 in the lockfile, and
+# returns its package path.
+#
+# It is an error when the dependency is not cached, or when +git archive+ of
+# its commit hashes to something else.
 foul verify(dep: Tey.Lockfile.Dependency) -> String or! String do
   return Tey.Snapshot.verify(dep) if dep.source == "path"
   return Error("workspace package `${dep.name}` is not verified through the cache") if dep.source == "workspace"

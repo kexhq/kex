@@ -1,6 +1,6 @@
 # JSON parsing and serialization.
 #
-# Opt-in: nothing here is in scope until `using JSON`.
+# Nothing here is in scope until +using JSON+.
 #
 #   using JSON
 #
@@ -11,22 +11,19 @@
 #     end
 #   end
 #
-# Parsed JSON arrives as ordinary Kex values: an object becomes a +Map+ with
-# string keys, an array becomes a +List+, +null+ becomes +None+, and numbers
-# become +Integer+ or +Float+ as written. Going the other way, +stringify+
-# accepts those same values and always emits strict JSON.
+# Parsing gives plain Kex values: an object becomes a +Map+ with string keys,
+# an array a +List+, +null+ becomes +None+, and a number an +Integer+ or a
+# +Float+ as written. +stringify+ turns the same values back into strict
+# JSON. Comments are accepted only when asked for.
 #
 #   JSON.parse("{\"a\": 1}")           # => Ok({ "a": 1 })
 #   JSON.stringify({ name: "Ada" })    # => "{\"name\":\"Ada\"}"
-#
-# Comments are accepted only when requested. Stringification always emits
-# strict JSON.
 using Parsing
 
 module JSON do
 
-# Why a document could not be parsed. Every variant carries the position in
-# the input where the parser stopped, so a caller can point at the problem.
+# Why a document could not be parsed. Every variant except +UnknownOption+
+# carries the character position where the parser stopped.
 #
 #   JSON.parse("[1, 2")    # => Error(UnexpectedEnd(5))
 #   JSON.parse("// c\n1")  # => Error(UnexpectedCharacter("/", 0))
@@ -41,11 +38,11 @@ type JSONError
   | TrailingInput(Integer)
   | UnknownOption(Atom)
 
-# Parses a JSON document, strictly.
+# Parses a strict JSON document.
 #
-# The whole text must be one JSON value with nothing after it: trailing input
-# is +TrailingInput+, not a silently ignored tail. Objects come back as maps
-# with string keys, arrays as lists, +null+ as +None+.
+# The text must be one JSON value; anything after it is a +TrailingInput+
+# error. Objects come back as maps with string keys, arrays as lists, and
+# +null+ as +None+.
 #
 # @param text [String] the JSON document
 # @return [Result<Any, JSONError>] the parsed value, or why it failed
@@ -65,10 +62,9 @@ let parse(text: String) -> Result<Any, JSONError> = parseWithOptions(text, {})
 
 # Parses a JSON document with parsing options.
 #
-# The one option today is +allowComments+, which accepts +//+ and +/* */+
-# comments: the JSONC dialect config files often use. It is off by default,
-# so strict JSON stays strict unless you ask otherwise. An unrecognised option
-# is +UnknownOption+, not a silent no-op.
+# The only option is +allowComments+, which accepts +//+ and +/* */+ comments
+# (the JSONC dialect some config files use). An unknown option is an
+# +UnknownOption+ error.
 #
 # @param text [String] the JSON document
 # @param options [{Atom: Bool}] parsing options, e.g. +{ allowComments: true }+
@@ -83,8 +79,9 @@ let parse(text: String) -> Result<Any, JSONError> = parseWithOptions(text, {})
 parse : String -> {Atom: Bool} -> Result<Any, JSONError>
 let parse(text: String, options: {Atom: Bool}) -> Result<Any, JSONError> = parseWithOptions(text, options)
 
-# The fields of a parsed object, or none for any other value. +parse+ answers
-# +Any+, which has no fields to read until it is narrowed: this is that step.
+# Returns the fields of a parsed object, or +{}+ for any other value.
+#
+# +parse+ returns +Any+; use this to read it as an object.
 #
 # @param value [Any] a parsed value
 # @return [{String: Any}] its fields, or +{}+ when it is no object
@@ -97,7 +94,7 @@ let fields(value: Any) -> {String: Any} = match value do
   _ => {}
 end
 
-# The elements of a parsed array, or none for any other value.
+# Returns the elements of a parsed array, or +[]+ for any other value.
 #
 # @param value [Any] a parsed value
 # @return [[Any]] its elements, or +[]+ when it is no array
@@ -146,24 +143,22 @@ end
 
 # Renders a Kex value as strict JSON text.
 #
-# Maps become objects, lists become arrays, +None+ becomes +null+, and strings
-# are escaped. A map written with atom keys (the usual Kex spelling) renders
-# with those names as strings, so +{ name: "Ada" }+ becomes +{"name":"Ada"}+.
-# Object keys come out in canonical key order.
+# Maps become objects, lists arrays, +None+ +null+, and strings are escaped.
+# Atom keys become strings, so +{ name: "Ada" }+ becomes +{"name":"Ada"}+.
+# Object keys come out in the map's key order.
 #
-# Records become objects of their fields, in declaration order; tuples become
-# arrays; atoms, characters and constructors without a payload (+Monday+)
-# become strings. A constructor that carries a payload, such as +Ok(1)+, has no
-# JSON shape of its own and renders as +null+ (+Just(x)+ is the exception: it
-# is +x+), as does anything else the encoder does not recognise, so this never
-# raises.
+# Records become objects with their fields in declaration order, tuples
+# become arrays, and atoms, characters and constructors without a payload
+# (+Monday+) become strings. +Just(x)+ renders as +x+. Any other constructor
+# with a payload, such as +Ok(1)+, renders as +null+, as does anything else
+# with no JSON form, so +stringify+ never fails.
 #
 # @param value [Any] the value to render
 # @return [String] the JSON text
 #
 # @example
 #   JSON.stringify({ name: "Ada", n: 1, ok: true })
-#   # => '{"n":1,"name":"Ada","ok":true}'
+#   # => "{\"n\":1,\"name\":\"Ada\",\"ok\":true}"
 #   JSON.stringify([1, 2, 3])
 #   # => "[1,2,3]"
 #
