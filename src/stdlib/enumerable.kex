@@ -1,20 +1,19 @@
-# Traversal operations that every foldable collection gets for free.
+# Traversals that every collection with a +reduce+ gets.
 #
-# A type becomes +Foldable+ by implementing one function, +reduce+; the rest:
-# +each+, +all?+, +any?+, +find+, +count+: are derived from it. +List+,
-# +String+, +Map+, +Range+ and both flavours of +Set+ all implement it, so
-# these functions read the same whatever you point them at.
+# A type becomes +Foldable+ by implementing +reduce+; +each+, +all?+,
+# +any?+, +find+, +count+ and the rest are built on it. +List+, +String+,
+# +Map+, +Range+, +Set+ and +UnorderedSet+ implement it.
 #
-#   [1, 2, 3].all? { |n| n > 0 }        # => true
-#   "hello".any?(~digit?)               # => false
+#   [1, 2, 3].all? { |n| n > 0 }            # => true
+#   "hello".any?(~digit?)                   # => false
 #   { a: 1, b: 2 }.count { |k, v| v > 1 }   # => 1
 #
-# Blocks are applied via Kex.Intrinsic.Fun.applyItem, which auto-splats a pair
-# item into a two-argument block. That is what lets a +Map+ traversal be
-# written +{ |key, value| ... }+ even though the fold hands over one tuple.
+# When an item is a pair, as a +Map+ entry is, a block with two parameters
+# receives its two halves, so a map traversal can be written
+# +{ |key, value| ... }+.
 trait Foldable<T> do
-  # Folds the collection from the left. The one operation a +Foldable+ type
-  # must define; everything else here is written in terms of it.
+  # Folds the collection from the left. Every +Foldable+ type must define it;
+  # the other functions here are built on it.
   #
   # @param acc [A] the initial accumulator
   # @param f [A -> T -> A] combines the accumulator with each item
@@ -26,8 +25,7 @@ trait Foldable<T> do
 
   # Calls +f+ with each item, for its side effects.
   #
-  # The loop of last resort, when what you want is a new collection rather
-  # than an effect, +map+ or +filter+ says so more clearly.
+  # To build a new collection, use +map+ or +filter+.
   #
   # @param f [T -> Void] called once per item
   # @return [Void]
@@ -36,7 +34,7 @@ trait Foldable<T> do
   #   ["ada", "grace"].each { |name| IO.printLine(name) }
   #
   # @example Over a map, the block takes key and value
-  #   { host: "localhost", port: 8080 }.each do |key, value|
+  #   { host: "localhost", port: "8080" }.each do |key, value|
   #     IO.printLine("${key} = ${value}")
   #   end
   let each(f) do
@@ -59,8 +57,8 @@ trait Foldable<T> do
 
   # Calls +f+ with each item and its 0-based position, for its side effects.
   #
-  # The index is the LAST block parameter, so a +Map+ entry can be taken
-  # either whole (+|entry, i|+) or spread (+|k, v, i|+).
+  # The index is the last block parameter, so a +Map+ entry can be taken
+  # whole (+|entry, i|+) or split (+|k, v, i|+).
   #
   # @param f [T -> Integer -> Void] called with each item and its index
   # @return [Void]
@@ -80,8 +78,8 @@ trait Foldable<T> do
     return ()
   end
 
-  # Returns +true+ when every item satisfies +pred+. An empty collection
-  # answers +true+.
+  # Returns +true+ when every item satisfies +pred+, and +true+ for an empty
+  # collection.
   #
   # @param pred [T -> Bool] the test applied to each item
   # @return [Bool] +true+ when every item matches
@@ -97,8 +95,8 @@ trait Foldable<T> do
     acc && Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
-  # Returns +true+ when at least one item satisfies +pred+. An empty
-  # collection answers +false+.
+  # Returns +true+ when at least one item satisfies +pred+, and +false+ for an
+  # empty collection.
   #
   # @param pred [T -> Bool] the test applied to each item
   # @return [Bool] +true+ when any item matches
@@ -113,8 +111,8 @@ trait Foldable<T> do
     acc || Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
-  # Returns +true+ when no item satisfies +pred+: the opposite of +any?+. An
-  # empty collection answers +true+.
+  # Returns +true+ when no item satisfies +pred+, the opposite of +any?+. An
+  # empty collection gives +true+.
   #
   # @param pred [T -> Bool] the test applied to each item
   # @return [Bool] +true+ when nothing matches
@@ -167,20 +165,20 @@ trait Foldable<T> do
   end
 end
 
-# Collection-producing operations that every foldable collection gets for
-# free.
+# Functions that build a new collection, for every collection with a
+# +reduce+.
 #
-# Like +Foldable+, a type joins by implementing +reduce+ alone. The defaults
-# here answer with a list, because the block may return anything at all; a
-# type that can do better overrides them: +Map.filter+ gives back a map,
-# +Set.map+ gives back a set, +String.filter+ gives back a string.
+# As with +Foldable+, a type only has to implement +reduce+. The functions
+# here return lists, since the block may return anything. Some types
+# override them to keep their own shape: +Map.filter+ returns a map,
+# +Set.map+ a set, and +String.filter+ a string.
 #
 #   [1, 2, 3].map { |n| n * 2 }              # => [2, 4, 6]
 #   "a1b2".filter(~digit?)                   # => "12"
-#   { a: 1, b: 2 }.filter { |k, v| v > 1 }   # => { :b: 2 }
+#   { a: 1, b: 2 }.filter { |k, v| v > 1 }   # => { b: 2 }
 trait Enumerable<T> do
-  # Folds the collection from the left. The one operation an +Enumerable+ type
-  # must define.
+  # Folds the collection from the left. Every +Enumerable+ type must define
+  # it.
   #
   # @param acc [A] the initial accumulator
   # @param f [A -> T -> A] combines the accumulator with each item
@@ -190,10 +188,7 @@ trait Enumerable<T> do
   #   [1, 2, 3].reduce(1) { |product, n| product * n }   # => 6
   reduce :> A -> (A -> T -> A) -> A
 
-  # Applies +f+ to each item and collects the results into a list.
-  #
-  # The single most useful function here: it describes what each item becomes,
-  # and leaves the walking of the collection implied.
+  # Applies +f+ to each item and returns the results as a list.
   #
   # @param f [T -> B] applied to each item
   # @return [[B]] the results, in order
@@ -211,10 +206,10 @@ trait Enumerable<T> do
     return acc.reverse
   end
 
-  # Applies +f+ to each item and its 0-based position, and collects the
-  # results into a list.
+  # Applies +f+ to each item and its 0-based position, and returns the
+  # results as a list.
   #
-  # The index is the LAST block parameter: see +eachIndexed+.
+  # The index is the last block parameter, as in +eachIndexed+.
   #
   # @param f [T -> Integer -> B] applied to each item and its index
   # @return [[B]] the results, in order
@@ -235,7 +230,7 @@ trait Enumerable<T> do
     end
   end
 
-  # Returns the items for which +pred+ answers +true+.
+  # Returns the items for which +pred+ returns +true+.
   #
   # @param pred [T -> Bool] the test applied to each item
   # @return [[T]] the matching items, in order
@@ -252,11 +247,11 @@ trait Enumerable<T> do
     return acc.reverse
   end
 
-  # Applies +f+ to each item, expecting a list back, and concatenates the
-  # results into one flat list.
+  # Applies +f+, which returns a list, to each item and concatenates the
+  # results.
   #
-  # Use it when each item expands into zero or more results: +map+ would give
-  # you a list of lists.
+  # Use it when each item expands into zero or more results; +map+ would give
+  # a list of lists.
   #
   # @param f [T -> [B]] applied to each item, returning a list
   # @return [[B]] all the results, concatenated
@@ -271,12 +266,12 @@ trait Enumerable<T> do
     acc + Kex.Intrinsic.Fun.applyItem(f, item)
   end
 
-  # Applies +f+ to each item, expecting an +Optional+ back, and returns the
-  # values that were present: unwrapped.
+  # Applies +f+, which returns an +Optional+, to each item and returns the
+  # present values, unwrapped.
   #
-  # This is filter and map fused into one pass, which is what you want
-  # whenever the test and the transformation are the same operation. Parsing
-  # is the classic case: an item either yields a value or it does not.
+  # It filters and maps in one pass. Use it when the test and the
+  # transformation are the same step, as in parsing, where each item either
+  # gives a value or does not.
   #
   # @param f [T -> B?] applied to each item, returning an optional
   # @return [[B]] the present values, unwrapped, in order
@@ -286,11 +281,11 @@ trait Enumerable<T> do
   #
   # @example Looking several keys up at once, skipping the missing ones
   #   keys.collect { |k| config.get(k) }
-  # Typed in place: its body applies `f` through an intrinsic, so nothing
-  # could be inferred from it, and every `xs.collect { ... }` was `Any` to the
-  # checker and to completion (`make fuzz-lsp`). (A `name :>` line in a trait
-  # declares a required function instead.)
   let collect(f: T -> B?) -> [B] do
+    # Typed in place: its body applies `f` through an intrinsic, so nothing
+    # could be inferred from it, and every `xs.collect { ... }` was `Any` to the
+    # checker and to completion (`make fuzz-lsp`). (A `name :>` line in a trait
+    # declares a required function instead.)
     let acc = this.reduce([]) do |a, item|
       match Kex.Intrinsic.Fun.applyItem(f, item) do
         Just(y) => [y | a]

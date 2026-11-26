@@ -1,0 +1,21 @@
+"a\"b"
+"line\nnext\ttab \\ end"
+"\${not} $ a hole"
+["say \"hi\""]
+Error("unknown field \"mail\" for User")
+'\''
+'\n'
+{}
+[{}]
+:"two words"
+:app@host
+:"say\""
+:plain
+Point { y: 2, x: 1, label: "p" }
+Point { y: 2, x: 1, label: q }
+Type { name: "Integer", args: [], pure?: true }
+Ok(())
+["x", 1] : [String | Integer]
+[1, "x", 2, :a] : [Integer | String | Atom]
+[Just(1), None] : [Optional<Integer>]
+[[1], ["a"]] : [[Integer] | [String]]

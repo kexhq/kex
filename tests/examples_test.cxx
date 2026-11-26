@@ -270,7 +270,7 @@ int main() {
         it("runs and produces output", []() {
             auto output = runFile("examples/vectors_advanced.kex");
             assertTrue(output.find("Static Constructors") != std::string::npos);
-            assertTrue(output.find("Instance Methods") != std::string::npos);
+            assertTrue(output.find("Receiver Functions") != std::string::npos);
             assertTrue(output.find("Interpolation") != std::string::npos);
         });
     });

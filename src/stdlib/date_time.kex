@@ -1,28 +1,24 @@
-# Instants: a calendar date, a time of day, and a fixed offset from UTC.
-# Built from date.kex's +Date+ and time.kex's +Time+.
-
 # An instant: a calendar date, a time of day, and a fixed offset from UTC.
 #
 #   let m = DateTime.parse("2026-07-30T14:03:00+02:00").try
 #   m.iso        # => "2026-07-30T14:03:00+02:00"
 #   m.utc.iso    # => "2026-07-30T12:03:00Z"
 #
-# Two +DateTime+ values that name the same instant order +Equal+ under
-# +compareTo+ whatever offsets they are written at: ordering goes through
-# +epochSeconds+. +==+ is structural, so the same instant written at two
-# offsets is not +==+; compare +epochSeconds+ (or +utc+) for that.
+# +compareTo+, +before?+ and +after?+ compare instants, so 12:00Z and
+# 14:00+02:00 compare +Equal+. +==+ compares the fields, so those two are not
+# +==+; compare their +epochSeconds+ or +utc+ forms instead.
 record DateTime do
-  # The calendar date, as read at this offset.
+  # The calendar date at this offset.
   date : Date
 
-  # The time of day, as read at this offset.
+  # The time of day at this offset.
   time : Time
 
-  # The fixed offset from UTC this value is rendered at.
+  # The offset from UTC.
   offset : Duration
 end
 
-# Building instants, and asking what time it is now.
+# Building instants and reading the current time.
 module DateTime do
   # Combines a date, a time of day and a UTC offset into an instant.
   #
@@ -41,27 +37,28 @@ module DateTime do
   #   DateTime.of(date, time, Duration.utcOffset(2, 0))
   let of(date: Date, time: Time, offset: Duration) -> DateTime = DateTime { date: date, time: time, offset: offset }
 
-  # The instant a count of seconds since the Unix epoch names, rendered at UTC
-  # or at the offset you give.
+  # Returns the instant +count+ seconds after the Unix epoch, at UTC.
   #
   # @param count [Integer] seconds since the Unix epoch
-  # @param offset [Duration] the offset to render at; omitted for UTC
   # @return [DateTime] the instant
   #
   # @example
   #   DateTime.fromEpochSeconds(0).iso   # => "1970-01-01T00:00:00Z"
-  #
-  # @example Rendered at a local offset
-  #   DateTime.fromEpochSeconds(0, Duration.utcOffset(2, 0)).iso
-  #   # => "1970-01-01T02:00:00+02:00"
-  #
-  # Declared before the two-argument form: the interpreter resolves an
-  # overloaded module function to its LAST definition regardless of arity, so
-  # a delegating overload has to come first or it recurses into itself.
   let fromEpochSeconds(count: Integer) -> DateTime = DateTime.fromEpochSeconds(count, Duration.zero())
 
-  # The civil rendering of an instant, at a given offset.
+  # Returns the instant +count+ seconds after the Unix epoch, at +offset+.
+  #
+  # @param count [Integer] seconds since the Unix epoch
+  # @param offset [Duration] the offset from UTC
+  # @return [DateTime] the instant
+  #
+  # @example
+  #   DateTime.fromEpochSeconds(0, Duration.utcOffset(2, 0)).iso
+  #   # => "1970-01-01T02:00:00+02:00"
   let fromEpochSeconds(count: Integer, offset: Duration) -> DateTime do
+    # Declared after the one-argument form: the interpreter resolves an
+    # overloaded module function to its LAST definition regardless of arity,
+    # so the delegating overload has to come first or it recurses into itself.
     let local = count + offset.wholeSeconds
     let day = local.div(86400)
     return DateTime {
@@ -73,8 +70,8 @@ module DateTime do
 
   # Parses an ISO 8601 instant.
   #
-  # Accepts +2026-07-30T14:03:00+02:00+, the same with +Z+, or a bare civil
-  # datetime with no zone at all, which is read as UTC.
+  # Accepts +2026-07-30T14:03:00+02:00+, the same with +Z+, or a date and
+  # time with no offset, which is read as UTC.
   #
   # @param text [String] the text to parse
   # @return [Result<DateTime, TimeError>] the instant, or why it could not be read
@@ -104,11 +101,11 @@ module DateTime do
     return Ok(DateTime { date: date, time: time, offset: offset })
   end
 
-  # The current instant, in this machine's zone as it stands right now.
+  # Returns the current instant at this machine's current UTC offset.
   #
-  # The offset is the one in effect at this instant, so it is right today.
-  # Named IANA zones are not modeled, so it cannot say what the offset
-  # WILL be for some future local time.
+  # The offset is fixed. Kex does not model named time zones, so adding
+  # months to the result keeps today's offset even across a daylight-saving
+  # change.
   #
   # @return [DateTime] the current instant
   #
@@ -118,10 +115,8 @@ module DateTime do
     return Time.Clock.now()
   end
 
-  # The current instant, at UTC.
-  #
-  # The form to prefer when the value is stored, compared or transmitted:
-  # there is no zone to disagree about.
+  # Returns the current instant at UTC. Use it for values that are stored or
+  # sent elsewhere.
   #
   # @return [DateTime] the current instant, at UTC
   #
@@ -133,10 +128,8 @@ module DateTime do
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, Duration.zero()), nanos - epochSeconds * 1000000000)
   end
 
-  # Nanoseconds since the Unix epoch, straight from the clock.
-  #
-  # The right reading for measuring a short interval: a plain integer, with
-  # no zone to disagree about.
+  # Returns the clock's reading in nanoseconds since the Unix epoch. It is
+  # the simplest way to time a short piece of work.
   #
   # @return [Integer] nanoseconds since the Unix epoch
   #
@@ -151,14 +144,14 @@ module DateTime do
 end
 
 make DateTime, implement: Inspectable, Showable do
-  # Renders the instant structurally, for debugging output.
+  # Writes the instant as a record, for debugging output.
   #
   # @param colors [Bool] whether to include ANSI color escapes
   # @return [String] the rendered instant
   let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
 
-  # Renders the instant in ISO form, so interpolation and +IO.printLine+ show
-  # +2026-07-30T14:03:00+02:00+.
+  # Writes the instant in ISO form, which is what interpolation and
+  # +IO.printLine+ show.
   #
   # @return [String] the ISO 8601 instant
   #
@@ -166,11 +159,8 @@ make DateTime, implement: Inspectable, Showable do
   #   "logged at ${DateTime.utcNow()}"   # => "logged at 2026-07-30T12:03:00Z"
   let showValue -> String = this.iso
 
-  # Seconds since the Unix epoch.
-  #
-  # This is the value to compare and subtract: it identifies the instant,
-  # independent of the offset rendering it, so 12:00Z and 14:00+02:00 have the
-  # same one.
+  # Returns the whole seconds since the Unix epoch. It does not depend on the
+  # offset: 12:00Z and 14:00+02:00 give the same number.
   #
   # @return [Integer] seconds since the Unix epoch
   #
@@ -181,11 +171,8 @@ make DateTime, implement: Inspectable, Showable do
   #   FS.File.write("stamp", "${DateTime.utcNow().epochSeconds}")
   let epochSeconds -> Integer = this.date.epochDay * 86400 + this.time.secondsSinceMidnight - this.offset.wholeSeconds
 
-  # The day of the week this instant falls on, at its own offset.
-  #
-  # No `year`/`hour`/... shorthands here: a function named after a record field
-  # makes `value.year` inside a module function dispatch to it on BEAM and
-  # fail with function_clause. Reach through `.date` and `.time`.
+  # Returns the day of the week at the instant's own offset. For the year,
+  # the hour and the other fields, go through +date+ and +time+.
   #
   # @return [Weekday] the day of the week
   #
@@ -193,10 +180,8 @@ make DateTime, implement: Inspectable, Showable do
   #   DateTime.parse("2026-07-30T14:03:00Z").try.weekday.name   # => "Thursday"
   let weekday -> Weekday = this.date.weekday
 
-  # The same instant, rendered at another offset.
-  #
-  # Nothing moves: the wall clock changes because the offset does, and
-  # +epochSeconds+ is unchanged.
+  # Returns the same instant at another offset. The date and time change to
+  # match; +epochSeconds+ does not.
   #
   # @param offset [Duration] the offset to render at
   # @return [DateTime] the same instant, at that offset
@@ -207,10 +192,7 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-07-30T07:03:00-05:00"
   let at(offset: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds, offset), this.time.nanosecond)
 
-  # The same instant, rendered at UTC.
-  #
-  # The form to store, compare and transmit: there is no offset to disagree
-  # about.
+  # Returns the same instant at UTC.
   #
   # @return [DateTime] the same instant, at UTC
   #
@@ -219,7 +201,7 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-07-30T12:03:00Z"
   let utc -> DateTime = this.at(Duration.zero())
 
-  # Advances the instant by a fixed span, keeping its offset.
+  # Adds an elapsed span to the instant, keeping its offset.
   #
   # @param span [Duration] the elapsed span to add
   # @return [DateTime] the later instant
@@ -234,7 +216,7 @@ make DateTime, implement: Inspectable, Showable do
     return Time.withNanosecond(moved, nanos - carry * 1000000000)
   end
 
-  # Moves the instant back by a fixed span, keeping its offset.
+  # Subtracts an elapsed span from the instant, keeping its offset.
   #
   # @param span [Duration] the elapsed span to subtract
   # @return [DateTime] the earlier instant
@@ -243,12 +225,9 @@ make DateTime, implement: Inspectable, Showable do
   #   (DateTime.utcNow() - 24.hour).iso   # yesterday, same wall clock
   let -(span: Duration) -> DateTime = this + span.negated
 
-  # Advances the instant by a calendar span, moving the DATE and leaving the
-  # wall clock where it is.
+  # Adds a calendar span to the date, keeping the time of day and the offset.
   #
-  # 09:00 on January 31st plus one month is 09:00 on February 28th. Going
-  # through epoch seconds instead would drift the time of day by whatever the
-  # month happened to be worth in seconds.
+  # 09:00 on January 31st plus one month is 09:00 on February 28th.
   #
   # @param span [Period] the calendar span to add
   # @return [DateTime] the later instant
@@ -258,7 +237,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-08-30T14:03:00+02:00"
   let +(span: Period) -> DateTime = DateTime { date: this.date + span, time: this.time, offset: this.offset }
 
-  # Moves the instant back by a calendar span, keeping the wall clock.
+  # Subtracts a calendar span from the date, keeping the time of day and the
+  # offset.
   #
   # @param span [Period] the calendar span to subtract
   # @return [DateTime] the earlier instant
@@ -268,7 +248,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2025-07-30T14:03:00Z"
   let -(span: Period) -> DateTime = DateTime { date: this.date - span, time: this.time, offset: this.offset }
 
-  # The instant +count+ days later, keeping the wall clock and the offset.
+  # Returns the instant +count+ days later, at the same time of day and
+  # offset.
   #
   # @param count [Integer] how many days to add
   # @return [DateTime] the shifted instant
@@ -278,7 +259,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-07-31T14:03:00Z"
   let addDays(count: Integer) -> DateTime = DateTime { date: this.date.addDays(count), time: this.time, offset: this.offset }
 
-  # The instant +count+ weeks later, keeping the wall clock and the offset.
+  # Returns the instant +count+ weeks later, at the same time of day and
+  # offset.
   #
   # @param count [Integer] how many weeks to add
   # @return [DateTime] the shifted instant
@@ -288,8 +270,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-08-06T14:03:00Z"
   let addWeeks(count: Integer) -> DateTime = this.addDays(count * 7)
 
-  # The instant +count+ calendar months later, with the day clamped into the
-  # target month.
+  # Returns the instant +count+ calendar months later, with the day clamped
+  # to the length of that month.
   #
   # @param count [Integer] how many months to add
   # @return [DateTime] the shifted instant
@@ -299,7 +281,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-02-28T09:00:00Z"
   let addMonths(count: Integer) -> DateTime = DateTime { date: this.date.addMonths(count), time: this.time, offset: this.offset }
 
-  # The instant +count+ calendar years later, with the day clamped.
+  # Returns the instant +count+ calendar years later. February 29th becomes
+  # February 28th in a year without one.
   #
   # @param count [Integer] how many years to add
   # @return [DateTime] the shifted instant
@@ -309,8 +292,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2025-02-28T09:00:00Z"
   let addYears(count: Integer) -> DateTime = this.addMonths(count * 12)
 
-  # Elapsed time from this instant to +other+, negative when +other+ is
-  # earlier. Sub-second precision is kept.
+  # Returns the time elapsed from this instant to +other+, negative when
+  # +other+ is earlier. Fractions of a second are kept.
   #
   # @param other [DateTime] the instant to measure to
   # @return [Duration] the elapsed span
@@ -349,7 +332,8 @@ make DateTime, implement: Inspectable, Showable do
   #   DateTime.utcNow().after?(started)   # => true
   let after?(other: DateTime) -> Bool = this.epochSeconds > other.epochSeconds
 
-  # The instant as ISO 8601 text, +2026-07-30T14:03:00+02:00+.
+  # Returns the instant as ISO 8601 text, such as
+  # +2026-07-30T14:03:00+02:00+.
   #
   # @return [String] the ISO 8601 instant
   #
@@ -358,12 +342,8 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-07-30T14:03:00+02:00"
   let iso -> String = Time.formatDateTime(this)
 
-  # Orders this instant against another, by instant rather than by wall
-  # clock, so 12:00Z and 14:00+02:00 compare +Equal+.
-  #
-  # Named `compareTo` rather than `compare`: a make-block `compare` is
-  # shadowed by the builtin comparison dispatch and fails at runtime on both
-  # backends.
+  # Compares two instants by when they happen, so 12:00Z and 14:00+02:00
+  # compare +Equal+.
   #
   # @param other [DateTime] the instant to compare against
   # @return [Ordering] +Less+, +Equal+ or +Greater+
@@ -376,6 +356,9 @@ make DateTime, implement: Inspectable, Showable do
   # @example Sorting events by when they happened
   #   events.sort { |a, b| a.at.compareTo(b.at) == Less }
   let compareTo(other: DateTime) -> Ordering do
+    # Named `compareTo` rather than `compare`: a make-block `compare` is
+    # shadowed by the builtin comparison dispatch and fails at runtime on both
+    # backends.
     return Less if this.epochSeconds < other.epochSeconds
     return Greater if this.epochSeconds > other.epochSeconds
     return Less if this.time.nanosecond < other.time.nanosecond
@@ -383,4 +366,7 @@ make DateTime, implement: Inspectable, Showable do
     return Equal
   end
 
+  # No `year`/`hour`/... shorthands here: a function named after a record field
+  # makes `value.year` inside a module function dispatch to it on BEAM and
+  # fail with function_clause. Reach through `.date` and `.time`.
 end

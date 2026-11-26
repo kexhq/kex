@@ -10,18 +10,23 @@ using Tey.Manifest, only: [read]
 using Tey.Workspace, only: [Context, Member]
 using Tey.Plugin, only: [approved?]
 
+# Returns a fingerprint of the workspace members' manifests and
+# +.teyignore+ files. It changes whenever the lockfile may need resolving
+# again.
 foul fingerprint(context: Context) -> String do
   return Tey.Resolver.workspaceFingerprint(context)
 end
 
+# Resolves the dependencies of every workspace member into one lock state,
+# using the active toolchain.
 foul resolveWorkspace(context: Context) -> LockState or! String do
   let toolchain = Tey.Toolchain.activeInfo.try
   return Tey.Resolver.resolveWorkspaceWithInfo(context, toolchain)
 end
 
-# The caller may already have inspected the selected compiler while deciding
-# whether an existing lock is reusable. Passing that result through keeps the
-# `--info` contract to one invocation per install/resolve decision.
+# Resolves the workspace like +resolveWorkspace+, with toolchain information
+# the caller already has. The compiler's +--info+ is then queried only once
+# per install or resolve.
 foul resolveWorkspaceWithInfo(context: Context,
                               toolchain: Tey.Toolchain.ToolchainInfo) -> LockState or! String do
   let incompatible = context.members.filter do |member|
@@ -106,6 +111,9 @@ foul resolveWorkspaceWithInfo(context: Context,
   })
 end
 
+# Resolves one package's dependencies into a lock state. Fails when the
+# active Kex or the running Erlang/OTP is older than the package or the
+# toolchain requires.
 foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   let toolchain = match Tey.Toolchain.activeInfo do
     Error(error) => return Error(error)
@@ -143,9 +151,12 @@ foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
                 kexVersion: Tey.Semver.release(toolchain.version), lockedDependencies: locked })
 end
 
-# A monorepo can release its members independently as `parser-v1.2.3`.
-# Prefer that package's namespace when it exists; a repository with no
-# package-prefixed tags retains the ordinary `v1.2.3` convention.
+# Returns the tag of the newest version of +name+ that satisfies
+# +requested+.
+#
+# A monorepo can tag each member separately, as +parser-v1.2.3+. When tags
+# with the package's prefix exist, only those are considered; otherwise
+# plain tags such as +v1.2.3+ are.
 let chooseFromTags(name: String, tags: [String],
                    requested: String) -> String or! String do
   let prefix = "${name}-"
@@ -165,10 +176,12 @@ let chooseFromTags(name: String, tags: [String],
   end
 end
 
-# `workspace: true` inside a fetched package refers to a sibling in that
-# package's repository, at exactly the same commit. Once outside the source
-# workspace it is therefore a Git source with an implicit discoverable
-# subdirectory, not a reference to the consumer's local workspace.
+# Rewrites the +workspace: true+ dependencies of a fetched package as Git
+# dependencies on the same repository and commit as +parent+.
+#
+# In a fetched package, +workspace: true+ names a sibling in that package's
+# repository, not a member of the consumer's workspace. The sibling's
+# subdirectory is found later.
 let externalizeWorkspaceDependencies(
   dependencies: [Tey.Manifest.Dependency],
   parent: Tey.Lockfile.Dependency
@@ -297,10 +310,9 @@ private do
     return Ok([withGroups, ...nestedPaths, ...nestedGit, ...rest])
   end
 
-  # The lowest OTP this build can legally run on: the higher of the package's
-  # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
-  # says anything, which is the ordinary case for a package with no interop
-  # needs on a toolchain built without erlc.
+  # Returns the lowest OTP release the build can run on: the higher of the
+  # package's own +otp(...)+ and the toolchain's runtime-beam floor, or
+  # +None+ when neither sets one.
   let effectiveOtpFloor(requirement: String,
                         toolchain: Integer?) -> Integer? do
     let declared = Tey.Resolver.lowestSatisfying(requirement)
@@ -312,10 +324,9 @@ private do
     end
   end
 
-  # The smallest OTP release satisfying an `otp(...)` requirement. Releases are
-  # plain integers — `28`, not `28.1.2` — so the requirement is read as a bare
-  # lower bound rather than through the semver machinery, which would have to
-  # invent minor and patch numbers that OTP does not have.
+  # Returns the smallest OTP release that satisfies an +otp(...)+
+  # requirement. OTP releases are plain integers such as +28+, so the
+  # requirement is read as a lower bound, not as a semver range.
   let lowestSatisfying(requirement: String) -> Integer? do
     return None if requirement == ""
     let digits = requirement.chars.filter { |c| c.digit? }.join("")
@@ -326,15 +337,16 @@ private do
     end
   end
 
-  # Which of the two constraints is doing the work, so the message points at
-  # the thing the reader can change.
+  # Explains which constraint sets the OTP floor, the package's or the
+  # toolchain's, so the message points at what the reader can change.
   let otpReason(requirement: String, required: Integer) -> String do
     let declared = Tey.Resolver.lowestSatisfying(requirement)
     return "this package declares otp(\"${requirement}\")" if declared == Just(required)
     return "the toolchain's runtime beams were compiled by OTP ${required}, and a .beam cannot be loaded by an older runtime"
   end
 
-  # The exact tag to pin. Anything but a tag range is taken as written.
+  # Returns the exact tag to pin. Anything but a tag range is used as
+  # written.
   foul chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
     let tags = match Tey.Git.tags(git) do
@@ -344,18 +356,15 @@ private do
     return Tey.Resolver.chooseFromTags(name, tags, requested)
   end
 
-  # Breadth-first over the whole graph, not just the root's own list.
+  # Resolves the whole dependency graph, breadth first.
   #
-  # A dependency's `package.kex` is read once it is in the cache, and its own
-  # `tey(...)` lines join the queue. Identity is the package NAME, and that is
-  # forced rather than chosen: one BEAM module name is one loaded module per
-  # VM, so two versions of `Greet` cannot coexist however the resolver feels
-  # about it. Seeing a name twice therefore means combining the two
-  # constraints, never installing both.
+  # Each dependency's +package.kex+ is read once it is in the cache, and its
+  # own +tey(...)+ lines join the queue. A package is identified by its name:
+  # the BEAM loads one module per name, so two versions of a package cannot
+  # coexist. A name seen twice has its constraints combined.
   #
-  # Breadth-first so the shortest path to a package is the one that resolves
-  # it, which makes "required by" in an error the nearest explanation rather
-  # than an arbitrary one.
+  # Breadth first, the shortest path to a package is the one that resolves
+  # it, so "required by" in an error names the nearest requirer.
   foul resolveDependencies(direct: [Tey.Manifest.Dependency],
                           _unused: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
     var queue = direct.map { |dependency| (dependency, "this package") }
@@ -439,10 +448,9 @@ private do
     Ok(resolved)
   end
 
-  # The `tey(...)` lines of a package already in the cache. A checkout with no
-  # `package.kex` is an error rather than an empty node: it means the
-  # repository is not a Kex package, and `using` would fail later with a worse
-  # message.
+  # Returns the +tey(...)+ dependencies of a package already in the cache. A
+  # checkout without a +package.kex+ is not a Kex package and is an error
+  # here, before +using+ fails later with a worse message.
   foul dependenciesOf(entry: Tey.Lockfile.Dependency) -> [Tey.Manifest.Dependency] or! String do
     let path = "${Tey.Cache.packagePath(entry)}/package.kex"
     match FS.File.read(path) do

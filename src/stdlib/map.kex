@@ -1,42 +1,40 @@
 # An immutable key-value store, written +{key: value}+.
 #
-# Keys are compared by structural equality and may be of any type; atom keys
-# get the shorthand +{name: "Ada"}+, string keys are written out in full as
-# +{"name": "Ada"}+. Updates return a new map: the +!+ forms
-# (+put!+, +delete!+) build a new map and rebind the receiver variable, they
-# do not modify anything in place.
+# Keys may be of any type and are compared by structural equality. Atom keys
+# have the shorthand +{name: "Ada"}+; other keys are written in full, as in
+# +{"name": "Ada"}+. Every value in a map has the same type.
 #
-# Entries come back in canonical key order, not insertion order, so +keys+,
-# +values+, +entries+ and any traversal are stable and comparable across
-# equal maps.
+# Updates return a new map. The +!+ forms, such as +put!+ and +delete!+,
+# rebind the variable to the new map; nothing is modified in place.
 #
-#   let config = { host: "localhost", port: 8080 }
+# Entries come back sorted by key, not in insertion order, so +keys+,
+# +values+, +entries+ and every traversal give the same order for equal maps.
+#
+#   let config = { host: "localhost", port: "8080" }
 #   config.get(:host).or("0.0.0.0")     # => "localhost"
 #   config.get(:user).or("anonymous")   # => "anonymous"
-#   config.put(:port, 9090)             # => { :host: "localhost", :port: 9090 }
+#   config.put(:port, "9090")           # => { host: "localhost", port: "9090" }
 #
-# A map is +Enumerable+ and +Foldable+, and every traversal block takes the
-# key and value as two parameters: +each+, +map+, +filter+, +reject+, +find+,
-# +any?+, +all?+, +none?+, +one?+, +count+, +collect+ and +into+, with
-# +mapIndexed+ adding the index as a third. Only +reduce+, the primitive, hands
-# over the pair as one value.
+# Maps implement +Enumerable+ and +Foldable+. The blocks given to +each+,
+# +map+, +filter+, +reject+, +find+, +any?+, +all?+, +none?+, +one?+,
+# +count+, +collect+ and +into+ take the key and the value as two
+# parameters, and +mapIndexed+ adds the index as a third. Only +reduce+
+# passes each entry as one +(key, value)+ tuple.
 #
 #   config.each { |k, v| IO.printLine("${k} = ${v}") }
-#   config.filter { |k, v| k != :port }   # => { :host: "localhost" }
-#   config.collect { |k, v| k == :port then Just(v) else None }   # => [8080]
-#   config.mapIndexed { |k, v, i| "${i}. ${k}" }   # => ["0. host", "1. port"]
+#   config.filter { |k, v| k != :port }   # => { host: "localhost" }
+#   config.collect { |k, v| k == :port then Just(v) else None }   # => ["8080"]
+#   config.mapIndexed { |k, v, i| "${i}. ${k}" }   # => ["0. :host", "1. :port"]
 
-# Declared for the same reason list.kex declares `type List<X> = [X]`: it
-# gives the name `Map` a source declaration, so it resolves as a type through
-# the collected interfaces rather than needing to be known to the compiler.
+# The type of maps from +K+ to +V+, usually written +{K: V}+.
 type Map<K, V> = {K: V}
 
 make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
-  # Folds over the map's +(key, value)+ pairs in canonical key order.
+  # Folds over the map's +(key, value)+ pairs in key order.
   #
-  # This is +Map+'s +Enumerable+ primitive: +map+, +filter+, +find+, +any?+
-  # and the rest are built on it. The block receives the accumulator and one
-  # pair; destructure the pair to name its halves.
+  # +Enumerable+ builds +map+, +filter+, +find+, +any?+ and the rest on it.
+  # The block receives the accumulator and one pair, which you destructure to
+  # get the key and value.
   #
   # @param acc [A] the initial accumulator
   # @param g [A -> (K, V) -> A] combines the accumulator with each pair
@@ -50,37 +48,35 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   #   # => 3
   #
   # @example Rendering the map as a query string
-  #   { a: 1, b: 2 }.entries.map { |k, v| "${k}=${v}" }.join("&")
+  #   { "a": 1, "b": 2 }.entries.map { |k, v| "${k}=${v}" }.join("&")   # => "a=1&b=2"
   let reduce(acc: A, g: A -> (K, V) -> A) -> A = this.entries.reduce(acc, g)
 
-  # The empty map: the identity element of the +Monoid+ instance, so
-  # +m.combine({})+ is +m+.
+  # Returns the empty map, the +Monoid+ identity: +m.combine({})+ is +m+.
   #
   # @return [Map<K, V>] the empty map
   #
   # @example
-  #   Map.identity   # => {}
+  #   { a: 1 }.identity   # => {}
   let identity -> This = {}
 
-  # Combines two maps by merging them, with +other+'s values winning on a key
-  # conflict. The +Monoid+ operation, and the same thing +merge+ does.
+  # Merges two maps, keeping +other+'s value when both have a key. This is
+  # the +Monoid+ operation, and does the same as +merge+.
   #
   # @param other [This] the map to merge in
   # @return [This] the combined map
   #
   # @example
-  #   { a: 1 }.combine({ b: 2 })   # => { :a: 1, :b: 2 }
+  #   { a: 1 }.combine({ b: 2 })   # => { a: 1, b: 2 }
   #
   # @example Folding a list of maps into one
   #   [{ a: 1 }, { b: 2 }, { a: 9 }].reduce({}) { |acc, m| acc.combine(m) }
-  #   # => { :a: 9, :b: 2 }
+  #   # => { a: 9, b: 2 }
   let combine(other: This) -> This = this.merge(other)
 
   # Returns the value stored under +key+, or +None+ when the key is absent.
   #
-  # Missing keys are an ordinary answer rather than a failure, so a lookup on
-  # data you did not produce is safe by default. Use the two-argument form
-  # below when you have a sensible fallback.
+  # When there is a sensible fallback, +get(key, default)+ returns the value
+  # unwrapped.
   #
   # @param key [K] the key to look up
   # @return [V?] the value, or +None+
@@ -97,9 +93,6 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
 
   # Returns the value stored under +key+, or +default+ when the key is absent.
   #
-  # The total form of +get+: the value comes back unwrapped, so nothing
-  # downstream has to deal with an +Optional+.
-  #
   # @param key [K] the key to look up
   # @param default [V] the value to use when the key is missing
   # @return [V] the stored value, or +default+
@@ -114,38 +107,36 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   get :> K -> V -> V
   let get(key, default) = Kex.Intrinsic.Map.getWithDefault(this, key, default)
 
-  # Returns a new map with +key+ mapped to +value+, replacing any previous
-  # entry for that key.
+  # Returns a new map with +k+ mapped to +v+, replacing any previous entry for
+  # that key.
   #
-  # The receiver is untouched. Use +put!+ when you want the variable holding
-  # the map to be rebound to the result.
+  # The original map is unchanged. +put!+ rebinds the variable holding the
+  # map to the result.
   #
   # @param k [K] the key to set
   # @param v [V] the value to store
   # @return [Map<K, V>] a new map including the entry
   #
   # @example
-  #   {}.put(:x, 1)              # => { :x: 1 }
-  #   { x: 1 }.put(:x, 2)        # => { :x: 2 }
+  #   {}.put(:x, 1)              # => { x: 1 }
+  #   { x: 1 }.put(:x, 2)        # => { x: 2 }
   #
   # @example Rebinding with the +!+ form
   #   var totals = {}
   #   totals.put!(:visits, 1)
-  #   totals                     # => { :visits: 1 }
+  #   totals                     # => { visits: 1 }
   put :> K -> V -> Map<K, V>
   let put(k, v) = Kex.Intrinsic.Map.put(this, k, v)
 
-  # Returns a new map without +key+. A key that is not present is not an
-  # error: the map comes back unchanged.
-  #
-  # Use +delete!+ to rebind the receiver variable.
+  # Returns a new map without +key+, or the same map when +key+ is not
+  # present. +delete!+ rebinds the variable instead.
   #
   # @param key [K] the key to remove
   # @return [Map<K, V>] a new map without that entry
   #
   # @example
-  #   { a: 1, b: 2 }.delete(:a)   # => { :b: 2 }
-  #   { a: 1 }.delete(:z)         # => { :a: 1 }
+  #   { a: 1, b: 2 }.delete(:a)   # => { b: 2 }
+  #   { a: 1 }.delete(:z)         # => { a: 1 }
   #
   # @example Stripping a secret before logging
   #   IO.printLine(params.delete(:password))
@@ -154,8 +145,8 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
 
   # Returns +true+ when +key+ has an entry in the map.
   #
-  # Distinguishes a missing key from one whose value is itself empty, which a
-  # +get+ with a default cannot.
+  # Unlike +get+ with a default, it tells a missing key apart from a key whose
+  # value happens to equal the default.
   #
   # @param key [K] the key to test
   # @return [Bool] +true+ when the key is present
@@ -204,7 +195,7 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   count :> (K -> V -> Bool) -> Integer
   let count(pred) = this.matching(pred).count
 
-  # Returns the map's keys as a list, in canonical key order.
+  # Returns the map's keys as a sorted list.
   #
   # @return [[K]] the keys
   #
@@ -226,11 +217,11 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   values :> [V]
   let values = Kex.Intrinsic.Map.values(this)
 
-  # Returns the map's entries as a list of +(key, value)+ tuples, in canonical
-  # key order.
+  # Returns the map's entries as a list of +(key, value)+ tuples, in key
+  # order.
   #
-  # This is the bridge to the +List+ functions a map does not have of its own,
-  # and the form the two-parameter blocks elsewhere are splatting from.
+  # Use it to reach the +List+ functions that maps do not have, such as
+  # +sort+.
   #
   # @return [[(K, V)]] the entries
   #
@@ -252,14 +243,13 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   each :> (K -> V -> Void) -> Void
   let each(f) = this.entries.each(f)
 
-  # Applies +f+ to each key and value and collects the results into a LIST.
+  # Applies +f+ to each key and value and returns the results as a list.
   #
-  # Note the return type: +map+ comes from +Enumerable+, whose contract is to
-  # produce a list, because +f+ may return anything at all. Use +mapValues+ or
-  # +mapKeys+ when you want a map back.
+  # The result is a list, not a map, since +f+ may return anything. To get a
+  # map back, use +mapValues+ or +mapKeys+.
   #
   # @param f [K -> V -> R] applied to each entry
-  # @return [[R]] the results, in canonical key order
+  # @return [[R]] the results, in key order
   #
   # @example
   #   { "a": 1, "b": 2 }.map { |k, v| "${k}=${v}" }   # => ["a=1", "b=2"]
@@ -275,7 +265,7 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   # @return [Map<K, W>] a map with the same keys and transformed values
   #
   # @example
-  #   { a: 1, b: 2 }.mapValues { |v| v * 10 }   # => { :a: 10, :b: 20 }
+  #   { a: 1, b: 2 }.mapValues { |v| v * 10 }   # => { a: 10, b: 20 }
   #
   # @example Normalising values read as text
   #   raw.mapValues { |s| s.trim.lowerCase }
@@ -288,14 +278,15 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   # Returns a new map with every key replaced by +f(key)+. The values are left
   # alone.
   #
-  # If +f+ maps two keys onto the same result, one entry wins: the map cannot
-  # hold both.
+  # If +f+ maps two keys to the same result, the entry whose original key
+  # sorts last wins.
   #
   # @param f [K -> J] applied to each key
   # @return [Map<J, V>] a map with transformed keys
   #
   # @example
-  #   { "a": 1, "b": 2 }.mapKeys { |k| k.upperCase }   # => { A: 1, B: 2 }
+  #   { "a": 1, "b": 2 }.mapKeys { |k| k.upperCase }   # => { "A": 1, "B": 2 }
+  #   { "a": 1, "b": 2 }.mapKeys { |k| "x" }           # => { "x": 2 }
   #
   # @example Making header lookups case-insensitive
   #   headers.mapKeys { |name| name.lowerCase }
@@ -305,31 +296,31 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
     return Kex.Intrinsic.Map.fromEntries(pairs)
   end
 
-  # Returns a new map with only the entries for which +pred+ answers +true+.
+  # Returns a map of the entries for which +pred+ returns +true+. Unlike
+  # +map+, it returns a map.
   #
   # @param pred [K -> V -> Bool] the test applied to each entry
   # @return [Map<K, V>] the matching entries
   #
   # @example
-  #   { a: 1, b: 2, c: 3 }.filter { |k, v| v > 1 }   # => { :b: 2, :c: 3 }
+  #   { a: 1, b: 2, c: 3 }.filter { |k, v| v > 1 }   # => { b: 2, c: 3 }
   #
-  # @example Keeping only the options that were actually set
+  # @example Keeping only the options that were set
   #   options.filter { |name, value| !value.blank? }
-  # Map overrides the map-returning HOFs (Enumerable's default returns a list).
   filter :> (K -> V -> Bool) -> Map<K, V>
   let filter(pred) do
     let kept = this.entries.filter { |pair| Kex.Intrinsic.Fun.applyItem(pred, pair) }
     return Kex.Intrinsic.Map.fromEntries(kept)
   end
 
-  # Returns a new map with the entries for which +pred+ answers +true+
-  # removed. The complement of +filter+.
+  # Returns a map of the entries for which +pred+ returns +false+, the
+  # opposite of +filter+.
   #
   # @param pred [K -> V -> Bool] the test applied to each entry
   # @return [Map<K, V>] the entries that failed the predicate
   #
   # @example
-  #   { a: 1, b: 2, c: 3 }.reject { |k, v| v > 1 }   # => { :a: 1 }
+  #   { a: 1, b: 2, c: 3 }.reject { |k, v| v > 1 }   # => { a: 1 }
   #
   # @example Dropping internal keys before serialising
   #   record.reject { |name, _| name.startsWith?("_") }
@@ -340,24 +331,22 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   end
 
   # Returns a new map holding the entries of both. When a key appears in both,
-  # +other+'s value wins.
-  #
-  # The right-biased rule is what makes this the natural way to apply
-  # overrides on top of defaults.
+  # +other+'s value wins, which makes it the way to lay overrides on top of
+  # defaults.
   #
   # @param other [Map<K, V>] the map whose values take precedence
   # @return [Map<K, V>] the combined map
   #
   # @example
-  #   { a: 1, b: 2 }.merge({ b: 99, c: 3 })   # => { :a: 1, :b: 99, :c: 3 }
+  #   { a: 1, b: 2 }.merge({ b: 99, c: 3 })   # => { a: 1, b: 99, c: 3 }
   #
   # @example Layering user settings over defaults
   #   defaults.merge(userConfig)
   merge :> Map<K, V> -> Map<K, V>
   let merge(other) = Kex.Intrinsic.Map.merge(this, other)
 
-  # Replaces the value under +key+ with +f+ of it. A missing key is left
-  # missing: use the three-argument form to supply a starting value.
+  # Replaces the value under +key+ with +f+ applied to it. A missing key stays
+  # missing; to start from a value, pass a default as the second argument.
   #
   # @param key [K] the key to update
   # @param f [V -> V] computes the new value from the old
@@ -374,8 +363,8 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
     end
   end
 
-  # Replaces the value under +key+ with +f+ of it, starting from +default+
-  # when the key is missing.
+  # Replaces the value under +key+ with +f+ applied to it, applying +f+ to
+  # +default+ when the key is missing.
   #
   # @param key [K] the key to update
   # @param default [V] the value +f+ starts from when +key+ is missing
@@ -387,8 +376,7 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   update :> K -> V -> (V -> V) -> Map<K, V>
   let update(key, default, f) = this.put(key, f(this.get(key, default)))
 
-  # Returns +true+ when at least one entry satisfies +pred+. Stops at the
-  # first match.
+  # Returns +true+ when at least one entry satisfies +pred+.
   #
   # @param pred [K -> V -> Bool] the test applied to each entry
   # @return [Bool] +true+ when any entry matches
@@ -399,8 +387,8 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   any? :> (K -> V -> Bool) -> Bool
   let any?(pred) = !this.matching(pred).empty?
 
-  # Returns +true+ when every entry satisfies +pred+. The empty map answers
-  # +true+.
+  # Returns +true+ when every entry satisfies +pred+, and +true+ for the empty
+  # map.
   #
   # @param pred [K -> V -> Bool] the test applied to each entry
   # @return [Bool] +true+ when all entries match
@@ -414,10 +402,8 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   all? :> (K -> V -> Bool) -> Bool
   let all?(pred) = this.matching(pred).count == this.count
 
-  # Returns the first entry satisfying +pred+ as a +(key, value)+ tuple, or
-  # +None+ when nothing matches.
-  #
-  # "First" means first in canonical key order.
+  # Returns the first entry, in key order, that satisfies +pred+ as a
+  # +(key, value)+ tuple, or +None+ when nothing matches.
   #
   # @param pred [K -> V -> Bool] the test applied to each entry
   # @return [(K, V)?] the matching entry, or +None+
@@ -433,12 +419,18 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
 
   # Returns +true+ when no entry satisfies +pred+.
   #
+  # @param pred [K -> V -> Bool] the test applied to each entry
+  # @return [Bool] +true+ when nothing matches
+  #
   # @example
   #   { a: 1, b: 2 }.none? { |k, v| v > 5 }   # => true
   none? :> (K -> V -> Bool) -> Bool
   let none?(pred) = this.matching(pred).empty?
 
   # Returns +true+ when exactly one entry satisfies +pred+.
+  #
+  # @param pred [K -> V -> Bool] the test applied to each entry
+  # @return [Bool] +true+ when one entry matches
   #
   # @example
   #   { a: 1, b: 2 }.one? { |k, v| v > 1 }   # => true
@@ -458,9 +450,9 @@ make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
 end
 
 make Map<K,V>, implement: Blankable do
-  # Returns +true+ when the map has no entries. The +Blankable+ view of
-  # +empty?+, so a map can be tested by the same generic code that tests
-  # strings and lists.
+  # Returns +true+ when the map has no entries. It is +empty?+ under the
+  # +Blankable+ name, so generic code can test maps as it tests strings and
+  # lists.
   #
   # @return [Bool] +true+ for the empty map
   #
@@ -473,7 +465,7 @@ end
 
 module Map do
   # Builds a map from +(key, value)+ pairs. A key that appears more than once
-  # keeps its last value, as +put+ would. Ruby spells this +to_h+.
+  # keeps its last value. Ruby calls this +to_h+.
   #
   # @param entries [[(K, V)]] the pairs
   # @return [Map<K, V>] the map

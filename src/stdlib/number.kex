@@ -1,12 +1,11 @@
 # Whole numbers, of arbitrary size.
 #
-# +Integer+ has no width limit: factorials and cryptographic moduli are
-# ordinary values, not a special big-number type you have to opt into.
+# +Integer+ has no width limit, so a factorial or a cryptographic modulus is
+# an +Integer+ like any other.
 #
-# +Integer+ and +Float+ are one numeric tower: they compare and order across
-# the boundary, so +0 == 0.0+ is +true+ and +[1, 2.5, 3].sort+ works. What
-# differs is the arithmetic. +/+ on two integers is integer division, and
-# +sqrt+ answers a +Float+ because a square root generally is one.
+# +Integer+ and +Float+ compare and sort together: +0 == 0.0+ is +true+ and
+# +[1, 2.5, 3].sort+ works. Their arithmetic differs. +/+ on two integers is
+# integer division, and +sqrt+ always returns a +Float+.
 #
 #   7 / 2          # => 3      (integer division)
 #   7.0 / 2.0      # => 3.5
@@ -41,8 +40,8 @@ make Integer do
 
   # Returns +true+ when the integer divides evenly by +n+.
   #
-  # Zero is divisible by every non-zero integer, and nothing is divisible
-  # by zero — not even zero itself.
+  # Zero is divisible by every non-zero integer. Nothing is divisible by
+  # zero, not even zero.
   #
   # @param n [Integer] the divisor
   # @return [Bool] +true+ when the integer divides evenly by +n+
@@ -79,8 +78,8 @@ make Integer do
 
   # Returns the square root as a +Float+.
   #
-  # The result is a +Float+ even when the root is exact, because in general it
-  # is not. Round or floor it when you need an integer back.
+  # The result is a +Float+ even when the root is exact. Round or floor it
+  # to get an integer back.
   #
   # @return [Float] the square root
   #
@@ -93,9 +92,9 @@ make Integer do
 
   # Returns +this+ modulo +n+.
   #
-  # The result takes the sign of +n+, which is mathematical modulo rather than
-  # the C-style remainder other languages give. That is what makes it safe for
-  # wrapping an index that may have gone negative.
+  # The result takes the sign of +n+, unlike the C-style remainder, so
+  # +(-1).modulo(3)+ is +2+. That makes it the one to use for wrapping an
+  # index that may have gone negative.
   #
   # @param n [Integer] the modulus
   # @return [Integer] the remainder, with the sign of +n+
@@ -126,8 +125,8 @@ make Integer do
 
   # Calls +f+ exactly +this+ times, passing the 0-based iteration index.
   #
-  # This is the counting loop. When you want the numbers themselves rather
-  # than a count of repetitions, +(1..n).items.each+ often reads better.
+  # When the loop is about the numbers themselves, +(1..n).each+ often
+  # reads better.
   #
   # @param f [Integer -> Void] called once per iteration with the index
   # @return [Void]
@@ -152,8 +151,7 @@ make Integer do
   end
 
   # Returns the range from this integer down to +last+, both included,
-  # counting by -1: +(this..last).by(-1)+. It is empty when +last+ is larger.
-  # Nothing is enumerated until the range is traversed.
+  # counting by -1. It is empty when +last+ is larger.
   #
   # @param last [Integer] the last element
   # @return [Range<Integer>] the descending range
@@ -167,8 +165,8 @@ make Integer do
   downTo :> Integer -> Range<Integer>
   let downTo(last) = (this..last).by(-1)
 
-  # Returns the integer unchanged. Present so that code written against
-  # +Number+ works whichever half of the tower it is handed.
+  # Returns the integer unchanged, so code that floors a +Number+ works on
+  # integers too.
   #
   # @return [Integer] the same integer
   #
@@ -197,12 +195,11 @@ make Integer do
   round :> Integer
   let round = Kex.Intrinsic.Number.round(this)
 
-  # Raises the integer to a non-negative integer power, exactly: integers
-  # have no size limit, so +2.pow(100)+ is the whole 31-digit number, where
-  # +Math.pow+ answers a +Float+.
+  # Raises the integer to an integer power, exactly. +2.pow(100)+ is the
+  # whole 31-digit number; +Math.pow+ returns a +Float+.
   #
-  # A negative exponent gives the reciprocal truncated toward zero, the way
-  # +/+ divides integers: +0+ for any base but +1+ and +-1+.
+  # A negative exponent gives the reciprocal truncated toward zero, as +/+
+  # does: +0+ for any base but +1+ and +-1+.
   #
   # @param exponent [Integer] the power to raise to
   # @return [Integer] +this+ multiplied by itself +exponent+ times
@@ -219,9 +216,9 @@ make Integer do
     return exponent.even? then half * half else half * half * this
   end
 
-  # Divides and rounds toward negative infinity: the quotient that goes with
-  # +modulo+. Plain +/+ truncates toward zero instead, so the two differ only
-  # when the signs do. Ruby's +/+ on integers is this one.
+  # Divides and rounds toward negative infinity, the quotient that goes with
+  # +modulo+. Plain +/+ truncates toward zero, so the two differ when the
+  # signs differ. Ruby's +/+ on integers behaves like this one.
   #
   # @param n [Integer] the divisor, non-zero
   # @return [Integer] the floored quotient
@@ -235,7 +232,7 @@ make Integer do
     return (this.modulo(n) != 0 && (this < 0) != (n < 0)) then quotient - 1 else quotient
   end
 
-  # The floored quotient and the +modulo+ remainder together, so that
+  # Returns the floored quotient and the +modulo+ remainder together, so
   # +q * n + r == this+ always holds.
   #
   # @param n [Integer] the divisor, non-zero
@@ -247,7 +244,7 @@ make Integer do
   divmod :> Integer -> (Integer, Integer)
   let divmod(n) = (this.div(n), this.modulo(n))
 
-  # The greatest common divisor, always non-negative. +0.gcd(0)+ is +0+.
+  # Returns the greatest common divisor, never negative. +0.gcd(0)+ is +0+.
   #
   # @param n [Integer] the other integer
   # @return [Integer] the largest integer dividing both
@@ -258,8 +255,8 @@ make Integer do
   gcd :> Integer -> Integer
   let gcd(n) = n == 0 then this.abs else n.gcd(this.modulo(n))
 
-  # The least common multiple, always non-negative. Zero with anything is
-  # +0+.
+  # Returns the least common multiple, never negative. It is +0+ when
+  # either integer is zero.
   #
   # @param n [Integer] the other integer
   # @return [Integer] the smallest positive integer both divide
@@ -269,8 +266,8 @@ make Integer do
   lcm :> Integer -> Integer
   let lcm(n) = (this == 0 || n == 0) then 0 else (this * n).abs / this.gcd(n)
 
-  # The decimal digits of the integer's magnitude, least significant first,
-  # as Ruby's +digits+ answers them. +.reverse+ gives reading order.
+  # Returns the decimal digits of the integer's magnitude, least significant
+  # first, as Ruby's +digits+ does. +.reverse+ gives reading order.
   #
   # @return [[Integer]] the digits, ones place first
   #
@@ -322,12 +319,9 @@ end
 # Double-precision floating-point numbers.
 #
 # A Kex +Float+ is always finite. An operation that would produce +NaN+ or
-# +Infinity+ raises instead: the same rule the BEAM enforces, where those two
-# values cannot exist at all. So a +Float+ you are holding is always a real
-# number, and there is no +nan?+ to check for.
+# +Infinity+ raises, so there is no +nan?+ to check for.
 #
-# +Float+ and +Integer+ compare and order across the boundary; see
-# +Integer+ for the rest of the numeric tower.
+# +Float+ and +Integer+ compare and sort together; see +Integer+.
 #
 #   3.7.floor      # => 3
 #   3.7.round      # => 4
@@ -346,8 +340,7 @@ make Float do
   abs :> Float
   let abs = Kex.Intrinsic.Number.abs(this)
 
-  # Returns the square root. Raises for a negative receiver, which has no real
-  # root.
+  # Returns the square root. Raises for a negative float.
   #
   # @return [Float] the square root
   #
@@ -368,9 +361,8 @@ make Float do
   in? :> Range<Float> -> Bool
   let in?(range) = range.contains?(this)
 
-  # Returns the largest integer that is not greater than the float: it always
-  # rounds toward negative infinity, which is what separates it from
-  # +toInteger+ for negative values.
+  # Returns the largest integer not greater than the float. It rounds toward
+  # negative infinity, so for negative values it differs from +toInteger+.
   #
   # @return [Integer] the floor
   #
@@ -381,8 +373,7 @@ make Float do
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
 
-  # Returns the smallest integer that is not less than the float: it always
-  # rounds toward positive infinity.
+  # Returns the smallest integer not less than the float.
   #
   # @return [Integer] the ceiling
   #
@@ -407,9 +398,8 @@ make Float do
   round :> Integer
   let round = Kex.Intrinsic.Number.round(this)
 
-  # Truncates toward zero and returns the result as an +Integer+: it drops
-  # the fractional part rather than rounding, so it differs from both +floor+
-  # and +round+ for negative values.
+  # Drops the fractional part and returns an +Integer+. For negative values
+  # this differs from +floor+.
   #
   # @return [Integer] the truncated value
   #
@@ -443,16 +433,16 @@ end
 
 # Reading integers out of text.
 #
-# Use +parse+ when a failure needs explaining and +"42".to(Integer)+ when it
-# does not: +to+ answers a plain +Optional+, +parse+ a +Result+ whose
-# +ParseError+ says why, one case per reason.
+# +"42".to(Integer)+ returns an +Optional+. Use +parse+ when the caller needs
+# to know why the text is not a number: its +ParseError+ has one case per
+# reason.
 module Integer do
-  # Parses +text+ as an integer: an optional sign, then digits in +radix+,
-  # grouped as +culture+ groups them once a group separator appears. Digits
-  # with no separator at all read in every culture.
+  # Parses +text+ as an integer: an optional sign, then digits in +radix+.
+  # Group separators must follow +culture+'s grouping; digits with no
+  # separator read in every culture.
   #
-  # A number followed by anything is +Trailing+ with the number and the rest,
-  # so +"10 USD"+ is not lost: match it to read a number off the front.
+  # A number followed by other text is a +Trailing+ error carrying the number
+  # and the rest, so matching on it reads a number off the front of +"10 USD"+.
   #
   # @param text [String] the text to read
   # @param radix [Integer] the base, 2 to 36; digits above 9 in either case
@@ -482,10 +472,10 @@ end
 
 # Reading floating-point numbers out of text.
 module Float do
-  # Parses +text+ as a float: an optional sign, digits grouped as +culture+
-  # groups them once a group separator appears, then optionally the
-  # culture's decimal separator with digits after it, and an exponent
-  # (+e3+, +E-2+). A whole number is a float too: +"5"+ is +5.0+.
+  # Parses +text+ as a float: an optional sign, digits (grouped by
+  # +culture+'s rules if separators appear), an optional decimal part after
+  # the culture's decimal separator, and an optional exponent (+e3+, +E-2+).
+  # A whole number parses too: +"5"+ gives +5.0+.
   #
   # @param text [String] the text to read
   # @param culture [Culture] whose decimal and group separators to accept
@@ -510,8 +500,8 @@ module Float do
 
   # The largest finite +Float+.
   #
-  # A Kex +Float+ is always finite, so there is no infinity to start from:
-  # this is the bound to use instead, say as the first "smallest so far".
+  # Kex has no float infinity, so this is the starting value for a running
+  # minimum.
   #
   # @return [Float] 1.7976931348623157e308
   #
@@ -520,20 +510,16 @@ module Float do
   MAX : Float
   let MAX = 1.7976931348623157e308
 
-  # The most negative finite +Float+: +-Float.MAX+. Not the smallest positive
-  # one, which some languages call MIN.
+  # The most negative finite +Float+, +-Float.MAX+. Some languages use MIN
+  # for the smallest positive float; Kex does not.
   #
   # @return [Float] -1.7976931348623157e308
   MIN : Float
   let MIN = -1.7976931348623157e308
 end
 
-# The bounds of the sized numeric types: +Int8.MAX+, +UInt64.MAX+,
-# +Float32.MIN+ and so on. +Integer+ has none: it is arbitrary-precision.
-# For a float type, +MIN+ is the most negative finite value, not the smallest
-# positive one.
-
-# The range of a 32-bit float.
+# The range of a 32-bit float. As for every sized float type, +MIN+ is the
+# most negative finite value.
 module Float32 do
   # The largest Float32: 3.4028234663852886e38.
   MAX : Float32
@@ -654,15 +640,15 @@ module Byte do
   let MIN = 0
 end
 
-# Reading a number out of text without deciding in advance which half of the
-# numeric tower it belongs to.
+# Reading a number from text that may hold either an integer or a float, and
+# writing numbers by a digit pattern.
 module Number do
-  # Parses +text+ as an +Integer+ or a +Float+, whichever it describes: a
-  # fraction or an exponent makes it a +Float+. The grammar is
+  # Parses +text+ as an +Integer+ or a +Float+, whichever it describes. A
+  # fraction or an exponent makes it a +Float+; otherwise the grammar is
   # +Float.parse+'s.
   #
-  # Use it when the input's shape is not known ahead of time: a config value,
-  # a CSV column that may hold either.
+  # Use it for input such as a config value or a CSV column that may hold
+  # either kind.
   #
   # @param text [String] the text to read
   # @param culture [Culture] whose decimal and group separators to accept
@@ -695,8 +681,8 @@ module Number do
 
   # Builds a +NumberFormat+ from a digit pattern, for +to(String, format)+.
   #
-  # The pattern is checked during compilation (by +validateFormat+), so a
-  # mistake in it fails the build instead of leaving text out at run time.
+  # The pattern is checked during compilation, so a bad pattern is a build
+  # error.
   #
   # - +0+ is a required digit: +000+ pads the integer part to three digits,
   #   and +.00+ always writes two decimals.
@@ -724,7 +710,7 @@ module Number do
     return NumberFormat { pattern: parts.first.or("") + rest.join("") }
   end
 
-  # Checks a +Number.format+ pattern during compilation, pointing at the
+  # Checks a +Number.format+ pattern during compilation and reports the
   # first character that does not fit.
   #
   # @param source [String] the pattern
@@ -737,18 +723,18 @@ module Number do
   end
 end
 
-# How +to(String, format)+ writes a number: a digit pattern such as
-# +"#.00"+, described at +Number.format+. Build one with +Number.format+,
-# which checks the pattern during compilation, or with +NumberFormat.parse+
-# for a pattern known only at run time.
+# A digit pattern such as +"#.00"+ for +to(String, format)+; the patterns are
+# described at +Number.format+. Build one with +Number.format+, which checks
+# the pattern during compilation, or with +NumberFormat.parse+ for a pattern
+# known only at run time.
 record NumberFormat do
   # The digit pattern, such as +"#.00"+.
   pattern : String
 end
 
 module NumberFormat do
-  # Checks a digit pattern known only at run time. +Number.format+
-  # describes the patterns.
+  # Checks a digit pattern known only at run time and returns it as a
+  # +NumberFormat+. +Number.format+ describes the patterns.
   #
   # @param pattern [String] the pattern
   # @return [Result<NumberFormat, PatternError>] the format, or where the
@@ -756,7 +742,7 @@ module NumberFormat do
   #
   # @example
   #   NumberFormat.parse("#.00")   # => Ok(NumberFormat { pattern: "#.00" })
-  #   NumberFormat.parse("#.#0")   # => Error(PatternError { position: 3, ... })
+  #   NumberFormat.parse("#.#0")   # => Error(PatternError { message: "...", position: 3 })
   let parse(pattern: String) -> Result<NumberFormat, PatternError> do
     match layout(pattern) do
       Ok(_) => return Ok(NumberFormat { pattern: pattern })
@@ -764,9 +750,9 @@ module NumberFormat do
     end
   end
 
-  # What a pattern writes: the fewest integer digits, the fewest decimals
-  # and the most decimals. Otherwise the index of its first problem, and
-  # what that problem is.
+  # Returns what a pattern writes: the fewest integer digits, the fewest
+  # decimals and the most decimals. For a bad pattern it returns the index
+  # of the first problem and a message.
   #
   # @param pattern [String] the pattern
   # @return [Result<(Integer, Integer, Integer), (Integer, String)>] the
@@ -853,9 +839,8 @@ make Number do
     end
   end
 
-  # Writes the number in another base, as the generic +to(value, t, radix:)+
-  # does. Declared here as well so that, on a number, it and
-  # +to(String, format)+ are told apart by their argument's type.
+  # Writes the number in another base, like the generic
+  # +to(value, t, radix:)+.
   #
   # @param String [Type] the target type
   # @param radix [Integer] the base, 2 through 36
@@ -865,10 +850,9 @@ make Number do
   #   255.to(String, radix: 16)   # => Just("ff")
   let to(String, radix: Integer) -> String? = Kex.Intrinsic.Fun.convertTo(this, String, radix)
 
-  # Renders the number with a culture's separators: the decimal separator is
-  # substituted and digit groups are inserted per the culture's group sizes.
-  # An exponent, if the rendering has one, passes through unchanged. Answers
-  # +None+ for an invalid culture (see +Culture.valid?+).
+  # Writes the number with a culture's decimal separator and digit grouping.
+  # An exponent passes through unchanged. Returns +None+ for an invalid
+  # culture (see +Culture.valid?+).
   #
   # @param String [Type] the target type
   # @param culture [Culture] the culture to render with
@@ -880,10 +864,10 @@ make Number do
   #   42.to(String, culture: hu)                    # => Just("42")
   let to(String, culture: Culture) -> String? = Culture.renderNumber(this.showValue, culture)
 
-  # Renders the number with a digit pattern and a culture's separators. The
-  # pattern controls precision exactly as +to(String, format)+; the culture
-  # only swaps the symbols. Answers +None+ for an invalid pattern or an
-  # invalid culture.
+  # Writes the number by a digit pattern, then with a culture's separators.
+  # The pattern sets the digits as in +to(String, format)+; the culture only
+  # changes the separators. Returns +None+ for an invalid pattern or
+  # culture.
   #
   # @param String [Type] the target type
   # @param format [NumberFormat] the pattern

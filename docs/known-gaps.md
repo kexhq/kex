@@ -60,7 +60,7 @@ fuller example failed. A uniquely named accessor would not have this failure
 mode; `get` was kept because it is the map-like interface the type presents and
 it makes `m[0]` work.
 
-Related and equally uncharacterized: make-block `let` methods now register
+Related and equally uncharacterized: make-block `let` functions now register
 signatures (`src/semantic/typechecker.cxx`), which fixed `.to(String)` dispatch
 for three specs, yet a minimal one-record reproduction still resolves to the
 prelude. Something in the fuller context enables it.
@@ -102,7 +102,7 @@ resolved with. Resolving the annotation with that same map fixes the signature.
 It cannot land on its own. Giving those functions a concrete result type also
 gives their CALLERS concrete receiver types, and that exposes a second defect
 underneath: `src/stdlib/json.kex:47` then resolves `rest.atEnd?` to
-`FileHandle.atEnd?` even though `rest` is a `Parsing.Input`, because method
+`FileHandle.atEnd?` even though `rest` is a `Parsing.Input`, because function
 overload selection does not filter by receiver type first. Today an
 unconstrained receiver keeps that check permissive and hides it — the same
 shape as the `Match.get` gap above. Receiver-based overload selection is the
@@ -163,8 +163,8 @@ never fails the build — the BEAM backend is secondary by design.
 
 | Spec | Symptom |
 |---|---|
-| `char_type.kex` | `Undefined method: + for Char` at runtime |
-| `my_capitalize.kex` | `Undefined method: + for Char` at runtime |
+| `char_type.kex` | `Undefined function: + for Char` at runtime |
+| `my_capitalize.kex` | `Undefined function: + for Char` at runtime |
 | `module_scoped_make_import_collision.kex` | `if_clause` at runtime |
 | `to_string_universal_with_local.kex` | `function_clause` at runtime |
 | `json_parser.spec.kex` | `Undefined constructor or type: JsonNull` at compile time |

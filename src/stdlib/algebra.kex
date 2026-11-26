@@ -1,39 +1,37 @@
 # Algebraic structures: combining values associatively.
 #
-# Kex traits do not inherit from one another, so concrete types explicitly
-# implement every structure whose laws they satisfy.
+# Kex traits do not inherit from one another, so a type lists every
+# structure it implements.
 #
-# +Monoid+ is "these two values combine, and there is a neutral one". Numbers,
-# strings and lists all satisfy it, which is what lets +repeat+ be written
-# once:
+# A +Monoid+ has an associative +combine+ and a neutral +identity+. Integers,
+# strings and lists are all monoids, so one +repeat+ serves all three:
 #
 #   "ab".repeat(3)   # => "ababab"
 #   [1].repeat(2)    # => [1, 1]
 #   5.repeat(3)      # => 15
 #
-# Ordering and comparison (+Ordering+, +Comparable+) live in
-# `comparable.kex`.
+# +Ordering+ and +Comparable+ are in +comparable.kex+.
 
 # Types whose values combine associatively and have a neutral element.
 #
 # Implemented by +Integer+ (addition), +String+ and +List+ (concatenation),
-# +Map+ and both +Set+ flavours (union), and +Ordering+ ("first decision
-# wins" — declared beside +Ordering+ in `comparable.kex`).
+# +Map+ (merge), +Set+ and +UnorderedSet+ (union), +Stack+, +Queue+, and
+# +Ordering+, where the first decision that is not +Equal+ wins.
 trait Monoid do
-  # The neutral element: combining it with any value gives that value back.
+  # Returns the neutral element: combining it with any value, on either side,
+  # gives that value back.
   #
   # @return [This] the identity
   #
   # @example
   #   Integer.identity   # => 0
   #   String.identity    # => ""
-  # `combine` must be associative and `identity` neutral on both sides.
   identity :> This
 
   # Combines this value with +other+.
   #
-  # Must be associative: +a.combine(b).combine(c)+ and
-  # +a.combine(b.combine(c))+ have to agree.
+  # It must be associative: +a.combine(b).combine(c)+ must equal
+  # +a.combine(b.combine(c))+.
   #
   # @param other [This] the value to combine with
   # @return [This] the combined value
@@ -49,9 +47,8 @@ trait Monoid do
 
   # Combines this value with itself +n+ times.
   #
-  # Repeating zero times, or a negative number of times, gives the identity:
-  # +""+ for a string, +0+ for an integer, +[]+ for a list. Ruby spells the
-  # string case +*+.
+  # Zero or a negative +n+ gives the identity: +""+ for a string, +0+ for an
+  # integer, +[]+ for a list. For strings, this is Ruby's +*+.
   #
   # @param n [Integer] how many copies to combine
   # @return [This] the repeated value
@@ -82,17 +79,18 @@ end
 #
 # Implemented by +Integer+, where the inverse is negation.
 trait Group do
-  # The neutral element.
+  # Returns the neutral element.
   #
   # @return [This] the identity
   identity :> This
 
   # Combines this value with +other+.
   #
+  # @param other [This] the value to combine with
   # @return [This] the combined value
   combine :> This -> This
 
-  # The value that combines with this one to give the identity.
+  # Returns the value that combines with this one to give the identity.
   #
   # @return [This] the inverse
   #
@@ -102,9 +100,9 @@ trait Group do
   inverse :> This
 end
 
-# Implements +Monoid+, +Group+ over +Integer+ for addition.
+# Makes +Integer+ a +Monoid+ and a +Group+ under addition.
 make Integer, implement: Monoid, Group do
-  # +0+: the neutral element for addition.
+  # Returns +0+, the neutral element for addition.
   #
   # @return [Integer] zero
   #
@@ -112,8 +110,7 @@ make Integer, implement: Monoid, Group do
   #   Integer.identity   # => 0
   let identity = 0
 
-  # Adds +other+ to this integer. Addition is the monoid operation for
-  # +Integer+.
+  # Returns the sum of this integer and +other+.
   #
   # @param other [This] the integer to add
   # @return [This] the sum
@@ -122,7 +119,7 @@ make Integer, implement: Monoid, Group do
   #   5.combine(3)   # => 8
   let combine(other: This) -> This = this + other
 
-  # The additive inverse: this integer negated.
+  # Returns this integer negated, its additive inverse.
   #
   # @return [This] the negation
   #
@@ -132,9 +129,9 @@ make Integer, implement: Monoid, Group do
   let inverse -> This = -this
 end
 
-# Implements +Monoid+ over +String+ for concatenation.
+# Makes +String+ a +Monoid+ under concatenation.
 make String, implement: Monoid do
-  # +""+: the neutral element for concatenation.
+  # Returns +""+, the neutral element for concatenation.
   #
   # @return [String] the empty string
   #
@@ -142,8 +139,7 @@ make String, implement: Monoid do
   #   String.identity   # => ""
   let identity = ""
 
-  # Concatenates +other+ onto this string. Concatenation is the monoid
-  # operation for +String+.
+  # Returns this string followed by +other+.
   #
   # @param other [This] the string to append
   # @return [This] the concatenation
@@ -153,18 +149,17 @@ make String, implement: Monoid do
   let combine(other: This) -> This = this + other
 end
 
-# Implements +Monoid+ over +List<A>+ for concatenation.
+# Makes lists a +Monoid+ under concatenation.
 make [A], implement: Monoid do
-  # +[]+: the neutral element for concatenation.
+  # Returns +[]+, the neutral element for concatenation.
   #
   # @return [[A]] the empty list
   #
   # @example
-  #   [1].combine(List.identity)   # => [1]
+  #   [1, 2].identity   # => []
   let identity -> This = []
 
-  # Concatenates +other+ onto this list. Concatenation is the monoid
-  # operation for +List+.
+  # Returns this list followed by +other+.
   #
   # @param other [This] the list to append
   # @return [This] the concatenation
@@ -177,10 +172,10 @@ make [A], implement: Monoid do
   let combine(other: This) -> This = this + other
 end
 
-# Containers whose values can be transformed in place: a list's elements, an
-# optional's value, a result's success. One trait over the constructor
-# (docs/typechecker-hm-plan.md §8.2), so a function written once works on any
-# of them:
+# Containers whose values can be transformed while the container keeps its
+# shape: a list's elements, an optional's value, a result's success. The
+# trait ranges over the container type, so a function written once works on
+# any of them:
 #
 #   let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.map { |x| x + 1 }
 #
@@ -188,7 +183,8 @@ end
 #   bumped(Just(1))    # => Just(2)
 #   bumped(Ok(1))      # => Ok(2)
 #
-# Implemented by +List+, +Optional+ and +Result+ (whose error stays as it is).
+# Implemented by +List+, +Optional+ and +Result+, where an error is left as
+# it is.
 trait Functor<F<_>> do
   # Applies +f+ to each value the container holds, keeping its shape.
   #
@@ -198,52 +194,51 @@ trait Functor<F<_>> do
 end
 
 # Containers whose values can each produce another container of the same
-# kind, flattened into one: the chaining step of a list, an optional or a
-# result.
+# kind, flattened into one. This is the chaining step of a list, an optional
+# or a result.
 #
-#   let halves(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> =
-#     xs.into(f)
+#   let chained(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> = xs.into(f)
 #
 # Implemented by +List+, +Optional+ and +Result+.
 trait Bindable<F<_>> do
-  # Applies +f+ to each value and joins what it answers.
+  # Applies +f+ to each value and joins the containers it returns.
   #
   # @param f [A -> F<B>] the step
   # @return [F<B>] the joined result
   into : F<A> -> (A -> F<B>) -> F<B>
 end
 
-# A container that can also be made from one plain value: +wrap+, beside
-# +into+. Code written once for every such container reaches its
-# constructor through the type, +M.wrap(x)+, as a concrete one is reached by
-# name: +List.wrap(1)+ is +[1]+, +Optional.wrap(1)+ is +Just(1)+, and
-# +Result.wrap(1)+ is +Ok(1)+.
+# A +Bindable+ container that can also be made from one plain value with
+# +wrap+. Generic code calls it through the type parameter, as +M.wrap(x)+;
+# for a concrete type, +List.wrap(1)+ is +[1]+, +Optional.wrap(1)+ is
+# +Just(1)+ and +Result.wrap(1)+ is +Ok(1)+.
 #
 #   let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
 #
 #   incremented([1, 2])   # => [2, 3]
 #   incremented(Just(1))  # => Just(2)
 #
-# Implemented by +List+, +Optional+ and +Result+ (whose error stays as it is).
+# Implemented by +List+, +Optional+ and +Result+, where an error is left as
+# it is.
 trait Monad<F> do
-  # The container holding just +value+.
+  # Returns the container holding only +value+.
   #
   # @param value [A] the value to hold
   # @return [F<A>] the container
   wrap : A -> F<A>
 
-  # Applies +f+ to each value and joins what it answers.
+  # Applies +f+ to each value and joins the containers it returns.
   #
   # @param f [A -> F<B>] the step
   # @return [F<B>] the joined result
   into : F<A> -> (A -> F<B>) -> F<B>
 end
 
-# Containers whose values can be combined with another's when neither depends
-# on the other: +with+ applies a function to the values of both. A list
-# combines every pair, an Optional or a Result the two values or the first
-# failure, and a +Validation+ every value or every failure, all of them, which
-# is what checking several independent inputs wants.
+# Containers whose values can be combined with another container's when
+# neither depends on the other. +with+ applies a function to the values of
+# both. A list combines every pair. An +Optional+ or a +Result+ combines the
+# two values or returns the first failure. A +Validation+ combines the values
+# or collects every failure, which suits checking several independent inputs.
 #
 #   [1, 2].with([10, 20]) { |a, b| a + b }       # => [11, 21, 12, 22]
 #   Just(1).with(Just(2)) { |a, b| a + b }       # => Just(3)
@@ -251,11 +246,11 @@ end
 #     Signup { name: n, email: e }               # every failed check, or a Signup
 #   end
 #
-# +traverse+ and +sequence+ are written once for every one of them.
+# +traverse+ and +sequence+ work with any of them.
 #
 # Implemented by +List+, +Optional+, +Result+ and +Validation+.
 trait Applicable<F> do
-  # The container holding just +value+.
+  # Returns the container holding only +value+.
   #
   # @param value [A] the value to hold
   # @return [F<A>] the container
@@ -264,20 +259,20 @@ trait Applicable<F> do
   # Applies +f+ to this container's values and +other+'s.
   #
   # @param other [F<B>] the other container
-  # @param f [A -> B -> C] what the two values make
+  # @param f [A -> B -> C] combines one value from each
   # @return [F<C>] the results
   with : F<A> -> F<B> -> (A -> B -> C) -> F<C>
 end
 
-# Applies +f+ to every element and gathers what it answers into one container:
-# every result, or what the container makes of the failures (the first for a
-# +Result+, all of them for a +Validation+).
+# Applies +f+ to every element and gathers the results into one container.
+# If any step fails, the result is a failure: the first one for an
+# +Optional+ or +Result+, all of them for a +Validation+.
 #
-#  xs [[A]] the elements
-#  f [A -> F<B>] the step for one element
-#  [F<[B]>] the results, gathered
+# @param xs [[A]] the elements
+# @param f [A -> F<B>] the step for one element
+# @return [F<[B]>] the results, gathered
 #
-# 
+# @example
 #   traverse(["1", "2"]) { |s| s.to(Integer) }   # => Just([1, 2])
 #   traverse(["1", "x"]) { |s| s.to(Integer) }   # => None
 let traverse(F is Applicable => xs: [A], f: A -> F<B>) -> F<[B]> do
@@ -286,13 +281,13 @@ let traverse(F is Applicable => xs: [A], f: A -> F<B>) -> F<[B]> do
   end
 end
 
-# Turns a list of containers into one container of the list: +traverse+ with
+# Turns a list of containers into one container of a list; +traverse+ with
 # nothing to apply.
 #
-#  xs [[F<A>]] the containers
-#  [F<[A]>] their values, gathered
+# @param xs [[F<A>]] the containers
+# @return [F<[A]>] their values, gathered
 #
-# 
+# @example
 #   sequence([Ok(1), Ok(2)])           # => Ok([1, 2])
 #   sequence([Ok(1), Error("no")])     # => Error("no")
 let sequence(F is Applicable => xs: [F<A>]) -> F<[A]> = traverse(xs) { |x| x }

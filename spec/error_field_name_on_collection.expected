@@ -1,4 +1,4 @@
-spec/error_field_name_on_collection.kex:6:23: [KEXET-0101]: Error, undefined method `size` for `[Integer]`
+spec/error_field_name_on_collection.kex:6:23: [KEXET-0101]: Error, undefined function `size` for `[Integer]`
   |
 6 |   IO.printLine(xs.size)
   |                ^^^^^^^

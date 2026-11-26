@@ -2,7 +2,7 @@
 # called on `this`, whichever of its arities the arguments choose. BEAM used
 # to pick by name and arity on its own: with `shown()` beside
 # `shown(suffix)`, `shown("!")` went to the first, the String as its
-# receiver ("Undefined method: shown for String"), where the walker ran the
+# receiver ("Undefined function: shown for String"), where the walker ran the
 # second on `this`.
 record Tag do
   name : String

@@ -536,19 +536,19 @@ a.xref:hover { border-bottom-color: var(--accent-strong); }
 a.self { color: inherit; text-decoration: none; }
 a.self:hover code { border-color: var(--accent); }
 
-/* A method's signature leads its box: the call shape first, prose after. */
+/* A function's signature leads its box: the call shape first, prose after. */
 pre.code.sig { margin-bottom: 0.8rem; padding: 0.6rem 0.9rem; }
 pre.code a.xref { color: inherit; border-bottom: 1px dotted color-mix(in oklab, #e6a960 60%, transparent); }
 
 /* "Implements Monoid, Enumerable." / "Implemented by ...": where a
-   type's methods come from, said right under its heading. */
+   type's functions come from, said right under its heading. */
 .implements, .home-note {
   color: var(--muted);
   font-size: 0.95rem;
   margin: 0 0 1.1rem;
 }
 
-/* A member group inside a type: "Methods", "On [Number]". */
+/* A member group inside a type: "Functions", "On [Number]". */
 .members { margin-top: 1.8rem; }
 .members > h3, .entity > h3 {
   font-family: var(--font-display);
@@ -579,7 +579,7 @@ pre.code a.xref { color: inherit; border-bottom: 1px dotted color-mix(in oklab, 
 .index .tag-foul { font-size: 11px; padding: 0.1rem 0.45rem; }
 .tag-trait:hover { border-color: #c2498a; }
 
-/* Methods a type gets from a trait without writing them. */
+/* Functions a type gets from a trait without writing them. */
 .inherited dt, .elsewhere dt { min-width: 9rem; }
 
 /* ── Reference: finding a member ────────────────────────────────────── */

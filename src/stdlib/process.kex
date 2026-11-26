@@ -1,16 +1,15 @@
 # Processes, tasks and external commands.
 #
 # Kex's concurrency is the BEAM's: lightweight processes that share nothing
-# and communicate by message. There are three things here, and they answer
-# different questions.
+# and talk by sending messages. This file has three parts.
 #
-# +Task+ runs one piece of work somewhere else and gives you the answer back:
+# +Task+ runs one piece of work in another process and hands back its result:
 #
 #   let a = Task.start do expensiveThing(1) end
 #   let b = Task.start do expensiveThing(2) end
 #   (a.await, b.await)
 #
-# +serving+ plus +Process.spawn+ gives a piece of state its own process, with
+# +serving+ with +Process.spawn+ gives a piece of state its own process, with
 # typed calls into it:
 #
 #   record RateLimiter do
@@ -28,13 +27,11 @@
 #   let api = Process.spawn(RateLimiter { remaining: 2 })
 #   api.allowed?()   # => Ok(true)
 #
-# +Process.run+ and +Process.stream+ run an external program.
+# +Process.run+ and +Process.stream+ run an external program:
 #
 #   Process.run("git", ["rev-parse", "HEAD"])
-#
-# Backed by Kex.Intrinsic.Process and the BEAM runtime.
 
-# A handle on work running in another process, with a result you can await.
+# A handle on work running in another process, whose result you can await.
 #
 # Created by +Task.start+.
 type Task<A>
@@ -42,25 +39,25 @@ type Task<A>
 # A monitor reference, returned by +monitor+ and passed back to +demonitor+.
 type Reference
 
-# A process: what +spawn+ makes, +Process.self+ is, and +Process.whereIs+
-# finds. +A+ is the kind of message it accepts, so sending it anything else is
-# refused. A process obtained without a declared message type takes its +A+
-# from where it is used (`Ping(Process.self)` where a +Process<String>+ goes).
+# A process: what +spawn+ makes, what +Process.self+ returns, and what
+# +Process.whereIs+ finds. +A+ is the type of message it accepts, and sending
+# it anything else is a type error. A process obtained without a declared
+# message type takes its +A+ from where it is used (`Ping(Process.self)` where
+# a +Process<String>+ is expected).
 type Process<A>
 
-# A process termination reason. This remains open because the BEAM permits any
-# term as an exit reason; conventional values include `:normal`, `:shutdown`,
-# and structured application errors.
+# Why a process ended. The BEAM allows any term as an exit reason, so this is
+# +Any+; the usual ones are `:normal`, `:shutdown` and application error
+# values.
 type ProcessExitReason = Any
 
-# What a synchronous +slot+ returns: an answer for the caller, and optionally a
+# What a synchronous +slot+ returns: the reply for the caller, and optionally a
 # new state and a reason to stop.
 #
-# `reply` answers the caller immediately. A slot may omit it only when it sends
-# a deferred response with `from.reply(...)`. `new` installs the next serving
-# state; omitting it preserves the current state. `stop` terminates the server
-# after applying the transition. Within a `serving X` block, the checker narrows
-# `new` from `Any?` to `X?`.
+# `reply` goes back to the caller at once. A slot may leave it out only when it
+# answers later with `from.reply(...)`. `new` is the next state; leave it out
+# to keep the current one. `stop` ends the server after the transition. Inside
+# a `serving X` block the checker narrows `new` from `Any?` to `X?`.
 #
 #   slot allowed? -> Reply<Bool> do
 #     let allowed = @remaining > 0
@@ -76,41 +73,41 @@ record Reply<A> do
   # The state the server continues with. Omitted, the current state is kept.
   new : Any? = None
 
-  # A reason to terminate the server after this transition. Omitted, it keeps
+  # A reason to stop the server after this transition. Omitted, it keeps
   # running.
   stop : ProcessExitReason? = None
 end
 
-# The identity of a pending caller, for a slot that answers later rather than
-# immediately. Hand it +reply+ when the answer is ready.
+# A caller still waiting for its reply, for a slot that answers later. Call
+# +reply+ on it when the answer is ready.
 type From<A>
 
-# Why a call into a server failed: it took too long, the process is gone, or
-# it crashed handling the call.
+# Why a call into a server failed: it timed out, the process is gone, or it
+# crashed while handling the call.
 type CallError = Timeout | NoProcess | CallFailed
 
 # A running server and the default timeout for calls into it.
 #
-# Returned by +Process.spawn+. Every +slot+ declared in the type's +serving+
-# block exposes a function taking this +Server+ as its receiver and returning a +Result+.
+# Returned by +Process.spawn+. Each +slot+ in the type's +serving+ block
+# becomes a function on this +Server+ that returns a +Result+.
 record Server<X> do
   # The underlying typed process handle.
   process : Process<X>
 
-  # How long a call waits for an answer, in milliseconds. Change it for one
-  # view of the server with +within+.
+  # How long a call waits for a reply, in milliseconds. +within+ gives a copy
+  # of the handle with a different value.
   timeout : Integer = 5000
 end
 
-# Spawning servers, running external commands, and the ambient process
-# operations.
+# Spawning servers, running external commands, and operations on the calling
+# process.
 module Process do
-  # Starts a process running the +serving+ implementation attached to +state+'s
-  # type, and returns a handle on it.
+  # Starts a process running the +serving+ block of +state+'s type, with
+  # +state+ as its initial state, and returns a handle on it.
   #
-  # The state you pass is the server's initial state. Every +slot+ in the
-  # +serving+ block exposes a function taking the returned +Server+ as its receiver. Each returns
-  # a +Result+: a call can time out or find the process gone.
+  # Each +slot+ in the +serving+ block becomes a function on the returned
+  # +Server+. Each returns a +Result+, because a call can time out or find the
+  # process gone.
   #
   # @param state [X] the server's initial state
   # @return [Server<X>] a handle on the running server
@@ -124,15 +121,13 @@ module Process do
   spawn : X -> Server<X>
   foul spawn(state) = Kex.Intrinsic.Process.spawn(state)
 
-  # Runs an executable with an argument vector and captures its output.
+  # Runs an executable with a list of arguments and captures its output.
   #
-  # No shell is involved, so nothing is glob-expanded or word-split and
-  # arguments containing spaces need no quoting. Output is captured as UTF-8
-  # strings.
+  # No shell is involved: nothing is glob-expanded or split on spaces, and an
+  # argument containing spaces needs no quoting. Output is read as UTF-8.
   #
-  # A non-zero exit status is still +Ok+: the program ran and said something,
-  # which is information, not a failure to run it. +Error+ means the child
-  # could not be started at all.
+  # A non-zero exit status is still +Ok+; check +exitCode+ on the result.
+  # +Error+ means the program could not be started at all.
   #
   # @param command [String] the executable to run
   # @param args [[String]] its arguments, one per element
@@ -157,23 +152,21 @@ module Process do
   run : String -> [String] -> Result<ProcessResult, String>
   foul run(command, args) = Kex.Intrinsic.Process.run(command, args)
 
-  # Runs an executable with a time budget, and kills it if it overruns.
+  # Runs an executable like +run+, and kills it if it is still running after
+  # +timeoutMs+ milliseconds.
   #
-  # Everything +run+ does, plus a deadline: when +timeoutMs+ milliseconds
-  # pass with the child still running, the child's process group is sent
-  # SIGTERM (then SIGKILL after a short grace) and reaped, and the call
-  # answers a timeout Error rather than the child's output. Signalling the
-  # group means forked grandchildren die with it. The budget bounds the
-  # whole call, so a hung child cannot hang the caller.
+  # On timeout the child's process group gets SIGTERM, then SIGKILL after a
+  # short grace period, so anything the child forked dies with it. The call
+  # then returns +Error("timed out after <n>ms")+ and none of the output.
   #
-  # A child that finishes in time answers exactly as +run+ would; a missing
-  # program still reports +executable not found: <command>+ without waiting.
+  # A child that finishes in time gives the same result as +run+, and a missing
+  # program fails at once with +executable not found: <command>+.
   #
   # @param command [String] the executable to run
   # @param args [[String]] its arguments, one per element
   # @param timeoutMs [Integer] milliseconds before the child is killed
   # @return [Result<ProcessResult, String>] the captured result, or why it
-  #   could not start — or that the budget ran out
+  #   could not start or that it timed out
   #
   # @example
   #   match Process.run("sleep", ["30"], 300) do
@@ -183,14 +176,12 @@ module Process do
   run : String -> [String] -> Integer -> Result<ProcessResult, String>
   foul run(command, args, timeoutMs) = Kex.Intrinsic.Process.run(command, args, timeoutMs)
 
-  # Runs an executable with the CALLER's stdin, stdout and stderr, so its
-  # output appears as it is produced rather than in one block when it exits,
-  # and a child that reads the terminal — a REPL, a prompt — has it.
+  # Runs an executable connected to the caller's stdin, stdout and stderr, and
+  # returns its exit code.
   #
-  # Answers the exit code; nothing is captured: that is the trade, and it is
-  # useful for commands whose progress should appear in the terminal.
-  #
-  # +run+ remains the one to use when the output is data to be READ.
+  # Output appears as the program writes it, and a program that reads the
+  # terminal (a REPL, a password prompt) can. Nothing is captured; use +run+
+  # when you need the output as a string.
   #
   # @param command [String] the executable to run
   # @param args [[String]] its arguments, one per element
@@ -205,11 +196,11 @@ module Process do
   stream : String -> [String] -> Result<Integer, String>
   foul stream(command, args) = Kex.Intrinsic.Process.stream(command, args)
 
-  # Runs an executable and returns just its exit code, discarding its output.
+  # Runs an executable and returns its exit code, discarding its output.
   #
-  # A command that could not be started answers +127+, the shell's convention
-  # for "command not found". Use +run+ when you need the output or want to
-  # tell a failed start from a failed run.
+  # A command that could not be started gives +127+, the shell's code for
+  # "command not found". Use +run+ when you need the output or must tell a
+  # failed start from a failed run.
   #
   # @param command [String] the executable to run
   # @param args [[String]] its arguments, one per element
@@ -239,7 +230,7 @@ module Process do
 
   # Sends an exit signal carrying +reason+ to +pid+.
   #
-  # +:normal+ is the ordinary shutdown reason; +:kill+ cannot be trapped.
+  # +:normal+ is the usual shutdown reason; +:kill+ cannot be trapped.
   #
   # @param pid [Process<A>] the process to signal
   # @param reason [X] the exit reason
@@ -250,8 +241,8 @@ module Process do
   exit : Process<A> -> X -> Void
   foul exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
 
-  # Registers +process+ under the atom +name+, so it can be found by name
-  # rather than by passing it around.
+  # Registers +process+ under the atom +name+, so other processes can find it
+  # with +whereIs+.
   #
   # @param process [Process<X>] the process to register
   # @param name [Atom] the name to register it under
@@ -278,23 +269,22 @@ module Process do
   whereIs : Atom -> Process<A>?
   foul whereIs(name) = Kex.Intrinsic.Process.whereIs(name)
 
-  # A named, typed slot of state that every process can read without asking
-  # another process for it.
+  # A named, typed slot that any process can read directly.
   #
-  # State kept in a +serving+ process is copied into the caller on every
-  # read, which is costly for a large value read by every request. A
-  # +Shared+ value is stored once for the whole node (on the BEAM, in
-  # +persistent_term+): reading it copies nothing, however large it is.
+  # State kept in a +serving+ process is copied into the caller on every read,
+  # which is costly for a large value that every request reads. A +Shared+
+  # value is stored once for the whole node (on the BEAM, in
+  # +persistent_term+), and reading it copies nothing however large it is.
   #
-  # The price is on the other side: replacing a value makes the runtime scan
-  # every process for references to the old one. So it suits state that is
-  # read constantly and written rarely, such as configuration or a loaded
-  # site, and not a counter.
+  # Writing is the expensive part: replacing a value makes the runtime scan
+  # every process for references to the old one. Use it for state that is read
+  # constantly and written rarely, such as configuration or a loaded site, not
+  # for a counter.
   #
-  # Get a handle with +Process.Shared.named+. The slot is identified by its
-  # name alone, so two handles with the same name are the same slot; the type
-  # parameter is what a handle promises to store and read back, so give every
-  # handle on one name the same one.
+  # Get a handle with +Process.Shared.named+. The name alone identifies the
+  # slot, so two handles with the same name share it. Nothing checks that
+  # they agree on the type parameter, so give every handle on one name the
+  # same one.
   #
   # @example Loading once, reading from every request handler
   #   let site : Process.Shared<Site> = Process.Shared.named("site")
@@ -304,8 +294,8 @@ module Process do
   type Shared<X>
 
   module Shared do
-    # The handle on the slot called +name+. Nothing is stored or read until
-    # +put+ or +get+.
+    # Returns the handle on the slot called +name+. Nothing is stored or read
+    # until +put+ or +get+.
     #
     # @param name [String] the slot's name
     # @return [Process.Shared<X>] a handle on the slot
@@ -316,22 +306,22 @@ module Process do
   make Shared<X> do
     # Stores +value+, replacing whatever the slot held.
     #
-    # Expensive: see +Process.Shared+.
+    # This is expensive; see +Process.Shared+.
     #
     # @param value [X] the value to store
     # @return [Void]
     put :> X -> Void
     foul put(value) = Kex.Intrinsic.Shared.put(this, value)
 
-    # The stored value, or +None+ when nothing has been stored yet.
+    # Returns the stored value, or +None+ when nothing has been stored yet.
     #
-    # Cheap, whatever the value's size.
+    # This is cheap whatever the value's size.
     #
     # @return [X?] the stored value
     get :> X?
     foul get = Kex.Intrinsic.Shared.get(this)
 
-    # Empties the slot.
+    # Empties the slot and returns what it held.
     #
     # @return [X?] the value it held, or +None+ when it held none
     delete :> X?
@@ -343,9 +333,9 @@ module Process do
   end
 end
 
-# What an external command left behind: its exit status and its output.
+# The exit status and output of an external command.
 #
-# Returned inside +Ok+ by +Process.run+, whatever the exit status.
+# +Process.run+ returns it inside +Ok+ whatever the exit status.
 record ProcessResult do
   # The command's exit status. Zero conventionally means success.
   exitCode : Integer
@@ -357,15 +347,12 @@ record ProcessResult do
   stderr : String
 end
 
-# A spawned Process<X> is a typed process handle backed by the same runtime pid.
-# It therefore supports the ordinary pid lifecycle operations without erasing
-# its message type.
+# Messaging, linking and monitoring a process.
 make Process<X> do
-  # Sends +msg+ to the process. Only a message of the kind it accepts goes.
+  # Sends +msg+ to the process. +msg+ must be of the type the process accepts.
   #
-  # Sending never blocks and never fails, even when the process is gone:
-  # that is the BEAM's model, not an oversight. Monitor the process when
-  # delivery matters.
+  # Sending never blocks and never fails, even when the process is gone.
+  # Monitor the process when you need to know it is still there.
   #
   # @param msg [X] the message to send
   # @return [Void]
@@ -376,8 +363,8 @@ make Process<X> do
   send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
 
-  # Sends the sender-bearing pair +(Process.self, msg)+, so the receiver
-  # knows where to answer.
+  # Sends the pair +(Process.self, msg)+, so the receiver knows where to
+  # reply.
   #
   # @param msg [X] the message to send
   # @return [Void]
@@ -387,12 +374,11 @@ make Process<X> do
   sendFrom :> X -> Void
   let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
 
-  # Links the calling process to this one, so that either one exiting
-  # abnormally takes the other down.
+  # Links the calling process to this one, so that if either exits abnormally
+  # the other exits too.
   #
-  # Linking is bidirectional and is how a group of processes is made to fail
-  # together. Use +monitor+ when you want to be told about a death without
-  # sharing it.
+  # Links work in both directions. Use +monitor+ to be told about an exit
+  # without exiting yourself.
   #
   # @return [Void]
   #
@@ -414,8 +400,8 @@ make Process<X> do
   # the monitor.
   #
   # When the monitored process exits, the caller receives a message about it.
-  # Unlike +link+, a monitor is one-directional and does not propagate the
-  # exit. Pass the reference to +demonitor+ to stop.
+  # Unlike +link+, a monitor works in one direction and the caller does not
+  # exit with it. Call +demonitor+ on the reference to stop.
   #
   # @return [Reference] the monitor reference
   #
@@ -427,8 +413,8 @@ make Process<X> do
 
   # Returns +true+ when the process is still running.
   #
-  # Inherently a snapshot: the process may exit immediately after you ask.
-  # Monitor it when the answer has to stay true.
+  # The process may exit right after you ask. Monitor it when you need to
+  # know when it goes.
   #
   # @return [Bool] +true+ when the process is alive
   #
@@ -439,11 +425,11 @@ make Process<X> do
 end
 
 make Server<X> do
-  # Returns the same server with a different default call timeout, in
+  # Returns a handle on the same server with a different call timeout, in
   # milliseconds.
   #
-  # The server is untouched: this is a new view of it, so one slow call can be
-  # given more room without changing anything for other callers.
+  # The server and other handles on it are unchanged, so one slow call can be
+  # given longer without affecting anyone else.
   #
   # @param timeout [Integer] the call timeout in milliseconds
   # @return [Server<X>] a view of the server with that timeout
@@ -485,10 +471,10 @@ make Server<X> do
 end
 
 make From<X> do
-  # Answers the pending call this value identifies.
+  # Sends +value+ as the reply to the waiting caller.
   #
-  # A slot that cannot answer immediately, because it is waiting on something
-  # else: omits +reply+ from its transition and calls this later instead.
+  # A slot that cannot reply at once, because it is waiting on something
+  # else, leaves +reply+ out of its +Reply+ and calls this later.
   #
   # @param value [X] the answer to send
   # @return [Void]
@@ -509,14 +495,21 @@ end
 
 # Running work in another process and collecting the answer.
 module Task do
-  # Suspends for an elapsed duration. Negative durations are treated as zero.
+  # Suspends the calling process for +duration+. A negative duration counts as
+  # zero.
+  #
+  # @param duration [Duration] how long to sleep
+  # @return [Void]
+  #
+  # @example
+  #   Task.sleep(500.millisecond)
   sleep : Duration -> Void
   foul sleep(duration) = Kex.Intrinsic.Task.sleep(duration)
 
   # Runs +f+ in a new process and returns a handle on its result.
   #
-  # The block starts immediately, so starting several tasks and awaiting them
-  # afterwards is what makes them run at the same time.
+  # The block starts at once. To run several pieces of work at the same time,
+  # start all the tasks first and await them afterwards.
   #
   # @param f [Block<X>] the work to run
   # @return [Task] a handle on the result
@@ -532,11 +525,11 @@ module Task do
   start : Block<X> -> Task<X>
   foul start(f) = Kex.Intrinsic.Task.start(f)
 
-  # Waits for every task in +tasks+ and returns their results, in the order
-  # the tasks were given.
+  # Waits for every task in +tasks+ and returns their results in the same
+  # order.
   #
-  # Each result comes back wrapped in a +Result+, so one task failing does not
-  # cost you the others' answers, just as with +await+ on a single task.
+  # Each result is a +Result+, as from +await+, so one failed task does not
+  # lose the others' results.
   #
   # @param tasks [[Task]] the tasks to wait for
   # @return [[Result<X, Any>]] their results, in order
@@ -552,7 +545,7 @@ module Task do
 end
 
 make Task<X> do
-  # Waits for the task's result, for as long as it takes.
+  # Waits for the task's result, with no time limit.
   #
   # @return [Result<X, Any>] the result or failure reason
   #
@@ -563,15 +556,15 @@ make Task<X> do
 
   # Waits for the task's result, giving up after +timeout+ milliseconds.
   #
-  # Answers +Error(:timeout)+ if the task has not finished in time. The task itself is
-  # not stopped.
+  # Returns +Error(:timeout)+ if the task has not finished in time. The task
+  # keeps running.
   #
   # @param timeout [Integer] how long to wait, in milliseconds
   # @return [Result<X, Any>] the result or failure reason
   #
   # @example
-  #   let t = Task.start do slowThing() end
-  #   t.await(1000)
+  #   let t = Task.start do Task.sleep(2.second) end
+  #   t.await(100)   # => Error(:timeout)
   await :> Integer -> Result<X, Any>
   let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)
 end
@@ -579,15 +572,16 @@ end
 # Supervision trees: processes that restart the processes under them when
 # they crash.
 module Supervisor do
-  # Starts a supervisor over the children its block lists, one per line —
+  # Starts a supervisor over the children its block lists, one per line:
   # +Supervisor.worker+s and nested +Supervisor.supervisor+s. When a child
-  # crashes, +restart+ decides which of its siblings restart with it:
+  # crashes, +restart+ decides which children restart:
   #
-  # - +:only_crashed+ — just the crashed child
-  # - +:crashed_and_newer+ — it and the children listed after it
-  # - +:all+ — every child
+  # - +:only_crashed+: the crashed child
+  # - +:crashed_and_newer+: it and the children listed after it
+  # - +:all+: every child
   #
-  # The interpreter supports +:only_crashed+ without nesting only.
+  # The interpreter (+kex -R+) supports only +:only_crashed+, and no nested
+  # supervisors.
   #
   # @param restart [Atom] the restart strategy
   # @param children [Block<[(Atom, Block<Process<A>>)]>] the block listing the children
@@ -616,8 +610,8 @@ module Supervisor do
   start : Atom -> [(Atom, Block<Process<A>>)] -> Result<Process<A>, Any>
   foul start(restart, children) = Kex.Intrinsic.Supervisor.start(restart, children)
 
-  # A child that runs the block to start, and again to restart. The block
-  # must spawn the worker and return it.
+  # Returns a child spec whose block is run to start the child and again to
+  # restart it. The block must spawn the worker and return it.
   #
   # @param start [Block<Process<A>>] the block that spawns the worker
   # @return [(Atom, Block<Process<A>>)] the worker spec
@@ -627,10 +621,13 @@ module Supervisor do
   worker : Block<Process<A>> -> (Atom, Block<Process<A>>)
   let worker(start) = Kex.Intrinsic.Supervisor.worker(start)
 
-  # A child that is itself a supervisor over the children its block lists,
-  # one per line. Its parent starts it, and restarts it — with all its
-  # children — when the parent's restart strategy says so. Takes the same
-  # +restart:+ strategies as +Supervisor.start+. BEAM backend only.
+  # Returns a child spec for a supervisor over the children its block lists,
+  # one per line.
+  #
+  # The parent starts it, and restarts it with all its children when the
+  # parent's strategy says so. +restart+ takes the same strategies as
+  # +Supervisor.start+. It needs the BEAM backend (plain +kex+); +kex -R+
+  # does not support it.
   #
   # @param restart [Atom] +:only_crashed+, +:all+ or +:crashed_and_newer+
   # @param children [Block<[(Atom, Block<Process<A>>)]>] the block listing its children
@@ -644,7 +641,8 @@ module Supervisor do
   supervisor : Atom -> Block<[(Atom, Block<Process<A>>)]> -> (Atom, Block<Process<A>>)
   let supervisor(restart, children) = Kex.Intrinsic.Supervisor.nested(restart, children)
 
-  # A nested supervisor over a list of children already built.
+  # Returns a child spec for a supervisor over a list of children already
+  # built.
   #
   # @param restart [Atom] the restart strategy
   # @param children [[(Atom, Block<Process<A>>)]] the children

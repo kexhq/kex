@@ -61,7 +61,7 @@ record Tagged do
 end
 
 make Shade do
-  let label -> String = "from the method"
+  let label -> String = "from the function"
 end
 
 let opaque(x: Any) -> Any = x
@@ -92,7 +92,7 @@ end
 # A USER record whose field shares a name with a PRELUDE receiver method, read
 # through an erased receiver. The statically typed read compiled to the local
 # accessor, but the erased one called the prelude's `name/1` directly, skipping
-# the record arms — "Undefined method: name for Person". Every REPL value takes
+# the record arms — "Undefined function: name for Person". Every REPL value takes
 # that path, so it showed up there for any record with a `name` field.
 record Person do
   name : String

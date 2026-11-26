@@ -1,7 +1,7 @@
 # Two overloads that both take a trailing block, one with an `attributes`
 # parameter before it (kexhq/kex#553). Called qualified, `Html.p { … }` was
 # padded to the LONGER overload's defaults, so on BEAM the block became
-# `attributes` and the call failed with "Undefined method: keys for Any". The
+# `attributes` and the call failed with "Undefined function: keys for Any". The
 # overload that takes the block where it is written now answers it. The
 # generated (`%{name}`) and hand-written shapes behave the same.
 

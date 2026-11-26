@@ -56,7 +56,7 @@ KEX_DIAGNOSTIC(MissingMandatoryFields, "KEXET-0456", "missing mandatory fields {
 KEX_DIAGNOSTIC(UnknownRecordType, "KEXET-0457", "unknown record type `{record}`")
 KEX_DIAGNOSTIC(ThenElseConditionNotBool, "KEXET-0458", "then/else condition must be Bool, got {type}")
 KEX_DIAGNOSTIC(AmbiguousOverloadReference, "KEXET-0460", "cannot reference overloaded function `{name}` without disambiguating arguments{signatures}")
-KEX_DIAGNOSTIC(ThisWithoutReceiver, "KEXET-0461", "'this' has no receiver here: it is only bound inside a `make` block method")
+KEX_DIAGNOSTIC(ThisWithoutReceiver, "KEXET-0461", "'this' has no receiver here: it is only bound inside a function of a `make` block")
 KEX_DIAGNOSTIC(NotDefinedForEveryType, "KEXET-0462", "`{name}` is not defined for every `{type}`, which stands for any type")
 KEX_DIAGNOSTIC(CannotAdd, "KEXET-0463", "cannot add {left} and {right}")
 KEX_DIAGNOSTIC(PlusOperandsDiffer, "KEXET-0464", "operator '+' requires matching types, got {left} and {right}")

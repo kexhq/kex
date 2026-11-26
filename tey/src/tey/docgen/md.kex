@@ -1,25 +1,19 @@
-# Markdown → typed blocks → HTML.
+# A Markdown reader: parses a document into blocks and renders them as HTML,
+# so hand-written pages get the same layout as the generated reference.
 #
-# Docgen already had a Markdown *emitter* (Tey.Docgen.Markdown, model → md for
-# LLMs) and an RDoc parser for doc comments; neither reads a Markdown
-# document. This does, so hand-written prose can go through the same chrome as
-# the generated reference.
+# (+Tey.Docgen.Markdown+ goes the other way, writing Markdown from the model.)
 #
-# The subset is what the kex.run guide pages actually use: YAML-ish
-# frontmatter, ATX headings, paragraphs, fenced code (```kex runs through the
-# highlighter), blockquotes, ordered and unordered lists with nesting, GFM
-# tables, thematic breaks, and inline code / bold / italics / links. It is
-# deliberately not CommonMark — there is no HTML passthrough, no reference
-# links, no setext headings — and anything it does not recognise stays a
-# paragraph rather than becoming an error.
-#
-# Nothing here knows about guides, books, or the kexhq site.
+# It reads the subset the kex.run guide pages use: simple +key: value+
+# frontmatter, +#+ headings, paragraphs, fenced code (+kex+ code is
+# highlighted), blockquotes, nested ordered and unordered lists, GFM tables,
+# horizontal rules, and inline code, bold, italics and links. It is not
+# CommonMark: there is no inline HTML, no reference links and no underlined
+# headings. Anything it does not recognise is a paragraph, never an error.
 
 module Tey.Docgen.Md do
 
-  # A document's frontmatter: the keys the prose pipeline reads. Unknown keys
-  # are parsed and ignored rather than rejected, so a page can carry metadata
-  # a later renderer will use.
+  # The frontmatter keys this reader uses. Other keys are ignored, so a page
+  # may carry metadata for something else.
   record Frontmatter do
     title : String = ""
     description : String = ""
@@ -32,6 +26,7 @@ module Tey.Docgen.Md do
     children : [MdBlock]
   end
 
+  # A block of a Markdown document.
   type MdBlock =
     | Heading(Integer, String)
     | Paragraph(String)
@@ -42,19 +37,19 @@ module Tey.Docgen.Md do
     | Table([String], [[String]])
     | Rule
 
+  # A parsed document: its frontmatter and its blocks.
   record Document do
     frontmatter : Frontmatter
     blocks : [MdBlock]
   end
 
-  # The whole job: text in, document out.
+  # Parses a Markdown document. Windows line endings are accepted.
   let parseDocument(text: String) -> Document do
     let (front, body) = splitFrontmatter(text.replace("\r\n", "\n").split("\n"))
     return Document { frontmatter: front, blocks: parseBlocks(body) }
   end
 
-  # Text in, HTML out — `parse` then `render`, which is all a caller wanting a
-  # page body needs.
+  # Returns the HTML for a document's body, ignoring its frontmatter.
   let toHtml(text: String) -> String do
     return render(parseDocument(text).blocks)
   end
@@ -112,7 +107,7 @@ module Tey.Docgen.Md do
     return value
   end
 
-  # Drops the first and last character — the quotes `quoted?` just matched.
+  # Drops the first and last character, the quotes +quoted?+ matched.
   let trimEnds(value: String) -> String do
     return value.drop(1).take(value.count - 2)
   end
@@ -168,8 +163,8 @@ module Tey.Docgen.Md do
     return line.trim.startsWith?("```")
   end
 
-  # `---`, `***` or `___`, three or more, nothing else on the line. Checked
-  # after frontmatter is gone, so a stray `---` here really is a break.
+  # Returns +true+ for a horizontal rule: three or more of +-+, +*+ or +_+ and
+  # nothing else on the line. Frontmatter is removed before this runs.
   let rule?(line: String) -> Bool do
     let t = line.trim
     return false if t.count < 3
@@ -180,7 +175,8 @@ module Tey.Docgen.Md do
     return text.chars.all? { |c| c.string == mark }
   end
 
-  # `##` → 2. Zero when the line is not a heading; `#hashtag` is not one.
+  # Returns a heading's level, so +##+ gives 2, or 0 when the line is not a
+  # heading. +#hashtag+ is not one.
   let headingLevel(line: String) -> Integer do
     let t = line.trim
     let hashes = countHashes(t, 0)
@@ -196,8 +192,8 @@ module Tey.Docgen.Md do
 
   # --- fenced code -------------------------------------------------------
 
-  # The info string is the language. An unterminated fence runs to the end of
-  # the document rather than failing — a truncated page still renders.
+  # Takes a fenced code block. The word after the fence is the language. A
+  # fence that is never closed runs to the end of the document.
   let takeCode(lines: [String]) -> (MdBlock, [String]) do
     let language = lines.first.or("").trim.drop(3).trim
     let rest = lines.drop(1)
@@ -214,8 +210,8 @@ module Tey.Docgen.Md do
 
   # --- blockquotes -------------------------------------------------------
 
-  # `>` is stripped from each line and what remains is parsed as blocks, so a
-  # quote can hold anything a document can, nesting included.
+  # Takes a blockquote. The +>+ is stripped from each line and the rest is
+  # parsed as blocks, so a quote can hold anything a document can.
   let takeQuote(lines: [String]) -> (MdBlock, [String]) do
     let taken = lines.takeWhile { |line| quoteLine?(line) }
     let inner = taken.map { |line| stripQuote(line) }
@@ -235,9 +231,9 @@ module Tey.Docgen.Md do
 
   # --- lists -------------------------------------------------------------
 
-  # Nesting is by indentation: a line indented past the first item's marker
-  # belongs to that item and is parsed as blocks in its own right, so a list
-  # can hold paragraphs, code and deeper lists.
+  # Takes a list. A line indented past the first item's marker belongs to the
+  # item above it and is parsed as blocks, so an item can hold paragraphs, code
+  # and nested lists.
   let takeList(lines: [String]) -> (MdBlock, [String]) do
     let ordered? = numberMarker(lines.first.or("")) != ""
     let taken = lines.takeWhile { |line| listLine?(line) }
@@ -245,9 +241,8 @@ module Tey.Docgen.Md do
     return (ordered? then Numbers(items) else Bullets(items), lines.drop(taken.count))
   end
 
-  # A list continues through its own items, indented continuation lines, and
-  # blank lines — but a blank line followed by unindented text ends it, which
-  # is why the run is cut at the first line that is neither.
+  # Returns +true+ for a line that can continue a list: an item, an indented
+  # line or a blank line. The first other line ends the list.
   let listLine?(line: String) -> Bool do
     return true if line.trim.empty?
     return true if bulletMarker(line) != "" || numberMarker(line) != ""
@@ -269,8 +264,8 @@ module Tey.Docgen.Md do
     return listItems(rest, indent, current + [line], accum)
   end
 
-  # The first line is the item's own text; anything below it is nested
-  # content, dedented so it parses as a document of its own.
+  # Adds the collected item to +accum+. The first line is the item's text; the
+  # lines below it are dedented and parsed as nested blocks.
   let flushItem(current: [String], accum: [ListItem]) -> [ListItem] do
     if current.empty?
       return accum
@@ -313,7 +308,8 @@ module Tey.Docgen.Md do
     return ""
   end
 
-  # "12. " → "12." ; anything else → "".
+  # Returns a numbered-list marker, so +"12. "+ gives +"12."+, or +""+
+  # when the line has none.
   let numberMarker(line: String) -> String do
     let t = line.trim
     let digits = t.chars.takeWhile { |c| c.digit? }.map { |c| c.string }.join("")
@@ -324,8 +320,8 @@ module Tey.Docgen.Md do
 
   # --- tables ------------------------------------------------------------
 
-  # A GFM table is a header row and a delimiter row of dashes; without the
-  # delimiter the lines are ordinary paragraphs.
+  # Returns +true+ when the lines start a GFM table: a header row followed by
+  # a row of dashes. Without that row the lines are a paragraph.
   let tableStart?(lines: [String]) -> Bool do
     return false if lines.count < 2
     return false if !lines.first.or("").contains?("|")
@@ -350,8 +346,8 @@ module Tey.Docgen.Md do
     return (Table(header, rows), rest.drop(bodyLines.count))
   end
 
-  # Leading and trailing pipes are optional, so the split is trimmed of the
-  # empty cells they produce.
+  # Returns the cells of a table row. Leading and trailing pipes are
+  # optional.
   let cellsOf(line: String) -> [String] do
     let t = line.trim
     let inner = t.startsWith?("|") then t.drop(1) else t
@@ -361,8 +357,8 @@ module Tey.Docgen.Md do
 
   # --- paragraphs --------------------------------------------------------
 
-  # Runs to a blank line or to the start of any other construct, so a list or
-  # fence directly under prose is not swallowed into it.
+  # Takes a paragraph, which ends at a blank line or where another block
+  # starts, so a list or code fence right under prose is not swallowed.
   let takeParagraph(lines: [String]) -> (MdBlock, [String]) do
     let taken = lines.takeWhile { |line| paragraphLine?(line) }
     let body = taken.map { |line| line.trim }.join(" ")
@@ -400,9 +396,8 @@ module Tey.Docgen.Md do
     end
   end
 
-  # Kex code goes through the same highlighter the reference pages use, so a
-  # snippet in the guide looks like a signature in the reference. Everything
-  # else is escaped and left plain.
+  # Renders a code block. Kex code goes through the reference pages'
+  # highlighter; other languages are escaped and left plain.
   let renderCode(language: String, body: String) -> String do
     if language == "kex" || language == ""
       return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(body)}</code></pre>"
@@ -432,15 +427,16 @@ module Tey.Docgen.Md do
     return "<tr>${cells}</tr>"
   end
 
-  # A heading's id: lowercase, non-alphanumerics folded to single dashes.
+  # Returns a heading's id: lower case, with each run of characters other than
+  # letters and digits turned into one dash.
   let anchor(text: String) -> String do
     let lowered = stripInline(text).lowerCase
     let mapped = lowered.chars.map { |c| anchorChar(c) }.join("")
     return trimDashes(squeezeDashes(mapped, ""))
   end
 
-  # `String.trim` takes no argument, and the folding above can leave a dash at
-  # either end (`## \`try\`` → `-try-`).
+  # Removes dashes from both ends, which +anchor+ can leave: +(try)+ becomes
+  # +-try-+ before this.
   let trimDashes(text: String) -> String do
     return text if text.empty?
     return trimDashes(text.drop(1)) if text.startsWith?("-")
@@ -462,15 +458,17 @@ module Tey.Docgen.Md do
     return squeezeDashes(text.drop(1), accum + head)
   end
 
-  # Inline markers removed, for anchors and any other plain-text use.
+  # Returns the text with the inline markers (backticks, +*+ and +_+)
+  # removed.
   let stripInline(text: String) -> String do
     return text.replace("`", "").replace("**", "").replace("*", "").replace("_", "")
   end
 
   # --- inline ------------------------------------------------------------
 
-  # Code spans first and separately: their content is escaped but never
-  # scanned for emphasis, so `a*b*c` inside backticks stays literal.
+  # Renders inline Markdown. Code spans are handled first: their content is
+  # escaped but not scanned for emphasis, so +a*b*c+ in backticks stays as
+  # written.
   let inline(text: String) -> String do
     return inlineLoop(text, "")
   end
@@ -494,7 +492,8 @@ module Tey.Docgen.Md do
     end
   end
 
-  # Links before emphasis, so a `*` inside a URL is not read as a marker.
+  # Renders links, then bold and italics, so a +*+ inside a URL is not read
+  # as a marker.
   let emphasis(text: String) -> String do
     return links(text, "")
   end
@@ -518,8 +517,8 @@ module Tey.Docgen.Md do
     end
   end
 
-  # `label](href)` → (label, href, what follows). None when the shape is not
-  # a link after all, in which case the `[` is literal text.
+  # Splits +label](href)+ and what follows it into +(label, href, rest)+, or
+  # returns +None+ when it is not a link, and the +[+ is plain text.
   let linkParts(rest: String) -> (String, String, String)? do
     match rest.indexOf(']') do
       None => None
@@ -538,8 +537,8 @@ module Tey.Docgen.Md do
     end
   end
 
-  # `**bold**` before `*italic*`, or the opening `**` would parse as an empty
-  # emphasis. Escaping happens here, on the text that is left.
+  # Renders bold before italics, or the opening +**+ would be read as empty
+  # italics. The remaining text is escaped here.
   let marks(text: String) -> String do
     return wrap(esc(text), "**", "strong", "*", "em")
   end
@@ -550,8 +549,8 @@ module Tey.Docgen.Md do
     return pairs(bolded, emMark, emTag, "")
   end
 
-  # Replaces each surviving pair of markers with a tag. An unpaired marker is
-  # left as written rather than swallowing the rest of the line.
+  # Replaces each pair of markers with a tag. A marker without a partner is
+  # left as written.
   let pairs(text: String, mark: String, tag: String, accum: String) -> String do
     match indexOfText(text, mark, 0) do
       None => accum + text
@@ -570,9 +569,8 @@ module Tey.Docgen.Md do
     end
   end
 
-  # Where `needle` first occurs in `haystack`, or None. String.indexOf takes a
-  # Char, and the markers here are two characters wide ("**"), so the search
-  # is spelled out.
+  # Returns where +needle+ first occurs in +haystack+ from +at+ on, or
+  # +None+. +String.indexOf+ only finds a +Char+, and +**+ is two characters.
   let indexOfText(haystack: String, needle: String, at: Integer) -> Integer? do
     return None if at + needle.count > haystack.count
     return Just(at) if haystack.drop(at).startsWith?(needle)

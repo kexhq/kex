@@ -1,3 +1,8 @@
+# Local overrides: +package.local.kex+ files that point a dependency at a
+# checkout on this machine.
+#
+# The files are never committed. +set+ adds them to +.gitignore+, and a
+# tracked one is an error.
 module Tey.Local
 
 using JSON
@@ -5,6 +10,8 @@ using Tey.Manifest, only: [LocalOverride, ManifestPackage]
 using Tey.Workspace, only: [Context]
 using Tey.Plugin, only: [fingerprints]
 
+# A local override: the package name, the checkout it points at, the
+# +package.local.kex+ that declares it, and the checkout's manifest.
 record Override do
   overrideName : String
   overridePath : String
@@ -12,12 +19,22 @@ record Override do
   overrideManifest : ManifestPackage
 end
 
+# Returns the overrides declared at the workspace root and in every member.
+#
+# It is an error when an override's checkout has no +package.kex+ or declares
+# a different package, when one name is overridden in more than one place, or
+# when a +package.local.kex+ is tracked by Git.
 foul load(context: Context) -> [Override] or! String do
   let memberRoots = context.members.map { |member| member.memberRoot }
   return Tey.Local.loadRoots([context.workspaceRoot, ...memberRoots].uniq,
                              context.workspaceRoot, [])
 end
 
+# Points +name+ at the checkout at +path+, in the +package.local.kex+ of the
+# current member or else of the workspace root, and returns the package name.
+#
+# A relative +path+ is relative to that directory. Any earlier override of the
+# same name in that file is replaced.
 foul set(context: Context, name: String, path: String) -> String or! String do
   let root = match context.currentMember do
     Just(member) => member.memberRoot
@@ -48,6 +65,8 @@ foul set(context: Context, name: String, path: String) -> String or! String do
   return Ok(manifest.name)
 end
 
+# Removes the override of +name+ from the file that declares it, and returns
+# +name+.
 foul remove(context: Context, name: String) -> String or! String do
   let overrides = Tey.Local.load(context).try
   let override = match overrides.find { |entry| entry.overrideName == name } do
@@ -66,6 +85,8 @@ foul remove(context: Context, name: String) -> String or! String do
   return Ok(name)
 end
 
+# Checks that each override matches what +tey.lock+ records for its package:
+# the same version, the same dependencies and the same plugin interfaces.
 let validateAgainstLock(overrides: [Override], lock: Tey.Lockfile.LockState) -> Void or! String do
   overrides.each do |override|
     let found = lock.lockedDependencies.find do |dependency|
@@ -92,9 +113,10 @@ let validateAgainstLock(overrides: [Override], lock: Tey.Lockfile.LockState) -> 
 end
 
 private do
-  # The overrides a `package.local.kex` at `root` declares, each checked to
-  # be a package. The first that is not fails them all: a `.try` in a
-  # `map` block would be that element's result, not this function's.
+  # Returns the overrides a +package.local.kex+ at +root+ declares, each
+  # checked to be a package. The first that is not fails the whole call, which
+  # is why this recurses: a +.try+ inside a +map+ block would only fail that
+  # element.
   foul overridesOf(entries: [Tey.Manifest.LocalOverride], root: String,
                    file: String) -> [Override] or! String do
     return Ok([]) if entries.empty?

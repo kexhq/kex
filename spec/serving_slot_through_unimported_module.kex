@@ -16,7 +16,7 @@
 # it out in full. With no candidate left, the slot call fell all the way
 # through to the runtime's generic method dispatcher, which has no case for
 # a `Server` handle: `kex -C` reports nothing wrong, and the first real call
-# dies with `Undefined method: filed for Server`. Fixed by unwrapping
+# dies with `Undefined function: filed for Server`. Fixed by unwrapping
 # `Server<T>` to `T` before reading the module prefix, same as an ordinary
 # receiver already gets.
 #

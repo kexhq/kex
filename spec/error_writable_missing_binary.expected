@@ -1,4 +1,4 @@
-spec/error_writable_missing_binary.kex:3:1: [KEXET-0131]: Error, make TextWriter, implement: Writable. Missing required method 'put'
+spec/error_writable_missing_binary.kex:3:1: [KEXET-0131]: Error, make TextWriter, implement: Writable. Missing required function 'put'
   |
 3 | make TextWriter, implement: Writable do
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

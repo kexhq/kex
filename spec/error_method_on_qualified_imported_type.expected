@@ -1,4 +1,4 @@
-spec/error_method_on_qualified_imported_type.kex:9:27: [KEXET-0101]: Error, undefined method `nmuber` for `Net.Port`
+spec/error_method_on_qualified_imported_type.kex:9:27: [KEXET-0101]: Error, undefined function `nmuber` for `Net.Port`
   |
 9 |   IO.printLine(port.nmuber)
   |                ^^^^^^^^^^^

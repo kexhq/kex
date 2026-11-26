@@ -1,4 +1,4 @@
-spec/error_trait_foul_method.kex:7:1: [KEXET-0132]: Error, make Record, implement: Storable. Method 'save' must be declared foul (trait requires it)
+spec/error_trait_foul_method.kex:7:1: [KEXET-0132]: Error, make Record, implement: Storable. Function 'save' must be declared foul (trait requires it)
   |
 7 | make Record, implement: Storable do
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

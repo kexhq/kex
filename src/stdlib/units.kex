@@ -1,30 +1,28 @@
 # Numbers that carry a unit.
 #
-# Writing +5.second+ or +90.minute+ gives you a +Measure+: a number, the unit it
-# was written in, and the same quantity in that dimension's base unit. Adding,
-# subtracting and converting all go through the canonical value, so the
-# arithmetic is right regardless of which units the operands were written in.
-# The dimension is part of the type (+Measure<Quantity.Time>+), so mixing
-# dimensions does not type-check rather than giving a silently wrong number.
+# +5.second+ and +90.minute+ are +Measure+s: a number, the unit it was
+# written in, and the same quantity in the base unit of its dimension.
+# Arithmetic and conversion use the base-unit value, so operands can be in
+# different units. The dimension is part of the type, as in
+# +Measure<Quantity.Time>+, so adding a time to a length does not type-check.
 #
-#   5.second.to(String)                     # => Just("5.0 s")
-#   1.5.hour.to(String)                  # => Just("1.5 h")
-#   (1.hour + 30.minute).to(String)        # => Just("1.5 h")
-#   90.minute.convert(Hour)              # => Ok(1.5 h)
+#   5.second.to(String)                       # => Just("5.0 s")
+#   1.5.hour.to(String)                       # => Just("1.5 h")
+#   (1.hour + 30.minute).to(String)           # => Just("1.5 h")
+#   90.minute.to(String, in: Hour)            # => Just("1.5 h")
 #
-# The time units (+nanosecond+ through +week+) are in the prelude. Other
-# dimensions live in opt-in modules under +Units+, and every one of them
-# measures against the same machinery here.
+# The time units, +nanosecond+ through +week+, are in the prelude. Units for
+# other dimensions are in opt-in modules under +Units+, such as +Units.SI+
+# and +Units.Data+, and use the same +Measure+.
 #
-# A +Measure+ is a measurement, not an elapsed span: +5.second+ describes a
-# quantity, while +Duration+ is what +Time+ and +Date+ use for a span between
-# two moments.
+# A time measure is a +Duration+, the span type that +Time+, +Date+ and
+# +DateTime+ take: +Date.today() + 3.day+.
 
-# The trait a unit implements: how it converts to its dimension's base unit,
-# which dimension that is, and how it is written.
+# The trait every unit implements: its conversion factor to the base unit
+# of its dimension, the dimension, and its symbol.
 trait Unit do
-  # How many base units one of this unit is: +60.0+ for a minute, whose base
-  # unit is the second.
+  # Returns how many base units one of this unit is: +60.0+ for a minute,
+  # since the base unit of time is the second.
   #
   # @return [Float] the conversion factor
   #
@@ -32,8 +30,8 @@ trait Unit do
   #   Minute.factor   # => 60.0
   factor :> Float
 
-  # Which dimension this unit measures, as an atom. Only measures of the same
-  # kind can be added or converted between.
+  # Returns the dimension this unit measures, as an atom. Only measures of the
+  # same dimension can be added or converted into each other.
   #
   # @return [Atom] the dimension tag
   #
@@ -41,7 +39,7 @@ trait Unit do
   #   Second.kind   # => :time
   kind :> Atom
 
-  # How this unit is written when a measure is displayed.
+  # Returns the symbol a measure in this unit is shown with.
   #
   # @return [String] the unit's symbol
   #
@@ -50,7 +48,7 @@ trait Unit do
   symbol :> String
 end
 
-# The dimension a measure belongs to.
+# Returns the dimension of a measure, as an atom.
 #
 # @param measure [Measure] the measure to inspect
 # @return [Atom] the dimension tag
@@ -59,7 +57,7 @@ end
 #   measureKind(5.second)   # => :time
 let measureKind(measure: Measure<D>) -> Atom = measure.unit.dimension
 
-# The symbol a measure displays with.
+# Returns the symbol of a measure's unit.
 #
 # @param measure [Measure] the measure to inspect
 # @return [String] the unit's symbol
@@ -68,7 +66,7 @@ let measureKind(measure: Measure<D>) -> Atom = measure.unit.dimension
 #   measureSymbol(5.minute)   # => "min"
 let measureSymbol(measure: Measure<D>) -> String = measure.unit.notation
 
-# The conversion factor of a measure's unit.
+# Returns the conversion factor of a measure's unit to its base unit.
 #
 # @param measure [Measure] the measure to inspect
 # @return [Float] the conversion factor
@@ -77,10 +75,11 @@ let measureSymbol(measure: Measure<D>) -> String = measure.unit.notation
 #   measureFactor(5.minute)   # => 60.0
 let measureFactor(measure: Measure<D>) -> Float = measure.unit.conversionFactor
 
-# A unit described at run time rather than by a constructor.
+# A unit described by its fields instead of a constructor.
 #
-# Runtime-defined units are used for prefixes and units derived by arithmetic:
-# +m^2+ from squaring a length, a kilo- prefix applied to a base unit.
+# Every +Measure+ stores its unit this way. Prefixed units and units made by
+# arithmetic, such as +m^2+ from squaring a length or a kilo- prefix on a
+# base unit, exist only in this form.
 record UnitDefinition do
   # How many base units one of this unit is.
   conversionFactor : Float
@@ -109,13 +108,14 @@ make UnitDefinition, implement: Unit do
   let symbol = @notation
 end
 
-# What a measure measures, as a type: the +D+ of +Measure<D>+. Every unit's
-# constructor says its dimension (+1.second+ is a +Measure<Quantity.Time>+,
-# +1.meter+ a +Measure<Quantity.Length>+), so adding, comparing or ordering
+# The dimensions a measure can have, as types: the +D+ of +Measure<D>+.
+#
+# Each unit fixes its dimension: +1.second+ is a +Measure<Quantity.Time>+ and
+# +1.meter+ a +Measure<Quantity.Length>+, so adding, comparing or ordering
 # measures of different dimensions is a type error. These types have no
-# values; they only tell measures apart. A measure made by unit arithmetic has
-# its dimension too: +1.watt * 1.hour+ is a +Measure<Quantity.Energy>+, by the
-# products Units.SI declares, and a product it does not declare is a type error.
+# values. Unit arithmetic gives a dimension too: +1.watt * 1.hour+ is a
+# +Measure<Quantity.Energy>+, from the products +Units.SI+ declares, and a
+# product it does not declare is a type error.
 module Quantity do
   record Time do
   end
@@ -143,9 +143,9 @@ module Quantity do
   end
   record Charge do
   end
-  # Derived dimensions, named as the products and quotients in Units.SI make
-  # them: length over time is a speed, speed over time an acceleration, force
-  # over length a pressure, a length squared an area.
+  # Dimensions derived from others by the products and quotients in
+  # +Units.SI+: length over time is speed, speed over time acceleration,
+  # force over length pressure, and length squared area.
   record Area do
   end
   record Speed do
@@ -156,14 +156,14 @@ module Quantity do
   end
 end
 
-# A quantity with a unit, of dimension +D+ (a +Quantity+ type).
+# A quantity with a unit, of dimension +D+, one of the +Quantity+ types.
 #
-# A Measure is shared by every unit module. `canonical` stores the value in
-# that dimension's base unit; its Unit controls its display. That split is what
-# makes +1.hour + 30.minute+ correct and still print in hours.
+# Every unit module uses this record. +canonical+ holds the value in the
+# dimension's base unit and +unit+ decides how it is shown, which is how
+# +1.hour + 30.minute+ comes out right and still prints in hours.
 record Measure<D> do
-  # The quantity in the dimension's base unit: seconds, for time. Arithmetic
-  # and conversion go through this.
+  # The quantity in the dimension's base unit, such as seconds for time.
+  # Arithmetic and conversion use this value.
   canonical : Float
 
   # The quantity as written, in this measure's own unit.
@@ -173,11 +173,12 @@ record Measure<D> do
   unit : UnitDefinition
 end
 
-# An elapsed span of time: a measure of time. +5.second+ is a Duration, and
-# Time, Date and DateTime take one: +Date.today + 3.day+.
+# A span of time, which is any measure of time.
+#
+# +Time+, +Date+ and +DateTime+ take one: +Date.today() + 3.day+.
 type Duration = Measure<Quantity.Time>
 
-# The time units, from nanoseconds to weeks. The base unit is the second.
+# The units of time, from nanoseconds to weeks. The base unit is the second.
 type TimeUnit = Nanosecond | Microsecond | Millisecond
               | Second | Minute | Hour | Day | Week
 
@@ -203,10 +204,10 @@ make TimeUnit, implement: Unit do
   let symbol(@Week) = "wk"
 end
 
-# Time-unit constructors on +Integer+: +5.second+, +90.minute+, +2.week+.
+# Time measures from an +Integer+: +5.second+, +90.minute+, +2.week+.
 #
-# Each answers a +Measure+ whose display unit is the one you named, so
-# +90.minute+ prints as minutes even though it is stored as 5400 seconds.
+# The measure is shown in the unit you named, so +90.minute+ prints as
+# minutes, though it holds 5400 seconds as its base value.
 make Integer do
   # This many nanoseconds, as a +Measure+.
   #
@@ -232,8 +233,8 @@ make Integer do
   #   500.millisecond.to(String)   # => Just("500.0 ms")
   let millisecond -> Measure<Quantity.Time> = this.timeMeasure(Millisecond)
 
-  # This many seconds, as a +Measure+. Seconds are the base unit of time, so
-  # this is the one everything else converts through.
+  # Returns this many seconds, as a +Measure+. The second is the base unit of
+  # time.
   #
   # @return [Measure] the quantity, displayed in seconds
   #
@@ -246,7 +247,7 @@ make Integer do
   # @return [Measure] the quantity, displayed in minutes
   #
   # @example
-  #   90.minute.convert(Hour)   # => Ok(1.5 h)
+  #   90.minute.to(String, in: Hour)   # => Just("1.5 h")
   let minute -> Measure<Quantity.Time> = this.timeMeasure(Minute)
 
   # This many hours, as a +Measure+.
@@ -289,8 +290,8 @@ make Integer do
   end
 end
 
-# The same time-unit constructors on +Float+, for fractional quantities:
-# +1.5.hour+, +0.25.second+.
+# Time measures from a +Float+, for fractional amounts: +1.5.hour+,
+# +0.25.second+.
 make Float do
   # This many nanoseconds, as a +Measure+.
   #
@@ -383,13 +384,13 @@ make Measure<D>, implement: Showable do
     return @value.to(String, format).map { |text| "${text} ${@unit.notation}" }
   end
 
-  # Renders the measure in another time unit: +convertTo+, then +to(String)+.
+  # Renders the measure in another time unit.
   #
-  # Every unit module supplies the same call for its own units, so a measure
-  # is displayed in a named unit the same way whatever it measures:
-  # +in: Kilo(Meter)+ with +Units.SI+, +in: MiB+ with +Units.Data+.
+  # Each unit module has the same function for its own units, so a measure
+  # of any kind is shown in a chosen unit the same way: +in: Kilo(Meter)+
+  # with +Units.SI+, +in: MiB+ with +Units.Data+.
   #
-  # Answers +None+ when the measure is not a time.
+  # Returns +None+ when the measure is not a time.
   #
   # @param String [Type] the target type
   # @param in [TimeUnit] the unit to display in
@@ -405,8 +406,10 @@ make Measure<D>, implement: Showable do
     end
   end
 
-  # Renders the measure in another time unit, its value written by a digit
-  # pattern (see +Number.format+).
+  # Renders the measure in another time unit, with its number written by a
+  # digit pattern (see +Number.format+).
+  #
+  # Returns +None+ when the measure is not a time.
   #
   # @example
   #   100.minute.to(String, in: Hour, format: Number.format`#.00`)   # => Just("1.67 h")
@@ -418,17 +421,22 @@ make Measure<D>, implement: Showable do
     end
   end
 
-  # Chooses the largest unit whose absolute value is at least one.
-  # Time uses nanoseconds through weeks; data uses bytes through terabytes
-  # (+binary: true+ selects KiB through TiB). SI dimensions use decimal
-  # prefixes. Zero uses the family's base unit; smaller values use its
-  # smallest unit. Other dimensions keep their current unit.
+  # Returns the measure in the largest unit in which its size is at least 1.
+  #
+  # Time picks from nanoseconds through weeks, data from bytes through
+  # terabytes, and SI dimensions from the decimal prefixes nano through giga.
+  # Zero is shown in the base unit, and a value smaller than the smallest unit
+  # in that unit. Measures of other dimensions keep their unit.
   #
   # @example
   #   90.second.scaled.to(String, Number.format`#.#`)   # => Just("1.5 min")
   let scaled -> This = this.scaled(false)
 
-  # As +scaled+, using binary scales for data when +binary+ is true.
+  # Returns the measure in the largest unit in which its size is at least 1,
+  # as +scaled+ does. With +binary+ true, data uses KiB through TiB.
+  #
+  # @param binary [Bool] whether data uses powers of 1024
+  # @return [This] the measure in the chosen unit
   let scaled(binary: Bool) -> This do
     let base = scaledMeasureBase(@unit)
     let family = scaledMeasureFamily(base, binary)
@@ -443,9 +451,9 @@ make Measure<D>, implement: Showable do
     }
   end
 
-  # Renders the measure as its value and unit, so +IO.printLine+ and
-  # interpolation show +5.0 W+ rather than the record's fields. Inspecting
-  # it (the REPL's echo, +inspected+) still shows the record itself.
+  # Renders the measure as its number and unit symbol, which is what
+  # +IO.printLine+ and interpolation show. +inspected+ and the REPL show the
+  # record's fields instead.
   #
   # @return [String] the value and the unit's symbol
   #
@@ -455,8 +463,7 @@ make Measure<D>, implement: Showable do
 
   # Multiplies the measure by a plain number, keeping its unit.
   #
-  # The unit is unchanged, so this scales a quantity rather than converting
-  # it: three of a two-second interval is six seconds.
+  # Three times a two-second interval is six seconds, shown in seconds.
   #
   # @param multiplier [Number] the factor to multiply by
   # @return [Measure] the scaled measure
@@ -473,9 +480,9 @@ make Measure<D>, implement: Showable do
     }
   end
 
-  # The display unit raised to a power, for the powers declared below
-  # (+squared+, +cubed+): its factor raised, its notation recording the power,
-  # and +dimension+ the dimension the power makes.
+  # Returns this measure's unit raised to +exponent+, for +squared+ and
+  # +cubed+: the factor raised to that power, a notation such as +m^2+, and
+  # the given dimension.
   #
   # @param exponent [Integer] the power
   # @param dimension [Atom] the resulting dimension (+:area+, +:volume+)
@@ -488,11 +495,9 @@ make Measure<D>, implement: Showable do
 
   # Converts the measure to another unit of the same dimension.
   #
-  # Answers +Error+ when the dimensions differ: you cannot express seconds in
-  # bytes, and this says so rather than producing a wrong number.
-  #
-  # Units from opt-in modules such as +Units.SI+ and +Units.Data+ can be used
-  # here too, provided their dimension matches.
+  # Units from opt-in modules such as +Units.SI+ and +Units.Data+ work too.
+  # Converting to a unit of another dimension, such as seconds to meters, is
+  # an +Error+.
   #
   # @param unit [Unit] the unit to convert to
   # @return [Result<Measure, String>] the converted measure, or why it could not be
@@ -516,8 +521,8 @@ make Measure<D>, implement: Showable do
     end
   end
 
-  # Converts the measure to another time unit. The short spelling of
-  # +convertTo+, kept for prelude time measures.
+  # Converts the measure to another time unit; +convertTo+ for time units
+  # only.
   #
   # @param unit [TimeUnit] the time unit to convert to
   # @return [Result<Measure, String>] the converted measure, or why it could not be
@@ -530,10 +535,8 @@ make Measure<D>, implement: Showable do
 
   # Adds two measures of the same dimension.
   #
-  # The units need not match: the sum goes through the canonical values, and
-  # comes back displayed in the LEFT operand's unit. The dimension is the
-  # type's (+Measure<D>+), so adding measures of different dimensions does not
-  # type-check.
+  # The units can differ. The sum is shown in the left operand's unit.
+  # Adding measures of different dimensions does not type-check.
   #
   # @param other [Measure] a measure of the same dimension
   # @return [Measure] the sum, in this measure's unit
@@ -546,7 +549,7 @@ make Measure<D>, implement: Showable do
 
   # Subtracts a measure of the same dimension.
   #
-  # Like +++, the result is displayed in the left operand's unit.
+  # As with +++, the result is shown in the left operand's unit.
   #
   # @param other [Measure] a measure of the same dimension
   # @return [Measure] the difference, in this measure's unit
@@ -556,7 +559,7 @@ make Measure<D>, implement: Showable do
   - :> Measure<D> -> Measure<D>
   let -(other) = this.inOwnUnit(this.canonical - other.canonical)
 
-  # The canonical quantity +total+, displayed in this measure's unit.
+  # Returns a measure of +total+ base units, shown in this measure's unit.
   let inOwnUnit(total: Float) -> This = Measure { canonical: total, value: total / this.unit.factor, unit: this.unit }
 
   private do
@@ -645,30 +648,23 @@ make Measure<D>, implement: Showable do
   end
 end
 
-# A measure is its quantity: +1.minute == 60.second+, +1.kilometer ==
-# 1000.meter+. Equality and ordering compare the canonical value, in the
-# dimension's base unit, whatever unit each was written in. Measures of
-# different dimensions are never equal, and ordering them is a type error
-# (+1.second < 1.meter+). A measure whose dimension is known only at run time
-# (one made by unit arithmetic) is compared by its canonical value alone.
-# The powers of a length that name a dimension, overloaded on the exponent
-# as +*+ and +/+ are on the dimensions: +3.meter ^ 2+ is an area, +2.meter ^
-# 3+ a volume, the literal choosing which. Any other power goes through
-# +Units.Dynamic+'s +pow+, which checks it at run time.
+# Powers of a length that have a dimension: +3.meter ^ 2+ is an area and
+# +2.meter ^ 3+ a volume, the exponent literal choosing which. Other powers
+# go through +pow+ in +Units.Dynamic+, which checks them at run time.
 make Measure<Quantity.Length> do
-  # The length squared, written as a power: +squared+.
+  # Returns the length squared, the same as +squared+.
   #
   # @example
   #   (3.meter ^ 2).to(String)   # => Just("9.0 m^2")
   let ^(2) -> Measure<Quantity.Area> = this.squared
 
-  # The length cubed, written as a power: +cubed+.
+  # Returns the length cubed, the same as +cubed+.
   #
   # @example
   #   (2.meter ^ 3).canonical   # => 8.0
   let ^(3) -> Measure<Quantity.Volume> = this.cubed
 
-  # The length squared: an area.
+  # Returns the length squared, which is an area.
   #
   # @return [Measure<Quantity.Area>] the area, displayed as the unit squared
   #
@@ -680,7 +676,7 @@ make Measure<Quantity.Length> do
     unit: this.raisedUnit(2, :area)
   }
 
-  # The length cubed: a volume, which converts to litres.
+  # Returns the length cubed, which is a volume and converts to litres.
   #
   # @return [Measure<Quantity.Volume>] the volume, displayed as the unit cubed
   #
@@ -693,11 +689,18 @@ make Measure<Quantity.Length> do
   }
 end
 
+# Equality and ordering of measures by quantity: +1.minute == 60.second+ and
+# +1.kilometer == 1000.meter+, whatever units each was written in.
+#
+# Measures of different dimensions are never equal, and ordering them, as in
+# +1.second < 1.meter+, is a type error. A measure whose dimension is only
+# known at run time, made by unit arithmetic, is compared by its base-unit
+# value alone.
 make Measure<D>, implement: Comparable do
-  # Whether +other+ is the same quantity of the same dimension.
+  # Returns +true+ when +other+ is the same quantity of the same dimension.
   #
   # @param other [Measure] the measure to compare with
-  # @return [Bool] true when both measure the same amount of the same thing
+  # @return [Bool] +true+ when both measure the same amount of the same thing
   #
   # @example
   #   1.minute == 60.second   # => true
@@ -707,7 +710,7 @@ make Measure<D>, implement: Comparable do
     return this.unit.kind == other.unit.kind && this.canonical == other.canonical
   end
 
-  # How this quantity orders against +other+, of the same dimension.
+  # Compares this quantity with +other+, a measure of the same dimension.
   #
   # @param other [Measure] a measure of the same dimension
   # @return [Ordering] +Less+, +Equal+ or +Greater+
@@ -718,8 +721,8 @@ make Measure<D>, implement: Comparable do
   compare :> Measure<D> -> Ordering
   let compare(other) = this.canonical.compare(other.canonical)
 
-  # Ordering, as +Comparable+ defines it, for measures of one dimension: the
-  # trait's own operators take any value, so these say +Measure<D>+.
+  # The ordering operators of +Comparable+, typed to take only a measure of
+  # the same dimension.
   < :> Measure<D> -> Bool
   let <(other) = this.compare(other) == Less
   > :> Measure<D> -> Bool
@@ -730,13 +733,13 @@ make Measure<D>, implement: Comparable do
   let >=(other) = this.compare(other) != Less
 end
 
-# Time-unit constructors, also available directly from the prelude.
+# The time units under the +Units+ name. They are also in the prelude.
 #
-# +Units.Hour+ and +Hour+ name the same constructor: they match the same
-# patterns and compare equal. Use the qualified spelling to make the unit
-# family explicit.
+# +Units.Hour+ and +Hour+ are the same constructor: they match the same
+# patterns and compare equal. The qualified name makes the unit family
+# explicit.
 #
-#   90.minute.convert(Units.Hour)   # => Ok(1.5 h)
+#   90.minute.to(String, in: Units.Hour)   # => Just("1.5 h")
 module Units do
   let Nanosecond = Nanosecond
   let Microsecond = Microsecond

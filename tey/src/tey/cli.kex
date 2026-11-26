@@ -7,12 +7,11 @@ using Tey.Programs, only: [InstallOptions]
 using Tey.SelfUpdate, only: [UpgradeOutcome]
 using Tey.Toolchain, only: [installSource, use]
 
-# Options AND commands in one declaration: OptionParser matches the command
-# words, strips them, and hands the handler what is left. Tey keeps no
-# dispatcher of its own, so the help text and what actually runs cannot drift
-# apart — they are read off the same list.
+# Returns Tey's built-in options and commands as one +OptionConfig+.
 #
-# `foul` because the handlers do things.
+# +OptionParser+ matches the command words, removes them, and passes the rest
+# to the handler. The help text and the dispatch come from this one list, so
+# they cannot disagree.
 foul parser -> OptionConfig do
   OptionParser.define("tey", "Package and Kex toolchain manager")
     .flag("help", Just('h'), "Show this help")
@@ -172,15 +171,14 @@ foul parser -> OptionConfig do
     end
 end
 
-# The parser Tey actually runs: the declared commands, plus one for every
-# `command(...)` this package's manifest declares. Registering them here
-# rather than in a fallback is what gets them into `tey help`, into the
-# unknown-command message, and into argument stripping, for free.
+# Returns the parser Tey runs: +parser+ plus one command for each
+# +command(...)+ in the current package's manifest.
 #
-# A package command can never shadow a built-in: the manifest reader refuses
-# those names outright (Tey.Manifest.reservedCommands). They are listed under
-# their own help heading regardless — "unknown command" should send a reader to
-# package.kex or to Tey, and the two lists are written by different people.
+# Because they are declared like the built-ins, package commands appear in
+# +tey help+ and in the unknown-command message. They cannot shadow a
+# built-in, since the manifest reader rejects those names
+# (+Tey.Manifest.reservedCommands+), and they are listed under their own
+# "Package commands" heading so a reader knows to look in package.kex.
 foul cli -> OptionConfig do
   return Tey.Cli.packageCommands.reduce(Tey.Cli.parser) do |config, command|
     let summary = command.commandDescription != "" then command.commandDescription else command.commandRun
@@ -190,33 +188,37 @@ foul cli -> OptionConfig do
   end
 end
 
-# The line is parsed once here to answer the two questions `run` cannot — is
-# this `--version`, and does it name a command Tey already answers — and then
-# handed to `run`, which parses it again and dispatches. A parse ERROR is left
-# to `run` as well: reporting it with the help text is the one policy every
-# tool built on OptionParser shares.
+# Runs the Tey command line +args+ and returns the exit code.
+#
+# The color flags are handled first, by setting +NO_COLOR+. The line is then
+# parsed once to answer what +run+ cannot, namely whether it asks for
+# +--version+ and whether it names a built-in command, and handed to +run+,
+# which parses it again and dispatches. A parse error is left for +run+ to
+# report with the help text.
 foul dispatch(args: [String]) -> Integer do
   ENV.set("NO_COLOR", "1") if Tey.Cli.plain?(args)
   return Tey.Cli.dispatchArguments(Tey.Cli.withoutColorFlags(args))
 end
 
-# Whether an argument turns colors off. `--no-colors` is how `kex` spells it,
-# and somebody switching between the two tools should not have to remember
-# which one takes the `s`.
+# Returns whether +argument+ turns colors off.
+#
+# Both +--no-color+ and +--no-colors+, the spelling +kex+ uses, are accepted.
 let colorFlag?(argument: String) -> Bool = argument == "--no-color" || argument == "--no-colors"
 
-# Whether the line asks for plain output. Only Tey's own arguments count: past
-# a bare `--` they belong to the program being run, which may well have a
-# `--no-color` of its own.
+# Returns whether +args+ asks for output without colors.
+#
+# Only arguments before a bare +--+ count; those after it belong to the
+# program being run, which may have a +--no-color+ of its own.
 let plain?(args: [String]) -> Bool do
   return args.takeWhile { |argument| argument != "--" }.any? { |argument| colorFlag?(argument) }
 end
 
-# The line without the color flags, which are answered before parsing — by
-# setting NO_COLOR, the one switch `Console`, every child `kex`, and this
-# parser's own error text all read. Taking them out here rather than leaving
-# them to the parser is what makes the flag work wherever it is written:
-# `tey docs` is a passthrough command whose own parser has never heard of it.
+# Returns +args+ without the color flags before any bare +--+.
+#
+# +dispatch+ handles those flags itself by setting +NO_COLOR+, which +Console+,
+# every child +kex+ and the parser's error text all read. Removing them here
+# makes the flag work anywhere on the line, including after +tey docs+, whose
+# own parser does not know it.
 let withoutColorFlags(args: [String]) -> [String] do
   let own = args.takeWhile { |argument| argument != "--" }
   return own.filter { |argument| !colorFlag?(argument) } + args.drop(own.count)
@@ -233,30 +235,24 @@ foul dispatchArguments(args: [String]) -> Integer do
   end
 end
 
-# `kex` colors only a terminal. Every `kex` Tey starts — `tey test`, `tey
-# run`, a package command — now writes to Tey's own stdout (`Process.stream`
-# hands its child the descriptors), so it sees the terminal Tey sees and
-# colors by itself; until it did, it wrote through a pipe and had to be told.
-# Telling it still agrees with what it sees. NO_COLOR, when set, is left to
-# win in every child; `Kex.AST` passes `--no-colors`, which outranks this, so
-# nothing Tey parses back picks up escape codes.
+# Sets +FORCE_COLOR+ so every +kex+ that Tey starts uses colors when Tey does.
+#
+# It does nothing when colors are off or +NO_COLOR+ is set, so +NO_COLOR+
+# still wins in every child. +Kex.AST+ passes +--no-colors+, which overrides
+# this, so output Tey parses back has no escape codes.
 foul relayColors -> Void do
   return () if !Console.enabled? || ENV.get("NO_COLOR", "") != ""
   ENV.set("FORCE_COLOR", "1")
   return ()
 end
 
-# Tells the rest of the process which compiler Tey selected.
+# Sets +KEX+ to the compiler Tey selected, so the rest of the process uses it.
 #
-# `Kex.AST` — which is how a `package.kex` is read at all — shells out to the
-# compiler named by `$KEX`, falling back to whatever `kex` PATH happens to
-# hold. Tey is started by `erl`, not by `kex`, so nothing had set that: a
-# manifest was parsed by an unrelated compiler if one was on PATH, and by none
-# at all otherwise — which is why a package's commands silently vanished from
-# `tey help` on a machine where `kex` was installed only inside the Tey home.
-#
-# An explicit `$KEX` is left alone: someone who set it means it, and that is
-# the documented override the compiler itself honours.
+# +Kex.AST+, which reads +package.kex+, runs the compiler named by +KEX+ and
+# otherwise whatever +kex+ is on PATH. Tey is started by +erl+, not by +kex+,
+# so without this a manifest would be read by an unrelated compiler, or by
+# none when +kex+ lives only inside the Tey home. A +KEX+ that is already set
+# is left alone.
 foul announceToolchain -> Void do
   return () if ENV.get("KEX", "") != ""
   let compiler = Tey.Toolchain.kex
@@ -768,13 +764,11 @@ private do
   foul dispatchParsed(args: [String], options: ParsedOptions) -> Integer do
     return Tey.Cli.showVersion() if options.flagEnabled?("version")
     Tey.Cli.announceToolchain
-    # `--help`, and a line with no command at all, are both `run`'s job — but
-    # its exits for them call `this.printHelp`, which the BEAM backend emits at
-    # the wrong arity, so the compiled `tey` answers `undef` (kexhq/kex#192).
-    # Call directly rather than going through `run`, whose help exit used to
-    # lower at the wrong arity on BEAM (kexhq/kex#192). This is the full `cli`,
-    # not the bare `parser`, so a package's own commands list here by default;
-    # the manifest read needs the compiler announced above to parse at all.
+    # `--help` and a line with no command are `run`'s job, but printHelp is
+    # called directly: `run`'s help exit once lowered at the wrong arity on
+    # BEAM (kexhq/kex#192). This is the full `cli`, not the bare `parser`, so a
+    # package's own commands are listed; reading the manifest needs the
+    # compiler announced above.
     return Tey.Cli.cli.printHelp if options.flagEnabled?("help") || options.arguments.empty?
     # A built-in needs no manifest, and reading one costs a `kex --emit-ast`
     # per invocation — a price `bin/kex` would pay on every single `kex` call,

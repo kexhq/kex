@@ -1,4 +1,5 @@
-# Shared networking values, capability discovery, and typed failures.
+# Networking values shared by the network modules: ports, a report of which
+# transports this build supports, and the error type they all return.
 #
 #   using Net
 #
@@ -6,21 +7,21 @@
 #   if Support.current.tls.usable? then https.string else "TLS unavailable" end
 module Net
 
-# A validated TCP or UDP port number in +0..65535+.
+# A TCP or UDP port number, checked to be in +0..65535+.
 #
-# Use +Port.from+ at input boundaries. Port zero requests an ephemeral port
-# where a listening API permits it; after binding, ask the server or socket for
-# the concrete port the operating system chose.
+# Build one with +Port.from+. Port zero asks the operating system for a free
+# port where a listening API allows it; after binding, ask the server or socket
+# which port it got.
 record Port do
   # The validated numeric port.
   value : Integer
 end
 
-# Whether a feature was compiled into this backend and is usable now.
+# Whether a networking feature is built in, and whether it can be used here.
 #
-# +compiled?+ describes the build; +usable?+ also accounts for the environment
-# it is running in. A browser build may contain an HTTP client, for example,
-# while browser policy still prevents a particular lower-level capability.
+# +compiled?+ describes the build. +usable?+ also takes the running environment
+# into account: a browser build can contain an HTTP client while browser policy
+# still blocks a lower-level transport.
 record SupportValue do
   # Whether the running Kex build contains the feature.
   compiled? : Bool
@@ -29,11 +30,11 @@ record SupportValue do
   usable? : Bool
 end
 
-# Granular networking capabilities for the current backend and environment.
+# The networking features of the running build, one +SupportValue+ each.
 #
-# Read this before choosing a transport dynamically. Applications that require
-# one capability can instead check that single field during startup and fail
-# with a useful message.
+# Consult it to pick a transport at run time. A program that needs one feature
+# can check that field at startup and stop with a clear message. The tree-walk
+# interpreter (+kex -R+) reports every feature as unavailable.
 record SupportReport do
   dns : SupportValue
   tcp : SupportValue
@@ -46,12 +47,13 @@ record SupportReport do
   webSocketServer : SupportValue
 end
 
-# Validated +Port+ construction.
+# Construction of +Port+ values.
 module Port do
-  # Validates a port number.
+  # Returns +value+ as a +Port+, or a +Parse+ error when it is outside
+  # +0..65535+.
   #
   # @param value [Integer] a number in +0..65535+
-  # @return [Result<Port, NetError>] the validated port, or +Parse+
+  # @return [Result<Port, NetError>] the port, or a +NetError+ of kind +Parse+
   #
   # @example Reading a listen port from the environment
   #   let number = ENV.get("PORT").into { |text| text.to(Integer) }.or(8080)
@@ -60,11 +62,12 @@ module Port do
   let from(value) = Kex.Intrinsic.Net.port(value)
 end
 
-# Runtime discovery for optional network transports and protocols.
+# Run-time discovery of the optional network transports and protocols.
 module Support do
-  # Reports compiled and currently usable networking features.
+  # Returns which networking features this build contains and which are usable
+  # now.
   #
-  # @return [SupportReport] granular capability flags
+  # @return [SupportReport] one flag pair per feature
   #
   # @example Explaining why an HTTP-dependent command cannot run
   #   if !Support.current.httpClient.usable?
@@ -77,15 +80,15 @@ end
 # The subsystem or operation that produced a networking error.
 type NetOperation = DNS | TCP | UDP | Unix | TLS | HTTPClient | HTTPServer | WebSocketClient | WebSocketServer
 
-# Stable, backend-independent networking failure categories.
+# The category of a networking failure, the same on every backend.
 type NetErrorKind = Parse | Resolve | Connect | Protocol | Timeout | Cancelled | Limit | Closed | ReadInProgress | UnsupportedBackend | UnsupportedOption | BrowserRestricted | OpaqueRedirect | MockEmpty | Backend
 
-# A typed networking failure shared by every network module.
+# The error every network module returns.
 #
-# +kind+ is the stable category to branch on. +message+ is for a person, while
-# +phase+ adds protocol context such as a TLS handshake and +progress+ records
-# bytes transferred before a partial-operation failure. Keeping those roles
-# separate lets programs recover without matching backend-specific prose.
+# Branch on +kind+; it does not change between backends. +message+ is text for
+# a person and may differ by backend. +phase+ names the protocol step that
+# failed, such as a TLS handshake, and +progress+ counts the bytes transferred
+# before an operation failed partway.
 record NetError do
   kind : NetErrorKind
   operation : NetOperation
@@ -95,9 +98,9 @@ record NetError do
 end
 
 make Port do
-  # Renders the decimal port without a host or scheme.
+  # Returns the port number as decimal text, with no host or scheme.
   #
-  # @return [String] decimal port text
+  # @return [String] the port number, such as +"443"+
   #
   # @example Building an address for display
   #   IO.printLine("listening on 127.0.0.1:${port.string}")

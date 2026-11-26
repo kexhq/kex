@@ -2,7 +2,7 @@
 # The walker (namespace dispatch) always accepted these; BEAM rejected
 # them — first the check ("Unknown module `List`", because the compile
 # path never learned top-level or structural aliases), then lowering
-# ("Undefined method: first for List"). Both backends must agree.
+# ("Undefined function: first for List"). Both backends must agree.
 IO.printLine(List.first([4, 5, 6]))
 IO.printLine(List.first([]))
 IO.printLine(Map.get({"a": 1}, "a", 0))

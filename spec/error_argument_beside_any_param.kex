@@ -5,7 +5,7 @@
 # let every other argument through unchecked. The metamorphic search found
 # it as `t.text(:owner, oneOf: [...], 0)` in
 # spec/named_block_argument_typed.kex: accepted, run by the walker, then
-# "undefined method: text" on the BEAM.
+# "undefined function: text" on the BEAM.
 
 record Builder do
   table : String = ""

@@ -7,7 +7,7 @@
 # `client.request` rather than `client.get`: a make-block method of a
 # `using`-imported module is not in the checker's receiver-function interface,
 # so `get` — a name the prelude also owns — resolves to the prelude's and dies
-# with "Undefined method: get for Tuple". `request` collides with nothing and
+# with "Undefined function: get for Tuple". `request` collides with nothing and
 # reaches Client's own method.
 
 using Net.HTTP

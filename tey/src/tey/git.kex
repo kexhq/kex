@@ -34,8 +34,9 @@ foul pinRef(url: String, selector: String, requested: String) -> (String, String
   end
 end
 
-# Every version-shaped tag a repository publishes, newest first. Used to
-# answer a range requirement, and to list installable Kex toolchains.
+# Returns the tags a repository publishes, newest version first. Tags that
+# are not versions sort last. Used to resolve a range requirement and to list
+# the Kex toolchains that can be installed.
 foul tags(url: String) -> [String] or! String do
   match Tey.Git.execute(["ls-remote", "--tags", "--refs", url]) do
     Error(error) => return Error(error)
@@ -48,8 +49,8 @@ foul tags(url: String) -> [String] or! String do
   end
 end
 
-# A full hexadecimal commit id. A short one is left to `ls-remote`: it could
-# as well be a ref name.
+# Returns whether +text+ is a full commit id: 40 lowercase hexadecimal digits.
+# A short id is not accepted, since it could also be a ref name.
 let commitId?(text: String) -> Bool do
   return text.count == 40 && text.chars.all? { |c| "0123456789abcdef".contains?("${c}") }
 end

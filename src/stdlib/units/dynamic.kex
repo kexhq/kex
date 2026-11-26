@@ -1,5 +1,17 @@
-# Runtime dimensional quantities. Unit dimensions use nominal Type identities,
-# and all arithmetic composes the same normalized exponent maps.
+# Quantities whose units are built at run time.
+#
+# +Measure+ (units.kex) checks dimensions at compile time. Here a unit is a
+# value: a scale to its dimension's canonical unit, a +Dimension+ and a
+# notation. Arithmetic checks dimensions when it runs and returns a +Result+,
+# with +DimensionMismatch+ when they do not agree.
+#
+#   let meters = unit(1.0, Dimensions.base(Length {}), "m").try
+#   let seconds = unit(1.0, Dimensions.base(Time {}), "s").try
+#   let kilometers = meters.scaled(1000.0, "km").try
+#   let hours = seconds.scaled(3600.0, "h").try
+#   let speed = (measure(36.0, kilometers) / measure(1.0, hours)).try
+#   speed.convertTo((meters / seconds).try).try.value   # => 10.0
+#   speed.convertTo(meters).ok?                         # => false
 module Units.Dynamic
 
 using Dimensions, only: [Dimension]
@@ -19,20 +31,26 @@ type UnitError = InvalidScale(Float)
                | ScaleOverflow
                | DimensionMismatch(Dimension, Dimension)
 
-# Define a positive, finite scale to the dimension's canonical unit.
+# Returns a unit that is +scale+ times the canonical unit of +dimension+.
+#
+# +scale+ must be positive and finite; otherwise the result is
+# +InvalidScale+.
 let unit(scale: Float, dimension: Dimension, notation: String) -> Result<DynamicUnit, UnitError> do
   return Error(InvalidScale(scale)) if !(scale > 0.0) || scale > 1.7976931348623157e308
   Ok(DynamicUnit { scale: scale, dimension: dimension, notation: notation })
 end
 
-# Build a quantity in its preferred display unit.
+# Returns +value+ of +unit+. The unit is kept for display, and the quantity is
+# stored in the canonical unit.
 let measure(value: Float, unit: DynamicUnit) -> DynamicMeasure = DynamicMeasure {
   canonical: value * unit.scale,
   unit: unit
 }
 
 make DynamicUnit do
-  # Preserve grouping in display expressions as well as dimensions and scale.
+  # Returns the product of two units. The notation keeps the grouping, as in
+  # +"(m)·(s)"+. The result is +ScaleOverflow+ when the scales overflow and
+  # +InvalidScale+ when they underflow.
   let *(other: DynamicUnit) -> Result<DynamicUnit, UnitError> do
     let scale = multiplyScales(@scale, other.scale).try
     unit(scale, @dimension * other.dimension,
@@ -72,7 +90,7 @@ private do
 end
 
 make DynamicMeasure do
-  # Display magnitude is derived, never a second independently stored value.
+  # Returns the quantity's magnitude in its display unit.
   let value -> Float = @canonical / @unit.scale
 
   let convertTo(target: DynamicUnit) -> Result<DynamicMeasure, UnitError> do
@@ -109,7 +127,8 @@ make DynamicMeasure do
     canonical: @canonical * factor, unit: @unit
   }
 
-  # Ordering ignores display preferences but requires compatible dimensions.
+  # Orders two quantities of the same dimension, whatever their display units.
+  # Quantities of different dimensions give +DimensionMismatch+.
   let compareTo(other: DynamicMeasure) -> Result<Ordering, UnitError> do
     return Error(DimensionMismatch(@unit.dimension, other.unit.dimension)) if @unit.dimension != other.unit.dimension
     Ok(@canonical.compare(other.canonical))

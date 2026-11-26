@@ -97,7 +97,7 @@ Done:
 - Capability requirements come from the checker's decided calls (§9 fixes 1
   and 2): every function, a `make` block's too, keyed by its definition, and
   each call followed to the clause the checker selected. A nested capability
-  module is named qualified (`FS.File`). KexI exports and methods carry what a
+  module is named qualified (`FS.File`). KexI exports and receiver functions carry what a
   caller needs (`requiredCapabilities`, read back onto the imported
   `Signature`), and the stdlib read from source marks its capability modules'
   functions. All five rows of the §9 table now hover their requirement, and an inlay

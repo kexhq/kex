@@ -12,7 +12,7 @@ end
 type Integer < Number
 type Float < Number
 
-# Adding methods to a builtin type via `make` blocks.
+# Adding functions to a builtin type via `make` blocks.
 make Integer do
   let multipleOf?(other: This) -> Bool do
     return this.dividesBy?(other)

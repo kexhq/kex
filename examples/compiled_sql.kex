@@ -1,6 +1,6 @@
 # Compiled SQL — zero-overhead query builder
 #
-# The SQL module defines its builder methods inside `compiled do...end`.
+# The SQL module defines its builder functions inside `compiled do...end`.
 # A chain whose arguments are all known at compile time is evaluated during
 # compilation and replaced by its result, so no QueryBuilder is ever allocated
 # and `emit` never runs — see q1 below.
@@ -70,7 +70,7 @@ module SQL do
       end
 
       # .emit() is the usual collapse trigger, though nothing here is special
-      # about the name: any method of this block terminating an all-static
+      # about the name: any function of this block terminating an all-static
       # chain is evaluated at compile time and replaced by its result.
       let emit() -> Query do
         let field_str = match @fields do

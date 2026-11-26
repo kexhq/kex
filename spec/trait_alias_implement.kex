@@ -2,7 +2,7 @@
 # `implement: Geo2.Shape`, kexhq/kex#627). The checker resolves the alias and
 # decides which defaults the type inherits; both backends follow that answer
 # instead of re-resolving the name, which dropped them with
-# `Undefined method: describe for Circle`.
+# `Undefined function: describe for Circle`.
 module Geo do
   trait Shape do
     area :> Float

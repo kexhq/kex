@@ -1,15 +1,14 @@
-# `tey docs prose`: a tree of Markdown files rendered into the same chrome as
-# the generated reference.
+# +tey docs prose+: renders a tree of Markdown files as a site, with the same
+# layout as the generated reference.
 #
-# The unit is the same one `build` documents — a named, versioned thing — so
-# the two land side by side in one site and share `versions.json`, the
-# stylesheet and the layout. What differs is only where the pages come from:
-# `build` parses .kex and derives them, `prose` reads .md and renders it.
+# A prose site belongs to a named, versioned unit, as a reference build does,
+# so the two can sit side by side in one site and share +versions.json+, the
+# stylesheet and the layout. +build+ derives its pages from +.kex+ sources;
+# +prose+ renders them from +.md+ files.
 #
-# Nothing here knows what the prose IS. A guide, a book, a package's own
-# handbook are all "long-form pages for a versioned unit"; the naming and the
-# assembly of a site out of several such units belong to whoever runs this,
-# not to docgen.
+# The command does not care what the prose is: a guide, a book and a
+# package's handbook are all treated the same. Naming the units and putting
+# several of them together into one site is left to the caller.
 
 module Tey.Docgen.Prose do
   using Tey.Docgen.Model, only: [PackageModel, SourcePage]
@@ -75,9 +74,9 @@ module Tey.Docgen.Prose do
     return 0
   end
 
-  # A page and the things only its frontmatter knows: where it sorts, the
-  # HTML its Markdown became, the description its index entry shows, and the
-  # Markdown (minus frontmatter) its raw `.md` rendering serves.
+  # One Markdown page, read and rendered: its place in the site, its sort
+  # order and description from the frontmatter, its HTML, and the Markdown
+  # without frontmatter that is served as its +.md+ version.
   record ProsePage do
     page : SourcePage
     order : Integer
@@ -127,9 +126,8 @@ module Tey.Docgen.Prose do
     return name
   end
 
-  # Both renderings, from the same parsed page: HTML for readers, Markdown
-  # for crawlers, LLMs, and the "Markdown" link every page carries — the same
-  # `.md`-next-to-`.html` pairing reference builds write.
+  # Writes each page as HTML and as Markdown side by side, as reference
+  # builds do, plus the index page and the shared assets.
   foul writeProse(pages: [ProsePage], versionDir: String, out: String,
                   model: PackageModel) -> () do
     writeProseLoop(pages, 0, versionDir, model)
@@ -159,10 +157,10 @@ module Tey.Docgen.Prose do
     end
   end
 
-  # The book's own spine: chapters in author order with their descriptions,
-  # not the module grid reference builds get. Deliberately separate from
-  # `versionIndexHtml` — `tey docs build` keeps documenting any package, and
-  # nothing about a book leaks into it.
+  # Renders the index page: the chapters in the author's order, each with
+  # its description. Reference builds use +versionIndexHtml+, a grid of
+  # modules, instead; the two are kept separate so book layout never reaches
+  # +tey docs build+.
   let proseIndexHtml(pages: [ProsePage], model: PackageModel) -> String do
     let label = Tey.Docgen.Index.labelOrPackage(model)
     let heading = "<h1>${Tey.Docgen.Html.esc(label)} <span class=\"ver\">${Tey.Docgen.Html.esc(model.version)}</span></h1>"
@@ -179,8 +177,8 @@ module Tey.Docgen.Prose do
     return "<li>${title}<br><span class=\"prelude-note\">${Tey.Docgen.Html.esc(prose.description)}</span></li>"
   end
 
-  # Chapter footer: the siblings around this one, so the book reads forward
-  # as well as sideways. First and last chapters link one way only.
+  # Renders a chapter's footer: links to the previous and next chapters. The
+  # first and last chapters get only one link.
   let prevNextHtml(pages: [ProsePage], index: Integer) -> String do
     match pages.at(index) do
       None => ""

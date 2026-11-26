@@ -3,7 +3,7 @@
 # checker and fail in the backends, differently on each: erlc rejected the
 # module outright as an unbound variable — even when the binding was never
 # called — while the interpreter misreported a sibling make member as an
-# undefined method (kexhq/kex#293). The checker says it at the definition
+# undefined function (kexhq/kex#293). The checker says it at the definition
 # now.
 module M do
   record Book do

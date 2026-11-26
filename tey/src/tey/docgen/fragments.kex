@@ -1,9 +1,11 @@
-# `tey docs build --format fragments`: the reference as page bodies for a
-# host site to frame, instead of a standalone site with docgen's own chrome.
+# Writes +tey docs build --format fragments+: the reference as page bodies
+# for a host site to frame, without the header and sidebar of the standalone
+# site.
 #
-# The unit lands where `site` output would (<out>/<package>/<version>/), as
+# The unit is written where +site+ output would go
+# (+<out>/<package>/<version>/+), as
 #
-#   <page>.html        the page body — no <html>, no header, no sidebar, no h1
+#   <page>.html        the page body, without <html>, header, sidebar or h1
 #   <page>.page.json   what the host needs to frame it: title, description,
 #                      URL path, template, and `data` (package, version,
 #                      source file, the on-page table of contents)
@@ -11,13 +13,13 @@
 #   nav.json           the unit's page tree: {title, path, children}
 #   *.md, model.json, search.json, manifest.json  as in `site` output
 #
-# Pages are addressed the way a static host with pretty URLs serves them:
-# `list` is /<package>/<version>/list/. Every relative link the shared
-# renderer produced (`../net.html#module-net`) is rewritten to that form, so
-# a fragment works wherever the host mounts the unit at /<package>/<version>/.
-# Nothing here knows which host that is. Marqraft reads this layout as a
-# mount with "format": "fragments": each unit directory is a version, each
-# sidecar a read-only page, nav.json the version's page tree.
+# Pages use the paths a static host with pretty URLs serves: +list+ is
+# +/<package>/<version>/list/+. Every relative link from the shared renderer,
+# such as +../net.html#module-net+, is rewritten to that form, so a fragment
+# works on any host that mounts the unit at +/<package>/<version>/+. Marqraft,
+# for one, reads this layout as a mount with +"format": "fragments"+: each
+# unit directory is a version, each sidecar a read-only page, and +nav.json+
+# the version's page tree.
 
 module Tey.Docgen.Fragments do
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, FunctionEntry, SourcePage, PackageModel, kindOf, nameOf, qualifiedNameOf, anchorOf, memberAnchorOf]
@@ -54,9 +56,9 @@ module Tey.Docgen.Fragments do
     return ()
   end
 
-  # Everything a theme might show beside the body: which unit and version
-  # this is (the header badge), where the source lives, and the page's
-  # sections for an "On this page" list.
+  # Returns what a theme may show beside the body: the unit and version (for
+  # the header badge), where the source lives, and the page's sections for an
+  # "On this page" list.
   let unitData(model: PackageModel, source: String, toc: [TocEntry]) -> Any do
     let data: Any = {
       package: model.package,
@@ -81,9 +83,9 @@ module Tey.Docgen.Fragments do
     return value
   end
 
-  # The rail as markup too, so a theme template can place it without
-  # walking JSON: a template language that sees the data as `Any` cannot
-  # iterate it. A page with a single section has nothing to navigate.
+  # Renders the section list as HTML, so a theme template can place it
+  # without walking JSON, which a template language that sees the data as
+  # +Any+ cannot iterate. A page with only one section gets nothing.
   let tocHtml(toc: [TocEntry]) -> String do
     return "" if toc.count < 2
     let items = toc.map { |t| "<li${tocClass(t)}><a href=\"#${Tey.Docgen.Html.esc(t.anchor)}\">${Tey.Docgen.Html.esc(t.title)}</a></li>" }
@@ -95,7 +97,7 @@ module Tey.Docgen.Fragments do
     return t.nested? then " class=\"toc-nested\"" else ""
   end
 
-  # "/prelude/0.4.0/": where the unit is mounted.
+  # Returns the path the unit is mounted at, such as +/prelude/0.4.0/+.
   let unitRoot(model: PackageModel) -> String do
     return "/${model.package}/${model.version}/"
   end
@@ -104,8 +106,8 @@ module Tey.Docgen.Fragments do
     return urlPath.empty? then unitRoot(model) else "${unitRoot(model)}${urlPath}/"
   end
 
-  # The page tree, nested the way the standalone sidebar nests it: a module
-  # family (Net, Net.DNS, Net.HTTP) is one branch.
+  # Returns the page tree, nested as the standalone sidebar nests it: a
+  # module family such as Net, Net.DNS and Net.HTTP is one branch.
   let navTree(pages: [SourcePage], model: PackageModel) -> Any do
     let children = Tey.Docgen.Nav.topLevelPages(pages).map { |p| navNode(p, pages, model) }
     let tree: Any = { title: Tey.Docgen.Html.labelOf(model), path: unitRoot(model), children: children }
@@ -118,17 +120,17 @@ module Tey.Docgen.Fragments do
     return node
   end
 
-  # The sections a reader can jump to, in page order: each declaration with
-  # a section of its own, the functions and constants listed under it, and
-  # the declarations a module holds. The members are what make the rail
-  # worth having on the page of one long type: `List` is a single section
-  # fifty functions deep.
+  # Returns the sections a reader can jump to, in page order: each
+  # declaration with a section of its own, the functions and constants listed
+  # under it, and the declarations a module holds. Members are included
+  # because a page for one long type, such as +List+, is a single section with
+  # fifty functions.
   let tocOf(page: SourcePage, model: PackageModel) -> [TocEntry] do
     return tocAt(page.entities, false, page, model)
   end
 
-  # A module that is only the file's namespace has no section, so what it
-  # declares stands at the top level of the rail.
+  # Builds the entries for +entities+. A module that is only the file's
+  # namespace has no section, so its declarations go at the top level.
   let tocAt(entities: [Entity], nested: Bool, page: SourcePage, model: PackageModel) -> [TocEntry] do
     return Tey.Docgen.Html.sectionEntities(entities).into { |e|
       let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested?: nested }
@@ -142,11 +144,12 @@ module Tey.Docgen.Fragments do
     }
   end
 
-  # The `kind` of a rail entry that is a member rather than a declaration.
+  # The +kind+ of a section entry for a member, as opposed to a declaration.
   let MemberKind = "member"
 
-  # What the section of `e` lists, under the anchors the renderer gives
-  # them: a type's functions come from the make blocks folded into it.
+  # Returns the members listed in the section of +e+, under the anchors the
+  # renderer gives them. A type's functions come from the make blocks folded
+  # into its section.
   let memberToc(e: Entity, entities: [Entity], model: PackageModel) -> [TocEntry] do
     match e do
       TypeDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).into { |m| functionToc(m.functions, m.target) }
@@ -179,8 +182,8 @@ module Tey.Docgen.Fragments do
     end
   end
 
-  # One sentence for the page's <meta name="description">: the file's intro,
-  # else what its first declaration says, else its title.
+  # Returns one sentence for the page's +<meta name="description">+: from
+  # the file's intro, else from its first declaration, else its title.
   let descriptionOf(page: SourcePage) -> String do
     let intro = Tey.Docgen.Html.firstSentence(Tey.Docgen.Rdoc.parseOrEmpty(page.intro).summary)
     return intro if !intro.empty?
@@ -188,10 +191,11 @@ module Tey.Docgen.Fragments do
     return first.or(page.title).replace("`", "")
   end
 
-  # Every relative href in a fragment, rewritten to a site path: from the
-  # page at `urlPath`, "../net.html#module-net" is "/prelude/0.4.0/net/#module-net"
-  # and "index.html" is "/prelude/0.4.0/". A fragment-only href ("#x"), an
-  # absolute one and an external URL stay as they are.
+  # Rewrites every relative href in +html+ to a site path. From the page at
+  # +urlPath+, +../net.html#module-net+ becomes
+  # +/prelude/0.4.0/net/#module-net+ and +index.html+ becomes
+  # +/prelude/0.4.0/+. Fragment-only (+#x+), absolute and external hrefs are
+  # left as they are.
   let absolutize(html: String, model: PackageModel, urlPath: String) -> String do
     let parts = html.split("href=\"")
     let base = unitRoot(model).split("/").reject { |s| s.empty? } + Tey.Docgen.Index.dirNameOf(urlPath).split("/").reject { |s| s.empty? }

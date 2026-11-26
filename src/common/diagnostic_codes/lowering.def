@@ -31,7 +31,7 @@ KEX_DIAGNOSTIC(NamedArgsUnknownExternalParams, "KEXEB-0029", "IR lower: named ar
 KEX_DIAGNOSTIC(NamedArgsUnknownFunction, "KEXEB-0030", "IR lower: named args to unknown function {function}")
 KEX_DIAGNOSTIC(UnknownTraitDictionary, "KEXEB-0031", "IR lower: unknown trait dictionary {trait}")
 KEX_DIAGNOSTIC(NoTraitImplementation, "KEXEB-0032", "IR lower: no implementation for {trait}.{method} on {type}")
-KEX_DIAGNOSTIC(FreeFunctionAndReceiverMethod, "KEXEB-0033", "IR lower: `{name}/{arity}` names both a free function and a receiver method in this compilation unit. Rename one of them")
+KEX_DIAGNOSTIC(FreeFunctionAndReceiverMethod, "KEXEB-0033", "IR lower: `{name}/{arity}` names both a free function and a receiver function in this compilation unit. Rename one of them")
 KEX_DIAGNOSTIC(FileNotChecked, "KEXEB-0034", "IR lower: {file} was not checked")
 KEX_DIAGNOSTIC(UnimplementedTopLevelItem, "KEXEB-0035", "IR lower: unimplemented top-level item {item}")
 KEX_DIAGNOSTIC(NonMonotonicTierBounds, "KEXEB-0036", "IR lower: non-monotonic prelude tier bounds")

@@ -1,7 +1,7 @@
 # A capability with a module of its own name beside it. Inside `with Vault =
 # …`, only the capability's own members (`put`, `get`) go to the
 # replacement; the module's helpers are ordinary calls. Every `Vault.x` used
-# to be routed to the replacement: `undef` on BEAM, "Undefined method:
+# to be routed to the replacement: `undef` on BEAM, "Undefined function:
 # located for Vault.Disk" in the walker. Metro kept its capability under a
 # separate name (Metro.Storage.Service) because of this.
 using Vault
