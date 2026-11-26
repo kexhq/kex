@@ -142,6 +142,7 @@ private:
 
     // Functions
     auto parseFunctionClause() -> ast::FunctionClause;
+    auto skipClauseGuard() -> void;
     auto parseParams() -> std::vector<ast::Param>;
     auto parseParam() -> ast::Param;
     auto parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation>;

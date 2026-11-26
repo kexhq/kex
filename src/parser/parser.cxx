@@ -1166,6 +1166,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
         expect(TokenType::RParen, diag::Code::ExpectedRParenAfterParameters);
     }
     clause.hasParamList = hasParamList;
+    skipClauseGuard();
 
     // The return type may open on the line AFTER the parameters, the same way
     // an `=` body may:
@@ -1187,6 +1188,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
         clause.returnAnnotation = parseTypeExpr();
+        skipClauseGuard();
     }
     // A parameterless binding may annotate with `:` instead, which is how the
     // docs spell it — `foul lines : Feed<String> = …`. `let` reaches the same
@@ -1216,7 +1218,16 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     }
 
     // = expr (single expression body)
-    if (match(TokenType::Equals)) {
+    if (check(TokenType::Equals)) {
+        const auto equalsLocation = advance().location;
+        // `let f(x) =` with the body on the next line. `=` takes a body that
+        // fits on its line; anything longer goes in `do ... end` (STYLE.md).
+        // Said here, and the body is still parsed, so the function exists and
+        // no later stage reports it undefined (kexhq/kex#805).
+        if (check(TokenType::Newline)) {
+            report(diag::Code::FunctionBodyOnNextLine, equalsLocation);
+            skipNewlines();
+        }
         clause.body.push_back(parseExpr());
     }
     // do...end block body
@@ -1250,6 +1261,37 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     }
 
     return clause;
+}
+
+// `let size(n) when n < 0 = ...`: a function clause takes no guard (a `match`
+// arm does). Without this the clause ended at `when`, which then failed as
+// "unexpected token at top level", and the cut-off clause was checked as a
+// function with no body (kexhq/kex#806). Report the rule once, then skip the
+// guard so the body after it still parses as this clause's.
+auto Parser::skipClauseGuard() -> void {
+    if (!check(TokenType::When)) {
+        return;
+    }
+    report(diag::Code::GuardOnFunctionClause, peek().location);
+    advance(); // when
+    int depth = 0;
+    while (!atEnd()) {
+        const auto type = peek().type;
+        if (type == TokenType::LParen || type == TokenType::LBracket || type == TokenType::LBrace) {
+            ++depth;
+        } else if (
+            type == TokenType::RParen || type == TokenType::RBracket || type == TokenType::RBrace) {
+            if (depth == 0) {
+                return;
+            }
+            --depth;
+        } else if (
+            depth == 0 && (type == TokenType::Equals || type == TokenType::Do ||
+                           type == TokenType::Arrow || type == TokenType::Newline)) {
+            return;
+        }
+        advance();
+    }
 }
 
 auto Parser::parseParams() -> std::vector<ast::Param> {

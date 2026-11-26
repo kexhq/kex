@@ -1,0 +1,12 @@
+spec/error_function_body_next_line.kex:9:35: [KEXEP-0161]: Error, a function body on its own line goes in `do ... end`: write `do` in place of `=`, and `end` after the body
+  |
+9 | let double(n: Integer) -> Integer =
+  |                                   ^
+spec/error_function_body_next_line.kex:12:15: [KEXEP-0161]: Error, a function body on its own line goes in `do ... end`: write `do` in place of `=`, and `end` after the body
+   |
+12 | let triple(n) =
+   |               ^
+spec/error_function_body_next_line.kex:16:40: [KEXEP-0161]: Error, a function body on its own line goes in `do ... end`: write `do` in place of `=`, and `end` after the body
+   |
+16 |   let quadruple(n: Integer) -> Integer =
+   |                                        ^

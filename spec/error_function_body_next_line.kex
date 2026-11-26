@@ -1,0 +1,19 @@
+# kex: check-only
+# A function body after `=` stays on the `=` line. A body on its own line goes
+# in `do ... end` (STYLE.md: `=` for a function that fits on one line), and the
+# error says so at the `=` (kexhq/kex#805). It used to be "Unexpected token:
+# Newline" followed by "Undefined function: `double`": the definition was
+# dropped, so every call to it was reported as well. Now the body is still
+# parsed, and the one error is the only one.
+
+let double(n: Integer) -> Integer =
+  n * 2
+
+let triple(n) =
+  n * 3
+
+main do
+  let quadruple(n: Integer) -> Integer =
+    n * 4
+  IO.printLine(double(2) + triple(1) + quadruple(1))
+end

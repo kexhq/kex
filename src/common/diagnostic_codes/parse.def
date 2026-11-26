@@ -160,3 +160,5 @@ KEX_DIAGNOSTIC(UnsplicedGenerationForm, "KEXEP-0157", "generating a `{keyword}` 
 KEX_DIAGNOSTIC(DoAfterIfCondition, "KEXEP-0158", "use 'then' instead of 'do' in if expression: `if cond then body end`")
 KEX_DIAGNOSTIC(TraitParamKindMismatch, "KEXEP-0159", "`{param}` in trait `{trait}` takes {first} type argument(s) here but {second} elsewhere: use it the same way everywhere")
 KEX_DIAGNOSTIC(NestedTooDeep, "KEXEP-0160", "this is nested more than {limit} levels deep: give an inner part a name with `let`, and use the name")
+KEX_DIAGNOSTIC(FunctionBodyOnNextLine, "KEXEP-0161", "a function body on its own line goes in `do ... end`: write `do` in place of `=`, and `end` after the body")
+KEX_DIAGNOSTIC(GuardOnFunctionClause, "KEXEP-0162", "a function clause cannot have a `when` guard: match on the parameter in the body instead")

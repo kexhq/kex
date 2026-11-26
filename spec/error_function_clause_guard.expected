@@ -1,0 +1,8 @@
+spec/error_function_clause_guard.kex:9:13: [KEXEP-0162]: Error, a function clause cannot have a `when` guard: match on the parameter in the body instead
+  |
+9 | let size(n) when n < 0 = "negative"
+  |             ^^^^
+spec/error_function_clause_guard.kex:12:32: [KEXEP-0162]: Error, a function clause cannot have a `when` guard: match on the parameter in the body instead
+   |
+12 | let sign(n: Integer) -> String when n > 0 do
+   |                                ^^^^

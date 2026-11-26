@@ -198,6 +198,9 @@ function_clause
 
 return_annotation = ARROW type_expr ;
 
+(* The expression after `=` starts on the `=` line: a body on its own line goes
+   in `do ... end`. A clause takes no `when` guard (a match_clause does). The
+   parser reports either with its own error and keeps the clause's body. *)
 clause_body
   = EQUALS expr
   | DO body rescue_block? END
