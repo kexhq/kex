@@ -386,6 +386,15 @@ struct Value {
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
 
+// The order a record type declares its fields in, which is the order its
+// values print them (`toString`, `inspect`), as on BEAM, where a record is a
+// tuple laid out in that order. The evaluator records it as it runs the
+// declaration; a record whose type it has not seen prints its fields sorted.
+auto registerRecordFieldOrder(const std::string& typeName, std::vector<std::string> fields) -> void;
+// The field names of +record+ in that order: the declared ones it has first,
+// then any others, sorted.
+auto recordFieldOrder(const RecordValue& record) -> std::vector<std::string>;
+
 // How many elements an Integer or Char range enumerates, from its start
 // towards its end by its step.
 auto rangeLength(const RangeValue& range) -> int64_t;

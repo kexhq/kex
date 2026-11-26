@@ -519,23 +519,19 @@ inspect_real(X) when is_atom(X) ->
     end,
     X;
 inspect_real(X) when is_binary(X) ->
-    inspect_format(?GREEN ++ "\"~ts\"" ++ ?RESET
+    inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [X]), X;
+              ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [inspect_string(X)]), X;
 inspect_real(X) when is_list(X) ->
     inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), list_type_name(X)]), X;
 inspect_real({'Char', C}) ->
-    inspect_format(?GREEN ++ "'~ts'" ++ ?RESET
+    inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n", [[C]]), {'Char', C};
-inspect_real({'Just', {'Char', C}} = X) ->
-    inspect_format(?GREEN ++ "Just("
-              ++ [C] ++ ")" ++ ?RESET
-              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n"), X;
+              ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n",
+              [inspect_string({'Char', C})]), {'Char', C};
 inspect_real(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
@@ -576,15 +572,21 @@ drop_until_m([_ | Rest]) -> drop_until_m(Rest).
 %% nested in a Just. Without this clause it reached the generic tuple
 %% formatter and a [Char] printed as [(:Char, 104), (:Char, 105)].
 inspect_string({'Char', C}) when is_integer(C) ->
-    ?GREEN ++ "'" ++ [C] ++ "'" ++ ?RESET;
+    ?GREEN ++ "'" ++ escape_literal([C], $') ++ "'" ++ ?RESET;
+%% Escaped as a literal is written, so the text reads back as this String:
+%% `"a\"b"`, not `"a"b"`.
 inspect_string(X) when is_binary(X) ->
-    ?GREEN ++ "\"" ++ unicode:characters_to_list(X) ++ "\"" ++ ?RESET;
+    ?GREEN ++ "\"" ++ escape_literal(unicode:characters_to_list(X), $") ++ "\"" ++ ?RESET;
+%% `()`, the value a `Void` function answers, as the walker writes it; without
+%% this it reached the atom clause and showed as `:"Kex.Unit"`.
+inspect_string('Kex.Unit') -> ?GRAY ++ "()" ++ ?RESET;
 inspect_string(X) when is_integer(X) -> ?YELL ++ integer_to_list(X) ++ ?RESET;
 inspect_string(true) -> ?YELL ++ "true" ++ ?RESET;
 inspect_string(false) -> ?YELL ++ "false" ++ ?RESET;
 inspect_string('None') -> ?GRAY ++ "None" ++ ?RESET;
 inspect_string(X) when is_list(X) ->
     "[" ++ lists:flatten(lists:join(", ", [inspect_string(E) || E <- X])) ++ "]";
+inspect_string(X) when map_size(X) =:= 0 -> "{}";
 inspect_string(X) when is_map(X) ->
     Pairs = [map_key_string(K) ++ ": " ++ inspect_string(V)
              || {K, V} <- lists:sort(maps:to_list(X))],
@@ -630,9 +632,11 @@ inspect_string(X) when is_tuple(X), tuple_size(X) >= 2,
     Arity = tuple_size(X) - 1,
     Records = persistent_term:get(kex_display_records, #{}),
     case maps:get(Tag, Records, undefined) of
+        %% Fields in declaration order, the record's own layout; the walker
+        %% keeps the same order (recordFieldOrder in value.cxx).
         Fields when is_list(Fields), length(Fields) =:= Arity ->
-            Pairs = lists:sort(lists:zip([atom_to_list(F) || F <- Fields],
-                                         lists:seq(2, tuple_size(X)))),
+            Pairs = lists:zip([atom_to_list(F) || F <- Fields],
+                              lists:seq(2, tuple_size(X))),
             Body = [F ++ ": " ++ inspect_string(element(I, X)) || {F, I} <- Pairs],
             ?CYAN ++ atom_to_list(Tag) ++ ?RESET ++
                 " { " ++ lists:flatten(lists:join(", ", Body)) ++ " }";
@@ -694,13 +698,29 @@ inspect_variant_string(X) ->
     atom_to_list(Tag) ++ "(" ++ lists:flatten(lists:join(", ",
         [inspect_string(A) || A <- Args])) ++ ")".
 
+%% A list's element type as the checker writes a list literal's: the distinct
+%% element types in the order they first appear, joined into a union
+%% (`["x", 1]` is a `[String | Integer]`), the walker's elementTypeName in
+%% src/interpreter/value.cxx. Two that differ only in what one element could
+%% show of a generic type's arguments (`Just(1)` and `None`) are one type.
 list_type_name([]) -> "[?]";
-list_type_name([H | T]) ->
-    Type = value_type_name(H),
-    case lists:all(fun(E) -> value_type_name(E) =:= Type end, T) of
-        true -> "[" ++ Type ++ "]";
-        false -> "[Any]"
+list_type_name(Elements) ->
+    Names = lists:foldl(fun(E, Acc) -> add_element_type(value_type_name(E), Acc) end,
+                        [], Elements),
+    "[" ++ lists:flatten(lists:join(" | ", lists:reverse(Names))) ++ "]".
+
+add_element_type(Name, Seen) ->
+    Base = type_base(Name),
+    case lists:splitwith(fun(S) -> type_base(S) =/= Base end, Seen) of
+        {_, []} -> [Name | Seen];
+        {Before, [Same | After]} ->
+            case lists:member($<, Same) of
+                true -> Seen;
+                false -> Before ++ [Name | After]
+            end
     end.
+
+type_base(Name) -> lists:takewhile(fun(C) -> C =/= $< end, Name).
 
 value_type_name(X) when is_binary(X) -> "String";
 value_type_name(X) when is_integer(X) -> "Integer";
@@ -719,6 +739,7 @@ value_type_name({'Ok', V}) -> "Result<" ++ value_type_name(V) ++ ", ?>";
 value_type_name({'Error', V}) -> "Result<?, " ++ value_type_name(V) ++ ">";
 %% `()`: no tag to look up (the interpreter names it the same).
 value_type_name({}) -> "Tuple";
+value_type_name('Kex.Unit') -> "Void";
 value_type_name(X) when is_tuple(X) ->
     Tag = element(1, X),
     Arity = tuple_size(X) - 1,
@@ -808,6 +829,7 @@ to_string(X) when is_list(X) ->
 % reproduced bug otherwise: IO.printLine(None) printed "none" under BEAM
 % but "None" under the tree-walker.
 to_string('None')               -> "None";
+to_string('Kex.Unit')           -> "()";
 to_string('true')               -> "true";
 to_string('false')              -> "false";
 % A Kex `:atom` literal (always lowercase-first — see the lexer) prints
@@ -828,9 +850,10 @@ to_string(X) when is_atom(X) ->
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> format_float(X);
 % Kex map syntax (matching the walker's MapValue::toString): `{ k: v, … }`,
-% and `{  }` when empty. An atom key renders bare, the way a map literal
+% and `{}` when empty. An atom key renders bare, the way a map literal
 % writes it. Note key ORDER can still differ from the walker — Erlang maps
 % don't preserve insertion order after put/delete.
+to_string(X) when map_size(X) =:= 0 -> "{}";
 to_string(X) when is_map(X)     ->
     Pairs = [map_key_to_string(K) ++ ": " ++ to_string(V) || {K, V} <- lists:sort(maps:to_list(X))],
     "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
@@ -850,8 +873,8 @@ to_string(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
     variant_string(X);
-% A registered record renders as `Name { field: value, … }` (fields sorted,
-% matching the walker); a registered payload-variant tag as `Tag(args)`;
+% A registered record renders as `Name { field: value, … }` (fields in
+% declaration order, matching the walker); a registered payload-variant tag as `Tag(args)`;
 % anything else stays a plain Kex tuple `(a, b)`. The tag AND arity must
 % both match — `(Underscore, "wooo")`, a tuple whose head happens to be a
 % nullary variant VALUE, still renders as a tuple.
@@ -861,8 +884,8 @@ to_string(X) when is_tuple(X), tuple_size(X) >= 1 ->
     Recs = persistent_term:get(kex_display_records, #{}),
     case is_atom(Tag) andalso maps:get(Tag, Recs, undefined) of
         Fields when is_list(Fields), length(Fields) =:= Arity ->
-            Pairs = lists:sort(lists:zip([atom_to_list(F) || F <- Fields],
-                                         lists:seq(2, tuple_size(X)))),
+            Pairs = lists:zip([atom_to_list(F) || F <- Fields],
+                              lists:seq(2, tuple_size(X))),
             Body = [F ++ ": " ++ to_string(element(I, X)) || {F, I} <- Pairs],
             atom_to_list(Tag) ++ " { " ++ lists:flatten(lists:join(", ", Body)) ++ " }";
         _ ->
@@ -1021,8 +1044,25 @@ atom_literal(S) ->
            andalso string:find(S, "@@") =:= nomatch,
     case Bare of
         true -> [$: | S];
-        false -> ":\"" ++ lists:flatmap(fun($") -> "\\\"";
-                                           ($\\) -> "\\\\";
-                                           (C) -> [C]
-                                        end, S) ++ "\""
+        false -> ":\"" ++ escape_literal(S, $") ++ "\""
     end.
+
+%% The characters of a Kex literal quoted by Quote (`"` for a String, `'` for
+%% a Char), with the lexer's escape set: the quote, a backslash and the
+%% control characters are escaped, and so is a `$` opening an interpolation.
+%% The same rule as kex::escapedLiteral (src/common/string_utils.hxx).
+escape_literal(Chars, Quote) -> escape_literal(Chars, Quote, []).
+
+escape_literal([], _Quote, Acc) -> lists:reverse(Acc);
+escape_literal([$\\ | T], Q, Acc) -> escape_literal(T, Q, "\\\\" ++ Acc);
+escape_literal([$\n | T], Q, Acc) -> escape_literal(T, Q, "n\\" ++ Acc);
+escape_literal([$\r | T], Q, Acc) -> escape_literal(T, Q, "r\\" ++ Acc);
+escape_literal([$\t | T], Q, Acc) -> escape_literal(T, Q, "t\\" ++ Acc);
+escape_literal([27 | T], Q, Acc) -> escape_literal(T, Q, "e\\" ++ Acc);
+escape_literal([0 | T], Q, Acc) -> escape_literal(T, Q, "0\\" ++ Acc);
+escape_literal([Q | T], Q, Acc) -> escape_literal(T, Q, [Q, $\\ | Acc]);
+escape_literal([$$, ${ | T], $" = Q, Acc) -> escape_literal(T, Q, "{$\\" ++ Acc);
+escape_literal([C | T], Q, Acc) when C < 16#20; C =:= 16#7F ->
+    Hex = string:right(integer_to_list(C, 16), 2, $0),
+    escape_literal(T, Q, lists:reverse("\\x" ++ Hex) ++ Acc);
+escape_literal([C | T], Q, Acc) -> escape_literal(T, Q, [C | Acc]).

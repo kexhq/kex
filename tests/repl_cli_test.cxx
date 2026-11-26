@@ -832,7 +832,7 @@ int main() {
                 "source\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("unimplemented expr node") == std::string::npos, out);
-                assertTrue(out.find("\"name\"") != std::string::npos, out);
+                assertTrue(out.find("\\\"name\\\"") != std::string::npos, out);
             }
         });
 
@@ -894,7 +894,7 @@ int main() {
                 "`\n"
                 "    hello\n"
                 "    `\n");
-            assertTrue(out.find("=> \"hello\n\" : String") != std::string::npos, out);
+            assertTrue(out.find("=> \"hello\\n\" : String") != std::string::npos, out);
         });
 
         it("continues interpolating backticks with an open hole", []() {
