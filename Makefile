@@ -106,8 +106,10 @@ build:
 
 # C++ formatting, per .clang-format. Every tracked .cxx/.hxx outside
 # third_party/. Pinned to clang-format 20: other major versions disagree on
-# details, and CI's `format` job runs `format-check` with that version.
-CLANG_FORMAT ?= clang-format
+# details, and CI's `format` job runs `format-check` with that version. A
+# `clang-format-20` on PATH (the name CI and apt.llvm.org use) is preferred over
+# plain `clang-format`, which on many machines is a newer major version.
+CLANG_FORMAT ?= $(shell command -v clang-format-20 2>/dev/null || echo clang-format)
 FORMAT_FILES = git ls-files -z '*.cxx' '*.hxx' ':!:third_party/**'
 
 format:

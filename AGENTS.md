@@ -63,7 +63,7 @@ make test-wasm    # + runs the interpreter test suite via Node
 
 - Never let Python, JavaScript, TypeScript into the repository.
 - C++20
-- Formatted by clang-format 20 per `.clang-format`: run `make format` after editing C++; CI's `format` job (`make format-check`) fails on unformatted code
+- Formatted by clang-format 20 per `.clang-format`: run `make format` after editing C++ (it uses `clang-format-20` from PATH when there is one, else plain `clang-format`, which must then be version 20); CI's `format` job (`make format-check`) fails on unformatted code
   - `make format` only touches files git tracks (`git ls-files`), so a new `.cxx`/`.hxx` is skipped until it is `git add`ed: add new files first, then format
   - Run `make format-check` before every commit, and do not push while it reports anything
 - File extensions: `.hxx` (headers), `.cxx` (source)
