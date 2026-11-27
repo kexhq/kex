@@ -3,7 +3,7 @@
          'loopback?'/1, 'private?'/1, 'unspecified?'/1, 'multicast?'/1,
          prefix/1, 'contains?'/2, first/1, last/1]).
 
-%% Addresses take the syntax the walker's inet_pton(3) takes: an IPv4 dotted
+%% Addresses take the syntax the walker's parseIP takes: an IPv4 dotted
 %% quad of exactly four decimal octets without leading zeros, or an IPv6
 %% address (optionally ending in such a quad), with no zone identifier.
 %% inet:parse_address/1 is far looser (127.1, 0x7f.0.0.1, octal 010.0.0.1,
@@ -83,9 +83,9 @@ parse_prefix(_) -> invalid.
 
 digit(C) -> C >= $0 andalso C =< $9.
 
-%% The text inet_ntop(3) gives, so both backends print the same canonical form:
+%% RFC 5952 text, the walker's renderIP, so both backends print the same form:
 %% the longest run of two or more zero groups (the first, on a tie) becomes
-%% `::`, and an IPv4-compatible or IPv4-mapped address ends in a dotted quad.
+%% `::`, and only an IPv4-mapped address (::ffff:) ends in a dotted quad.
 %% inet:ntoa/1 differs, e.g. it renders ::2 as ::0.0.0.2.
 render({_,_,_,_} = IP) -> iolist_to_binary(inet:ntoa(IP));
 render(IP) ->
@@ -97,7 +97,7 @@ render6(_, 8, Base, Len) when Base + Len == 8 -> ":";
 render6(_, 8, _, _) -> [];
 render6(Words, I, Base, Len) when I >= Base, I < Base + Len ->
     [case I == Base of true -> ":"; false -> [] end | render6(Words, I + 1, Base, Len)];
-render6([_,_,_,_,_,W5,W6,W7], 6, 0, Len) when Len == 6; Len == 5, W5 == 16#ffff ->
+render6([_,_,_,_,_,16#ffff,W6,W7], 6, 0, 5) ->
     [":", inet:ntoa({W6 bsr 8, W6 band 255, W7 bsr 8, W7 band 255})];
 render6(Words, I, Base, Len) ->
     [case I of 0 -> []; _ -> ":" end, string:lowercase(integer_to_list(lists:nth(I + 1, Words), 16))

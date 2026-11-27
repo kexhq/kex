@@ -1,9 +1,11 @@
-# `Address.parse` and `Network.parse` take the same syntax on both backends:
-# the walker's inet_pton(3), not Erlang's lax `inet:parse_address`. Shorthand
-# IPv4 (`127.1`, `1`, `1.2.3`), hex and octal octets, `+` signs and `%zone`
-# suffixes are rejected, since they are how an address slips past an
-# allow-list. Canonical text is inet_ntop(3)'s on both. A prefix length is
-# plain decimal: `/024`, `/+8` and `/ 8` are rejected.
+# `Address.parse` and `Network.parse` take the same syntax on both backends,
+# a strict one of their own rather than the platform's inet_pton(3) (macOS's
+# takes `010.0.0.1` and `%zone`) or Erlang's lax `inet:parse_address`.
+# Shorthand IPv4 (`127.1`, `1`, `1.2.3`), hex and octal octets, `+` signs and
+# `%zone` suffixes are rejected, since they are how an address slips past an
+# allow-list. Canonical text is RFC 5952's on both: `::1.2.3.4` prints as
+# `::102:304`, only `::ffff:` keeps a dotted quad. A prefix length is plain
+# decimal: `/024`, `/+8` and `/ 8` are rejected.
 using Net.IP
 
 foul showAddress(text: String) -> Void do

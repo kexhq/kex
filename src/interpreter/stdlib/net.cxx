@@ -622,11 +622,37 @@ struct IPValue {
     std::array<unsigned char, 16> bytes{};
 };
 
+// The syntax both backends take, checked here rather than left to the
+// platform's inet_pton(3): macOS's takes a leading zero (`010.0.0.1`, which
+// other parsers read as octal) and a `%zone` suffix, glibc's does not. Only hex
+// digits, `:` and `.` reach inet_pton, and each octet of a dotted quad, alone
+// or ending an IPv6 address, is one to three decimal digits with no leading
+// zero. A NUL is rejected with the rest, since inet_pton would stop at it.
+auto strictIPText(const std::string& text) -> bool {
+    for (unsigned char c : text) {
+        if (!std::isxdigit(c) && c != ':' && c != '.') {
+            return false;
+        }
+    }
+    if (text.find('.') == std::string::npos) {
+        return true;
+    }
+    const auto colon = text.rfind(':');
+    std::stringstream quad(colon == std::string::npos ? text : text.substr(colon + 1));
+    std::string octet;
+    while (std::getline(quad, octet, '.')) {
+        if (octet.empty() || octet.size() > 3 || (octet.size() > 1 && octet[0] == '0') ||
+            !std::all_of(
+                octet.begin(), octet.end(), [](unsigned char c) { return std::isdigit(c); })) {
+            return false;
+        }
+    }
+    return !text.ends_with('.');
+}
+
 auto parseIP(const std::string& text) -> std::optional<IPValue> {
     IPValue out;
-    // inet_pton reads a C string, so a NUL would end the address early and
-    // "1.2.3.4\0junk" would parse; the BEAM backend rejects it.
-    if (text.find('\0') != std::string::npos) {
+    if (!strictIPText(text)) {
         return std::nullopt;
     }
     if (inet_pton(AF_INET, text.c_str(), out.bytes.data()) == 1) {
@@ -639,9 +665,57 @@ auto parseIP(const std::string& text) -> std::optional<IPValue> {
     return out;
 }
 
+// RFC 5952 text, written here because inet_ntop(3) differs by platform (musl
+// and emscripten end `::102:304` in a dotted quad, glibc does not): lowercase
+// hex groups without leading zeros, the longest run of two or more zero groups
+// (the first, on a tie) as `::`, and a dotted quad only after `::ffff:`, an
+// IPv4-mapped address.
 auto renderIP(const IPValue& value) -> std::string {
-    char buffer[INET6_ADDRSTRLEN]{};
-    return inet_ntop(value.family, value.bytes.data(), buffer, sizeof(buffer)) ? buffer : "";
+    const auto& b = value.bytes;
+    auto quad = [&](size_t at) {
+        return std::to_string(b[at]) + "." + std::to_string(b[at + 1]) + "." +
+               std::to_string(b[at + 2]) + "." + std::to_string(b[at + 3]);
+    };
+    if (value.family == AF_INET) {
+        return quad(0);
+    }
+    std::array<unsigned, 8> words{};
+    for (size_t i = 0; i < 8; ++i) {
+        words[i] = (unsigned{b[2 * i]} << 8) | b[2 * i + 1];
+    }
+    if (std::all_of(words.begin(), words.begin() + 5, [](unsigned w) { return w == 0; }) &&
+        words[5] == 0xffff) {
+        return "::ffff:" + quad(12);
+    }
+    size_t best = 8, bestLength = 0;
+    for (size_t i = 0; i < 8;) {
+        size_t end = i;
+        while (end < 8 && words[end] == 0) {
+            ++end;
+        }
+        if (end - i > bestLength) {
+            best = i;
+            bestLength = end - i;
+        }
+        i = end == i ? i + 1 : end;
+    }
+    if (bestLength < 2) {
+        best = 8;
+    }
+    std::ostringstream out;
+    out << std::hex;
+    for (size_t i = 0; i < 8; ++i) {
+        if (i == best) {
+            out << "::";
+            i += bestLength - 1;
+            continue;
+        }
+        if (i > 0 && i != best + bestLength) {
+            out << ':';
+        }
+        out << words[i];
+    }
+    return out.str();
 }
 #endif
 
