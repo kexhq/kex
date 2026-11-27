@@ -1,0 +1,8 @@
+spec/lib/noisy.kex:9:1: [KEXEM-0012]: Error, `Noisy` is used by another file, so it cannot have a `main`: a program has one `main`, in the file it runs from
+  |
+9 | main do
+  | ^
+spec/lib/chatty.kex:8:1: [KEXEM-0013]: Error, `Chatty` is used by another file, so it cannot run statements at its top level: they are a second `main`. Move them into a function
+  |
+8 | IO.printLine("chatty: top level ran")
+  | ^

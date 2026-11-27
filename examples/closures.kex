@@ -20,8 +20,6 @@ end
 
 let hello = makeGreeter("Hello")
 let hi = makeGreeter("Hi")
-hello("Alice")   # "Hello, Alice!"
-hi("World")      # "Hi, World!"
 
 # Closures over var capture the value at creation time
 let demonstrate do
@@ -34,7 +32,6 @@ end
 # Higher-order functions
 let applyTwice(f, x) = f(f(x))
 let addOne(n) = n + 1
-applyTwice(~addOne, 5)   # 7
 
 main do
   IO.printLine("doubled: ${doubled}")

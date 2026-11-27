@@ -162,3 +162,6 @@ KEX_DIAGNOSTIC(TraitParamKindMismatch, "KEXEP-0159", "`{param}` in trait `{trait
 KEX_DIAGNOSTIC(NestedTooDeep, "KEXEP-0160", "this is nested more than {limit} levels deep: give an inner part a name with `let`, and use the name")
 KEX_DIAGNOSTIC(FunctionBodyOnNextLine, "KEXEP-0161", "a function body on its own line goes in `do ... end`: write `do` in place of `=`, and `end` after the body")
 KEX_DIAGNOSTIC(GuardOnFunctionClause, "KEXEP-0162", "a function clause cannot have a `when` guard: match on the parameter in the body instead")
+KEX_DIAGNOSTIC(DuplicateMain, "KEXEP-0163", "a program has one `main`, and this file already has one at line {line}: merge them")
+KEX_DIAGNOSTIC(StatementBesideMain, "KEXEP-0164", "this file has a `main` at line {line}, so a statement at its top level is a second one: move it into `main`")
+KEX_DIAGNOSTIC(UsingBodyInModule, "KEXEP-0165", "a module holds declarations, so its `using` cannot have a body that runs: write `using {module}` alone, or move the body into a function")

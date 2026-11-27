@@ -1,16 +1,11 @@
-# `using M do ... end` at top level and in module bodies runs its body
+# `using M do ... end` at top level runs its body
 # with the imports scoped to it. Bodies run first, in file order —
 # elaboration-time code, before any main-phase steps — on both
-# backends. BEAM used to drop these bodies while the walker ran them.
+# backends. BEAM used to drop these bodies while the walker ran them. The
+# file has no `main`: beside one, a top-level body is a second entry point.
+# In a module body one is an error (error_using_body_in_module).
 module M do
   let answer() = 42
-end
-
-module N do
-  using M do
-    IO.printLine("module using body")
-    IO.printLine(answer())
-  end
 end
 
 IO.printLine("bare before")
@@ -18,10 +13,6 @@ IO.printLine("bare before")
 using M do
   IO.printLine("top using body")
   IO.printLine(answer())
-end
-
-main do
-  IO.printLine("main")
 end
 
 IO.printLine("bare after")

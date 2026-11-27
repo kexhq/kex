@@ -106,15 +106,16 @@ and a name added to the module later cannot appear here without an edit. See
 Three placements, narrowest first:
 
 ```kex
+let summary(rows: [Row]) -> String do
+  let header = "${rows.count} rows"
+  using Formatting do                # just this block
+    return "${header}\n${rows.first.render}"
+  end
+end
+
 let report(rows: [Row]) -> String do
   using Formatting                   # rest of this function body
   return rows.map(&.render).join("\n")
-end
-
-module App do
-  using Http do                      # just these declarations
-    let handleHome(req: Request) -> Response = Response.ok("Welcome!")
-  end
 end
 
 module URI                           # rest of the file

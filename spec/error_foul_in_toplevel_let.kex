@@ -1,0 +1,6 @@
+# A top-level `let` is a `let` like any other: pure. Effects belong in `main`.
+let line = IO.readLine()
+
+main do
+  IO.printLine(line)
+end

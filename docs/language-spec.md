@@ -45,6 +45,21 @@ main do
 end
 ```
 
+A program has exactly one entry point, in the file it runs from:
+
+- At most one `main` per file (KEXEP-0163).
+- With a `main`, nothing else at the top level runs: a bare statement or a
+  `using M do ... end` body beside it is an error (KEXEP-0164). Without one,
+  those statements are the entry point, as in the script above.
+- A file another one uses (`using M`) runs nothing: a `main` in it
+  (KEXEM-0012) or a top-level statement (KEXEM-0013) is an error.
+- A module holds declarations, so a `using` in a module body has no body of
+  its own (KEXEP-0165). Inside a function, `using M do ... end` is scoping
+  and stays.
+
+A top-level `let` is a declaration, and pure like any other `let`: it cannot
+call a `foul` function. Effects go in `main`, or in a `foul` function it calls.
+
 ---
 
 ## 2. Lexical Structure

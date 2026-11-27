@@ -209,7 +209,33 @@ struct ProjectModules {
     std::vector<std::unique_ptr<std::string>> paths;
     std::vector<std::unique_ptr<std::string>> sources;
     std::vector<std::unique_ptr<ast::Program>> programs;
+    // A used module's `main` or bare top-level statement, reported in the
+    // document at the `using` that reached it: a program has one `main`.
+    std::vector<semantic::Diagnostic> diagnostics;
 };
+
+// Where `module` is named by a `using` in `program`, at its top level or in
+// its modules; nullopt when it is reached only by a qualified name.
+auto usingLocationOf(const ast::Program& program, const std::string& module)
+    -> std::optional<SourceLocation> {
+    std::optional<SourceLocation> found;
+    auto scan = [&](auto& self, const auto& items) -> void {
+        for (const auto& item : items) {
+            if (found) {
+                return;
+            }
+            if (const auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item);
+                block && *block && (*block)->module.dotted() == module) {
+                found = (*block)->location;
+            } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                       mod && *mod) {
+                self(self, (*mod)->body);
+            }
+        }
+    };
+    scan(scan, program.items);
+    return found;
+}
 
 // Merge every project-local module this document reaches into its program,
 // the way `kex -c`, `kex -R` and `kex -C` all do before checking. Without it
@@ -241,8 +267,12 @@ auto mergeProjectModules(
     // every method in it was then "defined twice for receiver".
     std::unordered_set<std::string> loaded{identity(documentPath)};
     std::vector<ast::Program*> pending;
+    // For each retained module, the module name it was reached by and the place
+    // in the document whose `using` reached it, directly or through others.
+    std::vector<std::string> reachedAs;
+    std::vector<std::optional<SourceLocation>> reachedFrom;
 
-    auto discover = [&](const ast::Program& from) {
+    auto discover = [&](const ast::Program& from, std::optional<SourceLocation> via) {
         auto names = module::collectUsingModules(from);
         semantic::Analyzer references(interfaces);
         (void)references.analyze(from);
@@ -294,6 +324,21 @@ auto mergeProjectModules(
             if (!compiled::expand(*parsed, expansionDiagnostics, expandOptions)) {
                 continue;
             }
+            if (&from == &program) {
+                via = usingLocationOf(program, name);
+                if (!via && !program.items.empty()) {
+                    via = std::visit(
+                        [](const auto& node) -> std::optional<SourceLocation> {
+                            if (node) {
+                                return node->location;
+                            }
+                            return std::nullopt;
+                        },
+                        program.items.front());
+                }
+            }
+            reachedAs.push_back(name);
+            reachedFrom.push_back(via);
             pending.push_back(parsed.get());
             retained.paths.push_back(std::move(path));
             retained.sources.push_back(std::move(source));
@@ -301,20 +346,52 @@ auto mergeProjectModules(
         }
     };
 
-    discover(program);
+    discover(program, std::nullopt);
     // Breadth-first: a module just merged can name modules of its own, and
     // discovery must not stop after one hop.
     for (size_t i = 0; i < pending.size(); ++i) {
-        discover(*pending[i]);
+        discover(*pending[i], reachedFrom[i]);
     }
 
     if (retained.programs.empty()) {
         return;
     }
+    // A spec's base, merged already as a companion, is reached again when the
+    // spec names its module: its `main` is the program's own (mergeDependencies).
+    std::unordered_set<std::string> companions;
+    for (const auto& file : program.companionFiles) {
+        companions.insert(identity(file));
+    }
     std::vector<ast::TopLevelItem> merged;
-    for (auto& dependency : retained.programs) {
+    for (size_t i = 0; i < retained.programs.size(); ++i) {
+        auto& dependency = retained.programs[i];
+        const bool companion = companions.contains(identity(*retained.paths[i]));
+        bool reported = false;
         for (auto& item : dependency->items) {
-            if (ast::isMergedDeclaration(item)) {
+            if (companion) {
+                if (ast::isMergedDeclaration(item)) {
+                    merged.push_back(std::move(item));
+                }
+                continue;
+            }
+            // A program has one `main`, as the build says (mergeDependencies):
+            // a used file's `main`, bare statement or top-level `using X do
+            // ... end` body is reported, and not merged.
+            const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
+            const bool isMain = main && *main && (*main)->isExplicitMain;
+            if (const auto* at = isMain ? &(*main)->location : ast::topLevelStatementAt(item)) {
+                if (!reported && reachedFrom[i]) {
+                    auto diagnostic = semantic::makeDiagnostic(
+                        semantic::Diagnostic::Level::Error,
+                        isMain ? diag::Code::MainInDependency : diag::Code::StatementInDependency,
+                        *reachedFrom[i], {{"module", reachedAs[i]}});
+                    diagnostic.notes.push_back(
+                        {*at,
+                         isMain ? "its `main` is here" : "this statement runs at its top level"});
+                    retained.diagnostics.push_back(std::move(diagnostic));
+                    reported = true;
+                }
+            } else if (ast::isMergedDeclaration(item)) {
                 merged.push_back(std::move(item));
             }
         }
@@ -3408,6 +3485,14 @@ private:
         // runs: names (for this document), module rules, purity and types.
         std::vector<semantic::Diagnostic> diagnostics =
             state ? state->sourceDiagnostics : m_db.diagnosticsFor(document.path);
+        // A used module's `main` (mergeProjectModules), at the `using` that
+        // reached it.
+        if (const auto modules = m_projectModules.find(document.path);
+            state && modules != m_projectModules.end()) {
+            diagnostics.insert(
+                diagnostics.end(), modules->second.diagnostics.begin(),
+                modules->second.diagnostics.end());
+        }
         if (state) {
             semantic::Analyzer analyzer(&m_interfaces);
             std::vector<std::string> entryFiles{document.path};

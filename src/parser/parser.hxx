@@ -123,6 +123,7 @@ private:
     auto parseFunctionDef(bool isFoul = false) -> std::unique_ptr<ast::FunctionDef>;
     auto parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock>;
     auto parseUsingBlock() -> std::unique_ptr<ast::UsingBlock>;
+    auto parseModuleUsingBlock() -> std::unique_ptr<ast::UsingBlock>;
     auto parseExportDecl() -> std::unique_ptr<ast::ExportDecl>;
     auto parseUsingOptions(
         std::optional<std::string>& alias,
@@ -246,6 +247,9 @@ private:
     int m_pos = 0;
     bool m_noDoBlocks = false;
     std::vector<ast::TopLevelItem> m_deferredTopLevelItems;
+    // The line of this file's explicit `main`, once one is parsed: a second
+    // one is an error (a program has one `main`).
+    int m_mainLine = 0;
     bool m_noThenExpr = false;      // suppress `then` as ternary inside if-conditions
     bool m_inTypeSignature = false; // `name : T`: `->` may lead the next line
     // Set by a make body for the member it is about to parse: any keyword may

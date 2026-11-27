@@ -1,0 +1,21 @@
+# A module holds declarations: a `using` with a body in it ran that body when
+# the program loaded, outside `main`. Inside a module's function it is scoping.
+module M do
+  let answer() -> Integer = 42
+end
+
+module N do
+  using M do
+    IO.printLine(answer())
+  end
+
+  foul show do
+    using M do
+      IO.printLine(answer())
+    end
+  end
+end
+
+main do
+  N.show()
+end

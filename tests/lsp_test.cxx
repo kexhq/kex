@@ -2801,5 +2801,140 @@ int main() {
                 "the transparent parameter was not shown: " + reply);
         });
     });
+    describe("Kex LSP one main", []() {
+        // A spec's base is its companion: its `main` is the program's own, not
+        // a used module's, though the spec names the base's module and so
+        // reaches the file again (examples/binary_tree.spec.kex).
+        it("does not report a spec base's main", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-spec-base-main";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            {
+                std::ofstream base(root / "counter.kex");
+                base << "module Counter do\n"
+                        "  let step(n: Integer) -> Integer = n + 1\n"
+                        "end\n"
+                        "\n"
+                        "main do\n"
+                        "  IO.printLine(Counter.step(1))\n"
+                        "end\n";
+            }
+            const char* spec = "describe(\\\"counter\\\") do\\n"
+                               "  it(\\\"counts\\\") do\\n"
+                               "    assert(Counter.step(1) == 2)\\n"
+                               "  end\\n"
+                               "end\\n";
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-spec-base-main","capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                std::string(
+                    R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-spec-base-main/counter.spec.kex","languageId":"kex","version":1,"text":")") +
+                spec + R"("}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto text = output.str();
+            assertTrue(
+                text.find("publishDiagnostics") != std::string::npos &&
+                    text.find("KEXEM-0012") == std::string::npos &&
+                    text.find("KEXET-") == std::string::npos,
+                "a spec base's main was reported, or the base was not merged: " +
+                    text.substr(0, 3000));
+            fs::remove_all(root);
+        });
+        // A program has one `main`. A used module's own `main` is reported, as
+        // the build reports it (KEXEM-0012), in the document at the `using`
+        // that reached it, with the module's `main` as related information.
+        it("reports a used module's main at the using", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-used-main";
+            fs::remove_all(root);
+            fs::create_directories(root / "lib");
+            {
+                std::ofstream library(root / "lib" / "greeter.kex");
+                library << "module Greeter\n"
+                           "\n"
+                           "let greet(name: String) -> String = \"hi ${name}\"\n"
+                           "\n"
+                           "main do\n"
+                           "  IO.printLine(greet(\"self\"))\n"
+                           "end\n";
+            }
+            const char* entry = "# the entry\\n"
+                                "using Greeter\\n"
+                                "main do\\n"
+                                "  IO.printLine(greet(\\\"kex\\\"))\\n"
+                                "end\\n";
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-used-main","capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                std::string(
+                    R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-used-main/main.kex","languageId":"kex","version":1,"text":")") +
+                entry + R"("}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto text = output.str();
+            const auto at = text.find("KEXEM-0012");
+            assertTrue(at != std::string::npos, "no used-module main diagnostic: " + text);
+            // On the `using` line (0-based line 1) of this document, not at the
+            // module's line: its own range follows its related information.
+            const auto published =
+                text.find(R"("uri":"file:///tmp/kex-lsp-used-main/main.kex")", at);
+            const auto range = text.find(
+                R"("range":{"end":{"character":5,"line":1},"start":{"character":0,"line":1}})", at);
+            assertTrue(
+                published != std::string::npos && range < published,
+                "used-module main not at the using: " + text.substr(0, 3000));
+            assertTrue(
+                text.find("greeter.kex", at) != std::string::npos &&
+                    text.find("its `main` is here", at) != std::string::npos,
+                "no related information at the module's main: " + text.substr(0, 3000));
+            fs::remove_all(root);
+        });
+        // A second `main` in the document, and a statement beside one, are the
+        // parser's errors, published as the build prints them.
+        it("reports a second main and a statement beside main", []() {
+            const char* entry = "IO.printLine(\\\"before\\\")\\n"
+                                "main do\\n"
+                                "  IO.printLine(\\\"one\\\")\\n"
+                                "end\\n"
+                                "main do\\n"
+                                "  IO.printLine(\\\"two\\\")\\n"
+                                "end\\n";
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                std::string(
+                    R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-two-mains.kex","languageId":"kex","version":1,"text":")") +
+                entry + R"("}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto text = output.str();
+            assertTrue(
+                text.find("KEXEP-0163") != std::string::npos,
+                "no second-main diagnostic: " + text.substr(0, 3000));
+            assertTrue(
+                text.find("KEXEP-0164") != std::string::npos,
+                "no statement-beside-main diagnostic: " + text.substr(0, 3000));
+        });
+    });
     return runAll();
 }

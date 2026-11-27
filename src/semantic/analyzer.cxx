@@ -224,8 +224,11 @@ auto Analyzer::analyzeItem(const Item& item) -> void {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 analyzeFunctionDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                // A main block may do anything.
-                const auto outer = std::exchange(m_inFoulContext, true);
+                // A main block may do anything. A top-level `let` (the
+                // parser's synthetic wrapper) is a `let` like any other: pure.
+                // Letting it be foul laundered effects into pure functions
+                // that read it, and BEAM re-ran them at every read.
+                const auto outer = std::exchange(m_inFoulContext, !node->synthetic);
                 analyzeBody(node->body);
                 m_inFoulContext = outer;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {

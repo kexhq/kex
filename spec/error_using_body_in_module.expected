@@ -1,0 +1,5 @@
+spec/error_using_body_in_module.kex:8:3: [KEXEP-0165]: Error, a module holds declarations, so its `using` cannot have a body that runs: write `using M` alone, or move the body into a function
+  |
+8 |   using M do
+  |   ^^^^^^^^^^
+Aborted: 1 syntax error. Fix them before running.

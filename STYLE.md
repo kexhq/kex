@@ -373,22 +373,23 @@ function or block, not at file scope (`overbroad-using`). File-scope `using` is
 for a module the file leans on throughout.
 
 ```kex
-module App do
-  using Http do                                  # yes — only these handlers need it
-    let handleHome(req: Request) -> Response = Response.ok("Welcome!")
-  end
-
-  let unrelated(n: Integer) -> Integer = n * 2   # unaffected by the import
-end
-
 let report(rows: [Row]) -> String do             # yes — one function, one import
   using Formatting
   return rows.map(&.render).join("\n")
 end
+
+let summary(rows: [Row]) -> String do
+  let header = "${rows.count} rows"
+  using Formatting do                            # yes — only this part needs it
+    return "${header}\n${rows.first.render}"
+  end
+end
 ```
 
-Both forms are available: `using M do ... end` scopes the names to a block,
-while a bare `using M` inside a body scopes them to the rest of that body.
+Both forms are available inside a function: `using M do ... end` scopes the
+names to a block, while a bare `using M` scopes them to the rest of the body.
+At file or module scope only the bare form is: a block there would be code
+that runs outside `main`, and a module holds declarations (KEXEP-0165).
 
 **[L]** **An import names what it takes.** Write `using M, only: [f, g]` and
 keep the list short — a handful of names, on one line (`using-only-list`):
@@ -415,13 +416,27 @@ Bare `using M` stays right for a DSL, whose whole point is that its vocabulary
 is in scope unqualified.
 
 **[L]** **A `using` block that contains everything should be a `using`
-statement.** The block form exists to limit which declarations can see `M`'s
-names. When the block holds every declaration in its enclosing body, it limits
-nothing — the names are in scope for the whole body either way — and all it has
-added is a level of indentation. Write the statement form instead
-(`redundant-using-block`).
+statement.** Inside a function, the block form exists to limit which lines can
+see `M`'s names. When the block holds the whole rest of the body, it limits
+nothing, and all it has added is a level of indentation. Write the statement
+form instead (`redundant-using-block`):
 
-The usual place this shows up is a file that is one module:
+```kex
+let render(page: Page) -> String do
+  using Html                        # yes — statement form, scopes to the body
+  return page.sections.map(&.toHtml).join("\n")
+end
+
+let render(page: Page) -> String do
+  using Html do                     # no — this block holds the whole body
+    return page.sections.map(&.toHtml).join("\n")
+  end
+end
+```
+
+In a file that is one module the block form is not a style question but an
+error (KEXEP-0165): a module holds declarations, and a `using` body there was
+code run at load time, so the declarations in it were never the module's:
 
 ```kex
 module JSON
@@ -436,7 +451,7 @@ let parse(text: String) -> Document or! ParseError = ...
 
 ```kex
 module JSON
-using Parsing do                    # no — this block holds the whole file
+using Parsing do                    # no — an error: a module's `using` has no body
   record Document do
     root : Value
   end
@@ -445,12 +460,9 @@ using Parsing do                    # no — this block holds the whole file
 end
 ```
 
-Both put `Parsing`'s names in scope for every declaration in the file. The
-second only indents them to say so.
-
-The block earns its keep when something is left outside it — the `App` / `Http`
-example above, where `unrelated` sits outside the block and cannot see Http's
-names — or a DSL scope.
+The block earns its keep when something is left outside it — the `summary`
+example above, where `header` is computed before the block and cannot see
+Formatting's names — or a DSL scope inside a function.
 
 **[L]** Internal helpers go in a single `private do ... end` block, placed
 **after** the public API of that module or `make` block (`private-placement`).

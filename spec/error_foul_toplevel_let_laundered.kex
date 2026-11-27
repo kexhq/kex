@@ -1,0 +1,14 @@
+# A foul call bound by a top-level `let` must not reach a pure function that
+# reads the binding: on BEAM every read re-ran the effect.
+foul shout(s: String) do
+  IO.printLine(s)
+  s
+end
+
+let loud = shout("hello")
+
+let pureReader() -> String = loud
+
+main do
+  IO.printLine(pureReader())
+end

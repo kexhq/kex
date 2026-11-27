@@ -123,42 +123,48 @@ end
 
 # Using the router
 module App do
-  using Http do
-    let handleHome(req: Request) -> Response do
-      return Response.ok("Welcome!")
-    end
-
-    let handleUsers(req: Request) -> Response do
-      let users = UserService.getAll()
-      return Response.json(users.to(String).or(""))
-    end
-
-    let handleCreateUser(req: Request) -> Response do
-      match req.body do
-        Just(body) => do
-          let result = UserService.create(body)
-          match result do
-            Ok(user) => Response.json(user.to(String).or(""))
-            Error(e) => Response { status: 400, body: e.message }
-          end
-        end
-        None => Response { status: 400, body: "Body required" }
-      end
-    end
-
-    let logMiddleware(handler: Handler) -> Handler do
-      return { |req|
-        Logger.info("${req.method} ${req.path}")
-        handler(req)
-      }
-    end
-
-    let router = Router.Config {}
-      .use(~logMiddleware)
-      .get("/", ~handleHome)
-      .get("/users", ~handleUsers)
-      .post("/users", ~handleCreateUser)
+  using Http
+  let handleHome(req: Request) -> Response do
+    return Response.ok("Welcome!")
   end
+
+  let handleUsers(req: Request) -> Response do
+    let users = UserService.getAll()
+    return Response.json(users.to(String).or(""))
+  end
+
+  let handleCreateUser(req: Request) -> Response do
+    match req.body do
+      Just(body) => do
+        let result = UserService.create(body)
+        match result do
+          Ok(user) => Response.json(user.to(String).or(""))
+          Error(e) => Response { status: 400, body: e.message }
+        end
+      end
+      None => Response { status: 400, body: "Body required" }
+    end
+  end
+
+  # A middleware is a pure `Handler -> Handler`: it may change the request or
+  # the response, as this one stamps every response, but logging is IO and
+  # belongs in `foul` code such as `start`.
+  let poweredBy(handler: Handler) -> Handler do
+    return { |req|
+      let response = handler(req)
+      Response {
+        status: response.status,
+        headers: response.headers.put("X-Powered-By", "Kex"),
+        body: response.body
+      }
+    }
+  end
+
+  let router = Router.Config {}
+    .use(~poweredBy)
+    .get("/", ~handleHome)
+    .get("/users", ~handleUsers)
+    .post("/users", ~handleCreateUser)
 
   foul start(router: Http.Router.Config) do
     Logger.info("Starting server on port 8080")
