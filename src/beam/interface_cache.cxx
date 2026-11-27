@@ -28,9 +28,9 @@ using namespace kex::semantic;
 constexpr int kMagic = 0x4b584946; // "KXIF"
 // Bump with ANY shape change below, or a change to what an entry holds
 // (6: an imported trait keeps every overload of a required name; 7: a
-// written `Any` is the atom `any`, UnknownType::written): old files must read
-// as bad-version, never misparse.
-constexpr int kVersion = 7;
+// written `Any` is the atom `any`, UnknownType::written; 8: a module keeps
+// its unit): old files must read as bad-version, never misparse.
+constexpr int kVersion = 8;
 
 // Every tuple shape in the format, named once and shared by the encoder
 // and the decoder. Named shapes (ifaces, fn, signature, ...) go through
@@ -44,7 +44,7 @@ constexpr int kVersion = 7;
 namespace schema {
 constexpr size_t kIfaces = 15;
 constexpr size_t kModulePair = 2;
-constexpr size_t kModuleBody = 6;
+constexpr size_t kModuleBody = 7;
 constexpr size_t kSignature = 12;
 constexpr size_t kFn = 17;
 constexpr size_t kTrait = 6;
@@ -734,7 +734,8 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
              checkedTuple(
                  {Term::binary(module.sourceModule), Term::binary(module.backendModule),
                   Term::boolean(module.automaticImport), Term::boolean(module.isCapability),
-                  Term::boolean(module.compiledApart), Term::list(std::move(exports))},
+                  Term::boolean(module.compiledApart), Term::binary(module.unit),
+                  Term::list(std::move(exports))},
                  schema::kModuleBody, "module body")},
             schema::kModulePair, "module pair"));
     }
@@ -886,6 +887,7 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes, CacheMissR
             module.automaticImport = sax.readBool();
             module.isCapability = sax.readBool();
             module.compiledApart = sax.readBool();
+            module.unit = sax.readBinary();
             const auto exportCount = sax.beginList();
             module.exports.reserve(exportCount);
             for (size_t j = 0; j < exportCount; ++j) {

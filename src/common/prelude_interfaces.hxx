@@ -1287,6 +1287,7 @@ inline auto sourceSemanticInterfaces(
                 ifaces.modules[moduleName].backendModule = backendModuleFor(moduleName);
                 ifaces.modules[moduleName].automaticImport = automaticImport;
                 ifaces.modules[moduleName].isCapability = mod.isCapability;
+                ifaces.modules[moduleName].unit = std::string(mod.location.file);
                 // `foul` is written on the definition, never on the annotation
                 // above it — `foul name : T` is the foul VALUE-binding form, so
                 // an arrow signature cannot carry the marker. An annotated
@@ -1696,6 +1697,9 @@ inline auto mergeSemanticInterfaces(
         auto [it, inserted] = base.modules.try_emplace(name, std::move(module));
         if (inserted) {
             continue;
+        }
+        if (it->second.unit.empty()) {
+            it->second.unit = module.unit;
         }
         for (auto& [exportName, functions] : module.exports) {
             auto& destination = it->second.exports[exportName];

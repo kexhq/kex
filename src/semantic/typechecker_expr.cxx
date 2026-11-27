@@ -4674,6 +4674,38 @@ auto TypeChecker::namespaceCallProblem(
         if (rootIsSomething) {
             return std::nullopt;
         }
+        // A module's last segment, where no `using` loads it: name the module.
+        // Not past one of this program's own (`using Protocol, except:
+        // [HTTP]` leaves `Protocol.HTTP` out on purpose).
+        const auto suffix = "." + written;
+        const bool localNamed =
+            std::any_of(m_localModules.begin(), m_localModules.end(), [&](const auto& module) {
+                return module == written || module.ends_with(suffix);
+            });
+        if (rootEnd == std::string::npos && m_importedInterfaces && !localNamed) {
+            std::vector<std::string> unreached;
+            for (const auto& [module, _] : m_importedInterfaces->modules) {
+                if (module.ends_with(suffix) && !shortNameReaches(module)) {
+                    unreached.push_back(module);
+                }
+            }
+            std::sort(unreached.begin(), unreached.end());
+            if (unreached.size() == 1) {
+                return std::pair{
+                    diag::Code::UndefinedNameNotImported,
+                    diag::Args{
+                        {"name", written}, {"module", kex::mangle::scopeOf(unreached.front())}}};
+            }
+            if (!unreached.empty()) {
+                std::string owners;
+                for (const auto& module : unreached) {
+                    owners += (owners.empty() ? "`" : ", `") + module + "`";
+                }
+                return std::pair{
+                    diag::Code::UndefinedNameNotVisible,
+                    diag::Args{{"name", written}, {"owners", owners}}};
+            }
+        }
         return std::pair{diag::Code::UnknownModule, diag::Args{{"module", written}}};
     }
     const auto& path = match->path;

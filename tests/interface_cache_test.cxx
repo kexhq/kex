@@ -258,6 +258,9 @@ auto modulesEqual(const ImportedModuleInterface& a, const ImportedModuleInterfac
     if (a.compiledApart != b.compiledApart) {
         return false;
     }
+    if (a.unit != b.unit) {
+        return false;
+    }
     if (a.exports.size() != b.exports.size()) {
         return false;
     }
@@ -454,6 +457,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
     module.automaticImport = true;
     module.isCapability = true;
     module.compiledApart = true;
+    module.unit = "Kex.Test";
     module.exports["parse"] = {fn, ctor};
     ifaces.modules["Test"] = module;
     ifaces.receiverFunctions["parse"].push_back(fn);

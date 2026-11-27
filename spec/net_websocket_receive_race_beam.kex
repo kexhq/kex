@@ -12,6 +12,7 @@
 # The client side's own bounded receive is exercised too: its 2s bound has
 # to be a real bound, not the 30s blocking read under it.
 
+using Net
 using Net.HTTP.WebSocket
 using Net.HTTP, except: [ClientOptions]
 using Net.Socket

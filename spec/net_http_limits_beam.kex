@@ -5,6 +5,7 @@
 # clients' deadline and response size (kexhq/kex#484). BEAM-only, like the
 # rest of Net.HTTP.
 
+using Net
 using Net.HTTP
 using Net.Socket
 

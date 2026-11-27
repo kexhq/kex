@@ -17,6 +17,7 @@
 # connection closing underneath it — a real message sent after several such
 # rounds still gets through and echoed back correctly.
 
+using Net
 using Net.HTTP.WebSocket
 using Net.HTTP, except: [ClientOptions]
 using Net.Socket

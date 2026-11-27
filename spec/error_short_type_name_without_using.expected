@@ -1,0 +1,12 @@
+spec/error_short_type_name_without_using.kex:6:21: [KEXET-0154]: Error, undefined constructor or type: `Input`. `Parsing.Input` is not imported here
+  |
+6 | let consumed(input: Input) -> String = "consumed"
+  |                     ^^^^^
+spec/error_short_type_name_without_using.kex:8:19: [KEXET-0156]: Error, undefined constructor or type: `Address`. Not visible here: `Net.IP.Address`, `Net.Socket.Unix.Address`
+  |
+8 | let host(address: Address) -> String = "host"
+  |                   ^^^^^^^
+spec/error_short_type_name_without_using.kex:10:19: [KEXET-0154]: Error, undefined constructor or type: `Queue`. `Data.Queue` is not imported here
+   |
+10 | let queued(queue: Queue<Integer>) -> String = "queued"
+   |                   ^^^^^^^^^^^^^^

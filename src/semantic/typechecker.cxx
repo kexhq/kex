@@ -1644,17 +1644,31 @@ auto TypeChecker::resolveRecordName(const std::string& name) const -> std::strin
             // ADT is never guessed at: an unimported `Message` must not become
             // Net.HTTP.WebSocket.Message over a local `type Message = :hello`
             // that is resolved after this.
-            const auto match = resolve_core::matchSuffix(m_recordFields, "." + name);
+            const auto suffix = "." + name;
+            for (const auto& [record, _] : m_recordFields) {
+                if (record.ends_with(suffix)) {
+                    cached->second.push_back(record);
+                }
+            }
+            std::sort(cached->second.begin(), cached->second.end());
+        }
+        // Among the records a short name reaches here: an imported module's
+        // only under a `using` that loads it (shortTypeNameReaches). `Input`
+        // with no `using Parsing` is no `Parsing.Input`.
+        std::optional<std::string> unique;
+        for (const auto& record : cached->second) {
+            if (!shortTypeNameReaches(record)) {
+                continue;
+            }
             // Ambiguous answers the bare name at once, as it always has; no
             // match goes on to the aliases below.
-            if (match.kind == resolve_core::SuffixMatchKind::Unique) {
-                cached->second = match.name;
-            } else if (match.kind == resolve_core::SuffixMatchKind::Ambiguous) {
-                cached->second = name;
+            if (unique) {
+                return name;
             }
+            unique = record;
         }
-        if (cached->second) {
-            return *cached->second;
+        if (unique) {
+            return *unique;
         }
     }
     // A leading portion of `name` is a KNOWN ALIAS (`using Geometry, as:
@@ -1703,6 +1717,72 @@ auto TypeChecker::resolveRecordName(const std::string& name) const -> std::strin
     return name;
 }
 
+auto TypeChecker::shortNameReaches(const std::string& module) const -> bool {
+    if (!m_importedInterfaces) {
+        return true;
+    }
+    const auto found = m_importedInterfaces->modules.find(module);
+    if (found == m_importedInterfaces->modules.end()) {
+        return true;
+    }
+    if (found->second.automaticImport || withinModule(module) || m_localModules.contains(module)) {
+        return true;
+    }
+    // Any `using` of the program, wherever it is written: loading is not
+    // scoped, the runtimes load a module for the whole program.
+    const auto& unit = found->second.unit;
+    return std::any_of(
+        m_importedModulePaths.begin(), m_importedModulePaths.end(), [&](const auto& named) {
+            if (module == named || module.starts_with(named + ".")) {
+                return true;
+            }
+            if (unit.empty()) {
+                return false;
+            }
+            const auto imported = m_importedInterfaces->modules.find(named);
+            return imported != m_importedInterfaces->modules.end() && imported->second.unit == unit;
+        });
+}
+
+auto TypeChecker::shortTypeNameReaches(const std::string& type) const -> bool {
+    if (m_programRecords.contains(type) || !m_importedInterfaces) {
+        return true;
+    }
+    if (m_importedInterfaces->modules.contains(type)) {
+        return shortNameReaches(type);
+    }
+    return shortNameReaches(kex::mangle::scopeOf(type));
+}
+
+// Declared under the bare name itself: this program's, or a type at the top
+// level of an imported file.
+auto TypeChecker::bareTypeDeclared(const std::string& name) const -> bool {
+    return m_declaredTypeNames.count(name) || m_recordFields.count(name) ||
+           m_adtVariants.count(name) || m_typeAliases.count(name) || m_distinctTypes.count(name) ||
+           m_traits.lookup(name);
+}
+
+auto TypeChecker::unreachedImportedTypes(const std::string& name) const
+    -> std::vector<std::string> {
+    if (!m_importedInterfaces || !m_importedInterfaces->typeNames.contains(name) ||
+        bareTypeDeclared(name)) {
+        return {};
+    }
+    const auto suffix = "." + name;
+    std::vector<std::string> candidates;
+    for (const auto& type : m_importedInterfaces->typeNames) {
+        if (!type.ends_with(suffix)) {
+            continue;
+        }
+        if (shortTypeNameReaches(type)) {
+            return {};
+        }
+        candidates.push_back(type);
+    }
+    std::sort(candidates.begin(), candidates.end());
+    return candidates;
+}
+
 // Resolves a bare module segment against the modules `using` brought into
 // scope, when `name` is not itself a registered module — `Set.from([…])`
 // after `using Data.Set` writes the receiver as `Set`, but the module is
@@ -1720,11 +1800,14 @@ auto TypeChecker::resolveRecordName(const std::string& name) const -> std::strin
 //      module (`using Net.HTTP` aliases bare `Status` to `Net.HTTP.Status`).
 //      Two imports aliasing the same bare segment is an ambiguity — leave
 //      `name` unresolved rather than guessing.
-//   3. A globally unique module whose last segment is `name`, the same
-//      last-resort `resolveRecordName` takes for record names — this is what
-//      lets `UnorderedSet.from(…)` work from the same `using Data.Set` that
-//      only aliases `Set` under rule 2, since `Data.Set` and `Data.UnorderedSet`
-//      share a file but not a parent/child relationship.
+//   3. A unique module whose last segment is `name`, among those a short name
+//      reaches (shortNameReaches: the prelude's, and those a `using` loaded),
+//      the same last resort `resolveRecordName` takes for record names. This
+//      is what lets `UnorderedSet.from(…)` work from the same `using
+//      Data.Set` that only aliases `Set` under rule 2, since `Data.Set` and
+//      `Data.UnorderedSet` share a file but not a parent/child relationship.
+//      With no `using` loading it, neither runtime has the module: the walker
+//      said `undefined function: UnorderedSet.from`, BEAM `undef`.
 auto TypeChecker::resolveModulePath(const std::string& name, const std::string& member) const
     -> std::string {
     auto resolved = resolveImportedModulePath(name, member);
@@ -1871,7 +1954,7 @@ auto TypeChecker::resolveImportedModulePath(
     for (const auto& [candidate, _] : m_importedInterfaces->modules) {
         if (candidate.size() <= suffix.size() ||
             candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) != 0 ||
-            !exportsMember(candidate)) {
+            !exportsMember(candidate) || !shortNameReaches(candidate)) {
             continue;
         }
         if (unique && *unique != candidate) {
@@ -5251,7 +5334,7 @@ auto TypeChecker::resolveTypeExprNode(
                     (void)isNominal;
                     return Type::named(qualified);
                 }
-                if (!namesDeclaredType(qualified, last)) {
+                if (!namesDeclaredType(qualified, last) || !unreachedImportedTypes(last).empty()) {
                     reportUnknownType(node, typeExpr.location);
                 }
                 return Type::named(resolveRecordName(last));
@@ -5385,7 +5468,8 @@ auto TypeChecker::resolveTypeExprNode(
                         return Type::named(qualified, std::move(args));
                     }
                 }
-                if (!namesDeclaredType(node.name.dotted(), name)) {
+                if (!namesDeclaredType(node.name.dotted(), name) ||
+                    (node.name.parts.size() == 1 && !unreachedImportedTypes(name).empty())) {
                     reportUnknownType(node.name, typeExpr.location);
                 }
                 return Type::named(resolveRecordName(name), std::move(args));
@@ -9979,6 +10063,25 @@ auto TypeChecker::reportUndefined(
     }
 }
 
+auto TypeChecker::reportUnreachedName(
+    const std::string& what,
+    const std::string& name,
+    const std::vector<std::string>& candidates,
+    const SourceLocation& at) -> void {
+    const auto& codes = undefinedCodes(what);
+    if (candidates.size() == 1) {
+        error(
+            codes.notImported, at,
+            {{"name", name}, {"module", kex::mangle::scopeOf(candidates.front())}});
+        return;
+    }
+    std::string owners;
+    for (const auto& candidate : candidates) {
+        owners += (owners.empty() ? "`" : ", `") + candidate + "`";
+    }
+    error(codes.notVisible, at, {{"name", name}, {"owners", owners}});
+}
+
 } // namespace kex::semantic
 
 namespace kex::semantic {
@@ -10011,21 +10114,43 @@ auto TypeChecker::reportUnknownType(const ast::TypeName& name, const SourceLocat
     if (!m_reportUnknownTypes || !m_reportedUnknownTypes.insert(&name).second) {
         return;
     }
+    // Out of reach is decided by the `using`s around the name, here.
+    auto unreached = name.parts.size() == 1 ? unreachedImportedTypes(name.parts.front())
+                                            : std::vector<std::string>{};
     // While declarations are still being registered a name may be one
     // registered later (a trait an ADT payload names): judged once they all
     // are (reportPendingUnknownTypes).
     if (!m_declarationsRegistered) {
-        m_pendingUnknownTypes.push_back({&name, at});
+        m_pendingUnknownTypes.push_back({&name, at, std::move(unreached)});
         return;
     }
-    error(diag::Code::UnknownType, at, {{"name", name.dotted()}});
+    if (!reportUnreachedType(name, unreached, at)) {
+        error(diag::Code::UnknownType, at, {{"name", name.dotted()}});
+    }
+}
+
+// A bare name only a module nobody imported here declares says which module
+// that is (`Input` of `Parsing.Input`): the type is not unknown, it is out of
+// reach.
+auto TypeChecker::reportUnreachedType(
+    const ast::TypeName& name, const std::vector<std::string>& unreached, const SourceLocation& at)
+    -> bool {
+    if (name.parts.size() != 1 || unreached.empty() || bareTypeDeclared(name.parts.front())) {
+        return false;
+    }
+    reportUnreachedName("constructor or type", name.parts.front(), unreached, at);
+    return true;
 }
 
 auto TypeChecker::reportPendingUnknownTypes() -> void {
     m_declarationsRegistered = true;
-    for (const auto& [name, at] : m_pendingUnknownTypes) {
-        if (!namesDeclaredType(name->dotted(), name->parts.empty() ? "" : name->parts.back())) {
-            error(diag::Code::UnknownType, at, {{"name", name->dotted()}});
+    for (const auto& pending : m_pendingUnknownTypes) {
+        const auto& name = *pending.name;
+        if (reportUnreachedType(name, pending.unreached, pending.at)) {
+            continue;
+        }
+        if (!namesDeclaredType(name.dotted(), name.parts.empty() ? "" : name.parts.back())) {
+            error(diag::Code::UnknownType, pending.at, {{"name", name.dotted()}});
         }
     }
     m_pendingUnknownTypes.clear();
