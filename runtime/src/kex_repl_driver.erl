@@ -142,7 +142,12 @@ eval_module(Nonce, Mod) ->
         _ -> sentinel(Nonce, ok)
     catch
         error:Reason -> report(Nonce, Reason);
-        exit:Reason  -> report(Nonce, Reason)
+        exit:Reason  -> report(Nonce, Reason);
+        %% A `.try` with no rescue around it. Uncaught, it ended the VM (and
+        %% wrote erl_crash.dump), so every later input failed to load.
+        throw:{kex_try_error, E} ->
+            report(Nonce, unicode:characters_to_binary(
+                [<<".try failed with no rescue handler: ">>, kex_io:to_string(E)]))
     end.
 
 exec_expr(Nonce, Expr) ->

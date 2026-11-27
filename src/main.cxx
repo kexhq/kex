@@ -147,10 +147,15 @@ auto usageText(const char* progName) -> std::string {
             "                    read first; with a topic (errors, testing, ...), "
             "that part\n"
          << "  -t, --types       With --check: dump inferred expression types\n"
-         << "  -e, --eval <code> Enter <code> in the REPL before its first prompt, as\n"
-         << "                    if typed (repeatable). A failing line ends the\n"
-         << "                    session with status 1. Takes no file; -i picks the\n"
-         << "                    tree-walk REPL\n"
+         << "  -e, --eval <code> Run <code> and exit, as `ruby -e` does (repeatable, in\n"
+         << "                    order). Status 1 when a line fails to check or\n"
+         << "                    raises. Takes no file; -R picks the interpreter\n"
+         << "      --init <file> Boot the REPL from <file>: its lines are entered\n"
+         << "                    before the first prompt, as if typed, `/with` lines\n"
+         << "                    included. A failing line ends the session with\n"
+         << "                    status 1\n"
+         << "  -U, --using <M>   Enter `using M` first, in the REPL or for -e\n"
+         << "                    (repeatable): `kex -U FS -e '...'`\n"
          << "  -E, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
          << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
          << "      --dump-hir    With -C: list each call site and what the\n"
@@ -371,6 +376,7 @@ enum Value {
     IamAi,
     EvalEtf,
     NoInspect,
+    Init,
 };
 } // namespace Option
 
@@ -422,6 +428,8 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
         {"print-pipeline-passes", no_argument, nullptr, Option::PrintPipelinePasses},
         {"emit-core", no_argument, nullptr, 'E'},
         {"eval", required_argument, nullptr, 'e'},
+        {"init", required_argument, nullptr, Option::Init},
+        {"using", required_argument, nullptr, 'U'},
         {"emit-ast", no_argument, nullptr, Option::EmitAst},
         {"ast-filename", required_argument, nullptr, Option::AstFilename},
         {"complete", required_argument, nullptr, 'K'},
@@ -506,7 +514,8 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
     // program's, as with `ruby` or `python`. Without it getopt_long permuted
     // argv and kept reading options past the file, so `kex notes.kex list -n 3`
     // took `-n` as `--no-check` and `--limit 3` aborted the run (kexhq/kex#654).
-    while ((opt = getopt_long(argc, argv, "+rnlcCiRjspqEe:thvK:o:", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "+rnlcCiRjspqEe:U:thvK:o:", longOptions, nullptr)) !=
+           -1) {
         switch (opt) {
             case Option::NoPrelude: options.skipPrelude = true; break;
             case Option::Expand: options.mode = Mode::Expand; break;
@@ -620,15 +629,9 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
             case Option::Explain: options.explainCode = optarg; break;
             case 't': options.dumpTypes = true; break;
             case 'E': options.mode = Mode::EmitCore; break;
-            case 'e': {
-                // Repeatable; each one is entered as its own lines, in order.
-                std::istringstream source(optarg);
-                for (std::string line; std::getline(source, line);) {
-                    queueReplScriptLine(line);
-                }
-                options.replEval = true;
-                break;
-            }
+            case 'e': options.evalCode.emplace_back(optarg); break;
+            case 'U': options.usingModules.emplace_back(optarg); break;
+            case Option::Init: options.initFile = optarg; break;
             case 'o':
                 options.outputDir = optarg;
                 options.outputDirExplicit = true;
@@ -1125,6 +1128,39 @@ int main(int argc, char* argv[]) {
     auto& astFilename = options.astFilename;
     auto& outputDirExplicit = options.outputDirExplicit;
     auto& replEval = options.replEval;
+    // The session's script, in this order: the `--using` lines, the `--init`
+    // file, then each `--eval`. Every one is entered as its own lines, as if
+    // typed, so a multi-line block or a `/with` works in any of them.
+    {
+        auto queueLines = [](const std::string& text) {
+            std::istringstream source(text);
+            for (std::string line; std::getline(source, line);) {
+                queueReplScriptLine(line);
+            }
+        };
+        for (const auto& module : options.usingModules) {
+            queueReplScriptLine("using " + module);
+        }
+        if (!options.initFile.empty()) {
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(options.initFile, ec)) {
+                std::cerr << "error: --init: " << options.initFile << ": no such file\n";
+                return 1;
+            }
+            queueLines(readFile(options.initFile));
+        }
+        for (const auto& code : options.evalCode) {
+            queueLines(code);
+        }
+        replEval =
+            !options.usingModules.empty() || !options.initFile.empty() || !options.evalCode.empty();
+        // `-e` runs its code and exits, as `ruby -e` does: no banner, no
+        // prompt and no `=> value` echo, and the terminal is never read.
+        if (!options.evalCode.empty()) {
+            setReplScriptOnly(true);
+            options.noInspect = true;
+        }
+    }
     auto& compileRun = options.compileRun;
     auto& skipPrelude = options.skipPrelude;
     auto& collapseReport = options.collapseReport;
@@ -1242,10 +1278,13 @@ int main(int argc, char* argv[]) {
         return index.printTopic(argv[optind], std::cout, std::cerr) ? 0 : 1;
     }
 
-    if (replEval && (optind < argc || !((mode == Mode::Compile && compileRun) ||
-                                        mode == Mode::Repl || mode == Mode::BeamRepl))) {
-        std::cerr << "error: --eval enters code in the REPL, so it takes no file "
-                     "and no other mode (use -i for the tree-walk REPL)\n";
+    // -R or -i takes the tree-walk REPL, as -R takes the interpreter for a file.
+    if (replEval &&
+        (optind < argc || !((mode == Mode::Compile && compileRun) || mode == Mode::Run ||
+                            mode == Mode::Repl || mode == Mode::BeamRepl))) {
+        std::cerr << "error: --eval, --init and --using run in a REPL session, so they "
+                     "take no file and no other mode (-R or -i for the tree-walk "
+                     "interpreter)\n";
         return 1;
     }
 

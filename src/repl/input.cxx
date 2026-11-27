@@ -892,6 +892,8 @@ std::deque<std::string> g_replScript;
 // while booting ends the session instead of leaving a half-booted REPL.
 bool g_replLineFromScript = false;
 bool g_replScriptFailed = false;
+// `--eval`: the session is the script alone (setReplScriptOnly).
+bool g_replScriptOnly = false;
 
 // Lines read ahead of the REPL by `peekReplLine`, served first.
 std::deque<std::string> g_replReadAhead;
@@ -903,6 +905,9 @@ auto readLine(const std::string& prompt) -> std::pair<std::string, bool> {
         auto line = std::move(g_replScript.front());
         g_replScript.pop_front();
         return {line, true};
+    }
+    if (g_replScriptOnly) {
+        return {"", false};
     }
     if (!g_replReadAhead.empty()) {
         // Echoed as a line read from a pipe is, after its prompt.
@@ -935,6 +940,10 @@ auto readLine(const std::string& prompt) -> std::pair<std::string, bool> {
 auto peekReplLine() -> std::optional<std::string> {
     if (!g_replScript.empty()) {
         return g_replScript.front();
+    }
+    // The program's stdin is its own: an `--eval` session never reads it.
+    if (g_replScriptOnly) {
+        return std::nullopt;
     }
     if (!g_replReadAhead.empty()) {
         return g_replReadAhead.front();
@@ -1407,6 +1416,14 @@ auto classifyReplInput(const std::string& source) -> ReplInput {
 
 auto queueReplScriptLine(const std::string& line) -> void {
     g_replScript.push_back(line);
+}
+
+auto setReplScriptOnly(bool on) -> void {
+    g_replScriptOnly = on;
+}
+
+auto replScriptOnly() -> bool {
+    return g_replScriptOnly;
 }
 
 // Tab completion and the cancel keys on readline's line editor, as both REPLs
