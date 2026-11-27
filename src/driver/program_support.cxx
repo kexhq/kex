@@ -52,7 +52,6 @@ using kex::driver::g_dependencyFailureThrows;
 using kex::driver::LoadedDep;
 using kex::driver::prependItems;
 using kex::driver::setScanCache;
-using kex::process::shellSingleQuote;
 
 // Additional project roots supplied by repeatable `--source-root` options.
 // Keeping this at the CLI boundary lets every existing consumer of
@@ -66,14 +65,6 @@ bool quietBuild = false;
 // so the program can connect to others (`Node.connect`) and they to it. They
 // become erl's own `-sname`/`-name`/`-setcookie` on every VM kex launches.
 std::vector<std::string> cliDistributionArgs;
-
-auto distributionArgsForShell() -> std::string {
-    std::string out;
-    for (const auto& arg : cliDistributionArgs) {
-        out += " " + shellSingleQuote(arg);
-    }
-    return out;
-}
 
 // What erl would reject as a node name, said before the VM is launched: left
 // to erl, a bad name kills the kernel during boot and the user gets a crash

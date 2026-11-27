@@ -51,10 +51,10 @@ using kex::driver::LoadedDep;
 using kex::driver::moduleCount;
 using kex::module::shownPath;
 using kex::process::beamTestGate;
+using kex::process::Command;
 using kex::process::exitStatusOf;
-using kex::process::runShellCommand;
-using kex::process::runShellCommandsTogether;
-using kex::process::shellSingleQuote;
+using kex::process::runCommand;
+using kex::process::runCommandsTogether;
 
 // Attaches each emitted module's KexI chunk to its `.beam` in `outputDir`.
 // Companions go first, so the entry's chunk is written once, already naming
@@ -118,6 +118,25 @@ auto attachInterfaces(
     }
 }
 
+namespace {
+// `text` inside an Erlang literal of the `-eval` the runners build, delimited
+// by `quote` (`"` for a string, `'` for an atom): only the delimiter and `\`
+// can end it early or change it, and both survive as themselves escaped. A
+// path or a file name is the user's, so `"` in a directory name must not end
+// the string — or splice code into the expression.
+auto erlangQuoted(const std::string& text, char quote) -> std::string {
+    std::string out(1, quote);
+    for (char c : text) {
+        if (c == quote || c == '\\') {
+            out += '\\';
+        }
+        out += c;
+    }
+    out += quote;
+    return out;
+}
+} // namespace
+
 // Runs an already compiled `.beam` entry module with the bundled runtime;
 // `beamArgs` are the program's own arguments.
 auto runCompiledBeam(
@@ -158,27 +177,29 @@ auto runCompiledBeam(
     // A prebuilt .beam carries no evidence of being a spec — the file name it
     // was compiled from is gone — so mocks here are strictly opt-in
     // (issue #144).
+    const std::string beamPathLiteral = erlangQuoted(absBeamPath, '"');
+    const std::string moduleAtom = erlangQuoted(moduleName, '\'');
     std::string mainCall =
         beamOtpFloorGuard() +
         "io:setopts(standard_io, [{encoding, unicode}]), "
         "io:setopts(standard_error, [{encoding, unicode}]), " +
         (options.allowMocks ? "kex_test:allow_mocks(), " : "") +
         beamTestGate(options.testReportMode, options.testFilters) +
-        "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
-        "\"), "
-        "code:load_binary('" +
-        moduleName + "',\"" + absBeamPath +
-        "\",_Bin), "
-        "case lists:member({main,1},erlang:get_module_info('" +
-        moduleName +
-        "',exports)) of "
-        "true -> '" +
-        moduleName +
-        "':main([unicode:characters_to_binary(A) || A <- "
+        "try {ok,_Bin}=file:read_file(" + beamPathLiteral +
+        "), "
+        "code:load_binary(" +
+        moduleAtom + "," + beamPathLiteral +
+        ",_Bin), "
+        "case lists:member({main,1},erlang:get_module_info(" +
+        moduleAtom +
+        ",exports)) of "
+        "true -> " +
+        moduleAtom +
+        ":main([unicode:characters_to_binary(A) || A <- "
         "init:get_plain_arguments()]); "
-        "false -> '" +
-        moduleName +
-        "':main() end of "
+        "false -> " +
+        moduleAtom +
+        ":main() end of "
         "Result -> halt() "
         "catch _:Reason:_ -> case Reason of "
         "_R when is_binary(_R); is_list(_R) -> "
@@ -200,24 +221,21 @@ auto runCompiledBeam(
     // Deliberately NOT applied to the REPL's persistent VM (the `BeamVm` block
     // above), where Ctrl+C should interrupt evaluation rather than end the
     // session.
-    std::string runCmd = erlExecutable() + " +Bi -noshell" + distributionArgsForShell();
+    //
+    // Run as an argument vector, never through a shell: the program's own
+    // arguments reach `main` exactly as given — a space, a quote, `$(...)`
+    // or an empty string included — and so do the paths and the -eval text.
+    Command runCmd{erlExecutable(), "+Bi", "-noshell"};
+    runCmd.insert(runCmd.end(), cliDistributionArgs.begin(), cliDistributionArgs.end());
     if (!rtBeamDir.empty()) {
-        runCmd += " -pa " + rtBeamDir;
+        runCmd.insert(runCmd.end(), {"-pa", rtBeamDir});
     }
-    runCmd += " -pa " + absBeamDir;
-    // shellSingleQuote (see its own comment) wraps the whole -eval
-    // text as one shell argument, so quote characters embedded in it
-    // (e.g. around a module name with a literal '.' in its stem)
-    // survive into erl correctly regardless of where they land.
-    runCmd += " -eval " + shellSingleQuote(mainCall);
+    runCmd.insert(runCmd.end(), {"-pa", absBeamDir, "-eval", mainCall});
     if (!beamArgs.empty()) {
-        runCmd += " -extra";
-        for (const auto& a : beamArgs) {
-            runCmd += " " + a;
-        }
+        runCmd.push_back("-extra");
+        runCmd.insert(runCmd.end(), beamArgs.begin(), beamArgs.end());
     }
-    int rc = runShellCommand(runCmd);
-    return exitStatusOf(rc);
+    return exitStatusOf(runCommand(runCmd));
 }
 
 // Compiles each emitted module's Core Erlang (`corePaths`, in
@@ -302,25 +320,21 @@ auto compileCoreModules(
         std::remove_if(
             batches.begin(), batches.end(), [](const auto& batch) { return batch.empty(); }),
         batches.end());
+    // An argument vector, not a shell line: a path with a space or a quote in
+    // it stays one argument. The quiet run's flags are `erlcFlags`, which the
+    // cache key above is made from.
     const auto erlcCommand = [&](const std::vector<std::size_t>& batch, bool loud) {
-        std::string command = erlcExecutable() + " " +
-                              (loud ? std::string("+from_core") : erlcFlags) + " -pa " + outputDir +
-                              " -o " + outputDir;
-        for (const auto moduleIndex : batch) {
-            command += " " + corePaths[moduleIndex];
+        Command command{erlcExecutable(), "+from_core"};
+        if (!loud) {
+            command.push_back("-W0");
         }
-        // Suppress erlc noise in temp-dir (interpreter/-R) mode. erlc prints
-        // its own warnings (e.g. "this clause cannot match because a
-        // previous clause always matches" — harmless analysis of the
-        // generated code) to its OWN STDOUT, not stderr, so both streams are
-        // silenced to keep them out of the running program's own output.
-        // Failures are still caught by the exit status, and re-run loudly.
-        if (!loud && quiet) {
-            command += " > /dev/null 2>&1";
+        command.insert(command.end(), {"-pa", outputDir, "-o", outputDir});
+        for (const auto moduleIndex : batch) {
+            command.push_back(corePaths[moduleIndex]);
         }
         return command;
     };
-    std::vector<std::string> commands;
+    std::vector<Command> commands;
     for (const auto& batch : batches) {
         commands.push_back(erlcCommand(batch, false));
     }
@@ -344,7 +358,13 @@ auto compileCoreModules(
     }
     std::vector<std::size_t> failed;
     std::size_t compiled = 0;
-    runShellCommandsTogether(commands, [&](std::size_t index, int status) {
+    // Suppress erlc noise in temp-dir (interpreter/-R) mode. erlc prints its
+    // own warnings (e.g. "this clause cannot match because a previous clause
+    // always matches" — harmless analysis of the generated code) to its OWN
+    // STDOUT, not stderr, so both streams are silenced to keep them out of the
+    // running program's own output. Failures are still caught by the exit
+    // status, and re-run loudly.
+    runCommandsTogether(commands, quiet, [&](std::size_t index, int status) {
         const auto& batch = batches[index];
         if (status != 0) {
             failed.push_back(index);
@@ -373,7 +393,7 @@ auto compileCoreModules(
         // file it choked on.
         if (quiet) {
             for (const auto index : failed) {
-                runShellCommand(erlcCommand(batches[index], true));
+                runCommand(erlcCommand(batches[index], true));
             }
         }
         std::cerr << "error: erlc failed\n";
@@ -405,10 +425,12 @@ auto runBuiltProgram(
         std::string beam = outputDir + "/" + emitted.moduleName + ".beam";
         std::string absBeam = fs::weakly_canonical(beam).string();
         std::string binaryVar = "_B" + std::to_string(moduleIndex);
-        loadExpr += "{ok," + binaryVar + "}=file:read_file(\"" + absBeam +
-                    "\"), "
-                    "code:load_binary('" +
-                    emitted.moduleName + "',\"" + absBeam + "\"," + binaryVar + "), ";
+        const std::string pathLiteral = erlangQuoted(absBeam, '"');
+        loadExpr += "{ok," + binaryVar + "}=file:read_file(" + pathLiteral +
+                    "), "
+                    "code:load_binary(" +
+                    erlangQuoted(emitted.moduleName, '\'') + "," + pathLiteral + "," + binaryVar +
+                    "), ";
     }
     // Kex runtime errors carry a String (binary/charlist) reason: the
     // program's own failure, said as `Error:` as the walker says it.
@@ -429,34 +451,29 @@ auto runBuiltProgram(
     const std::string mockGate =
         ((options.allowMocks || isSpecEntry(filepath)) ? "kex_test:allow_mocks(), " : "") +
         beamTestGate(options.testReportMode, options.testFilters);
-    std::string mainCall = result.mainArity == 1
-                               ? beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + "'" +
-                                     result.moduleName +
-                                     "':main([unicode:characters_to_binary(A) || A <- "
-                                     "init:get_plain_arguments()]) of Result -> halt() catch "
-                                     "_:Reason:_ -> " +
-                                     reasonFmt + ", halt(1) end"
-                               : beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + "'" +
-                                     result.moduleName +
-                                     "':main() of Result -> halt() catch _:Reason:_ -> " +
-                                     reasonFmt + ", halt(1) end";
-    // shellSingleQuote (see its own comment) wraps the whole
-    // -eval text as one shell argument, so quote characters
-    // embedded in it survive into erl correctly regardless of
-    // where they land (spec/json_parser.spec.kex).
-    std::string runCmd =
-        // `+Bi` for the same reason as the other run path above: it is
-        // half of the Ctrl+C fix, with forwardSignalToChild's
-        // SIGINT→SIGTERM the other half.
-        erlExecutable() + " +Bi -noshell" + distributionArgsForShell() + " -pa " + outputDir +
-        " -eval " + shellSingleQuote(mainCall);
+    const std::string entryAtom = erlangQuoted(result.moduleName, '\'');
+    std::string mainCall =
+        result.mainArity == 1
+            ? beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + entryAtom +
+                  ":main([unicode:characters_to_binary(A) || A <- "
+                  "init:get_plain_arguments()]) of Result -> halt() catch "
+                  "_:Reason:_ -> " +
+                  reasonFmt + ", halt(1) end"
+            : beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + entryAtom +
+                  ":main() of Result -> halt() catch _:Reason:_ -> " + reasonFmt + ", halt(1) end";
+    // An argument vector, as in the other run path above: the -eval text
+    // (quote characters and all, spec/json_parser.spec.kex), the paths and
+    // the program's own arguments each reach erl as exactly one argument.
+    // `+Bi` for the same reason as there too: it is half of the Ctrl+C fix,
+    // with forwardSignalToChild's SIGINT→SIGTERM the other half.
+    Command runCmd{erlExecutable(), "+Bi", "-noshell"};
+    runCmd.insert(runCmd.end(), cliDistributionArgs.begin(), cliDistributionArgs.end());
+    runCmd.insert(runCmd.end(), {"-pa", outputDir, "-eval", mainCall});
     if (result.mainArity == 1 && !scriptArgs.empty()) {
-        runCmd += " -extra";
-        for (const auto& a : scriptArgs) {
-            runCmd += " " + a;
-        }
+        runCmd.push_back("-extra");
+        runCmd.insert(runCmd.end(), scriptArgs.begin(), scriptArgs.end());
     }
-    int ret = runShellCommand(runCmd);
+    int ret = runCommand(runCmd);
     if (!tempDir.empty()) {
         std::filesystem::remove_all(tempDir);
     }
