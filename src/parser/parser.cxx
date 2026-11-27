@@ -349,6 +349,33 @@ auto Parser::parseProgram() -> ast::Program {
         skipNewlines();
     }
 
+    // A program has one entry point: with an explicit `main`, a bare top-level
+    // statement or a `using X do ... end` body is a second one. Both used to
+    // run, around `main` on BEAM and in source order on the walker. The first
+    // such statement is reported.
+    const ast::MainBlock* explicitMain = nullptr;
+    const SourceLocation* firstStatement = nullptr;
+    for (const auto& item : program.items) {
+        if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
+            main && *main && (*main)->isExplicitMain && !explicitMain) {
+            explicitMain = main->get();
+        } else if (const auto* statement = ast::topLevelStatementAt(item);
+                   statement && !firstStatement) {
+            firstStatement = statement;
+        }
+    }
+    // Not after another syntax error: recovery from one can leave a line of a
+    // body (a `slot`'s, say) looking like a top-level statement.
+    const bool recovered =
+        std::any_of(m_diagnostics.begin(), m_diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code != diag::Code::DuplicateMain;
+        });
+    if (explicitMain && firstStatement && !recovered) {
+        report(
+            diag::Code::StatementBesideMain, *firstStatement,
+            {{"line", std::to_string(explicitMain->location.line)}});
+    }
+
     // A standalone `f : A -> B` line is the other way to give a free
     // function its parameter types; point the parameters at it so overload
     // dispatch sees them (docs/issue-free-function-overloads.md).
@@ -502,7 +529,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
         } else if (check(TokenType::Compiled)) {
             mod->body.push_back(parseCompiledBlock());
         } else if (check(TokenType::Using)) {
-            mod->body.push_back(parseUsingBlock());
+            mod->body.push_back(parseModuleUsingBlock());
         } else if (check(TokenType::Export)) {
             mod->body.push_back(parseExportDecl());
         } else if (check(TokenType::Public) || check(TokenType::Private)) {
@@ -4598,6 +4625,18 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
     return complete(std::move(block));
 }
 
+// A `using` among a module's declarations: one with a body is an error, since
+// that body ran when the program loaded, outside `main` (a program has one
+// entry point). Inside a function a body is only scoping, and stays.
+auto Parser::parseModuleUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
+    auto block = parseUsingBlock();
+    if (!block->body.empty()) {
+        report(
+            diag::Code::UsingBodyInModule, block->location, {{"module", block->module.dotted()}});
+    }
+    return block;
+}
+
 auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
     auto block = std::make_unique<ast::UsingBlock>();
     block->location = currentLocation();
@@ -4736,6 +4775,13 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     }
 
     expect(TokenType::End, diag::Code::ExpectedEndToCloseMainBlock);
+    // Reported, not thrown: the rest of the file still parses and is checked.
+    // BEAM used to keep only the last `main` and the walker ran them all.
+    if (m_mainLine != 0) {
+        report(diag::Code::DuplicateMain, block->location, {{"line", std::to_string(m_mainLine)}});
+    } else {
+        m_mainLine = block->location.line;
+    }
     return complete(std::move(block));
 }
 
@@ -4780,7 +4826,7 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
         } else if (check(TokenType::Record)) {
             block->items.push_back(parseRecordDef());
         } else if (check(TokenType::Using)) {
-            block->items.push_back(parseUsingBlock());
+            block->items.push_back(parseModuleUsingBlock());
         } else {
             error(
                 diag::Code::UnexpectedTokenInVisibilityBlock,

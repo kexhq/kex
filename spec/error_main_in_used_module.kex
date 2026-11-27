@@ -1,0 +1,10 @@
+# A program has one `main`, in the file it runs from. A used module's file
+# with its own `main`, or with bare top-level statements (an implicit `main`),
+# is an error: both used to be dropped without a word, so what ran depended
+# on which file the build started from.
+using Noisy
+using Chatty
+
+main do
+  IO.printLine(shout(greet("kex")))
+end

@@ -182,6 +182,7 @@ auto mergeSpecBase(kex::ast::Program& program, const std::string& entry, std::st
             *rawSource = text;
         }
         prependItems(program, declarationsOf(candidate, std::move(text)));
+        program.companionFiles.push_back(candidate);
         return candidate;
     }
     return "";

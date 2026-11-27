@@ -1,0 +1,5 @@
+spec/error_duplicate_main.kex:7:1: [KEXEP-0163]: Error, a program has one `main`, and this file already has one at line 3: merge them
+  |
+7 | main do
+  | ^^^^
+Aborted: 1 syntax error. Fix them before running.

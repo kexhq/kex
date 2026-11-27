@@ -45,10 +45,10 @@ end
 
 ```kex
 module App do
-  using Http do
-    let router = Router.Config {}
-      .get("/", ~handleHome)
-  end
+  using Http
+
+  let router = Router.Config {}
+    .get("/", ~handleHome)
 end
 ```
 

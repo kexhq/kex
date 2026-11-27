@@ -1,0 +1,9 @@
+# A program has one `main`. BEAM used to keep only the last one and the walker
+# ran every one of them.
+main do
+  IO.printLine("first")
+end
+
+main do
+  IO.printLine("second")
+end

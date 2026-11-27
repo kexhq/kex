@@ -11,3 +11,5 @@ KEX_DIAGNOSTIC(ModuleNotFoundInSourceRoots, "KEXEM-0009", "module not found in s
 KEX_DIAGNOSTIC(ModuleNotFoundInSourceRootsWarning, "KEXWM-0001", "module not found in source roots: {module}")
 KEX_DIAGNOSTIC(ModuleFileDeclaresAnother, "KEXEM-0010", "this file is `{module}` by its path, but declares `{declared}`; name it `module {module}`")
 KEX_DIAGNOSTIC(ModuleInFileNamedForAnother, "KEXEM-0011", "module `{module}` is declared in a file whose path names `{pathModule}`, so `{module}` is not found; name it `module {pathModule}`, or move it to {path}")
+KEX_DIAGNOSTIC(MainInDependency, "KEXEM-0012", "`{module}` is used by another file, so it cannot have a `main`: a program has one `main`, in the file it runs from")
+KEX_DIAGNOSTIC(StatementInDependency, "KEXEM-0013", "`{module}` is used by another file, so it cannot run statements at its top level: they are a second `main`. Move them into a function")

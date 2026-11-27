@@ -1,0 +1,7 @@
+# With an explicit `main`, a bare top-level statement is a second entry point.
+# Both used to run: around `main` on BEAM, in source order on the walker.
+IO.printLine("before")
+
+main do
+  IO.printLine("main")
+end

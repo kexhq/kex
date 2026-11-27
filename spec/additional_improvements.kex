@@ -40,6 +40,4 @@ assert(ni == 42, "Number.parse int")
 let Ok(nf) = Number.parse("3.14")
 assert(nf > 3.13, "Number.parse float")
 
-main do
-  IO.printLine("passed")
-end
+IO.printLine("passed")

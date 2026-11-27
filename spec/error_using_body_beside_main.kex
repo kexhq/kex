@@ -1,0 +1,19 @@
+# A top-level `using M do ... end` with a body runs that body, so beside a
+# `main` it is a second entry point. Inside a function it is only scoping.
+module M do
+  let answer() -> Integer = 42
+end
+
+using M do
+  IO.printLine(answer())
+end
+
+foul report do
+  using M do
+    IO.printLine(answer())
+  end
+end
+
+main do
+  report()
+end

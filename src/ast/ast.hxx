@@ -941,6 +941,11 @@ auto heldNode(const Item& item) -> const void* {
 
 struct Program {
     std::vector<TopLevelItem> items;
+    // The companion files whose declarations were merged in (a `.spec.kex`'s
+    // base): theirs is the entry's own `main` code, dropped by the merge, so a
+    // dependency that turns out to be one of them is not a used module with a
+    // `main` of its own.
+    std::vector<std::string> companionFiles;
     // Its source has no code: nothing but blank lines and comments. Not the
     // same as no items, which is also what a file that failed to parse leaves.
     bool blank = false;
@@ -955,6 +960,22 @@ struct Program {
 inline auto isMergedDeclaration(const TopLevelItem& item) -> bool {
     const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item);
     return !main || ((*main)->synthetic && !(*main)->isExplicitMain);
+}
+
+// Where `item` is code that runs at the top level besides an explicit `main`:
+// a bare statement (a non-synthetic, implicit main block) or a `using X do
+// ... end` whose body runs. A program has one entry point, so such code next
+// to a `main`, or in a file another one uses, is an error. Null otherwise.
+inline auto topLevelStatementAt(const TopLevelItem& item) -> const SourceLocation* {
+    if (const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item);
+        main && *main && !(*main)->synthetic && !(*main)->isExplicitMain) {
+        return &(*main)->location;
+    }
+    if (const auto* block = std::get_if<std::unique_ptr<UsingBlock>>(&item);
+        block && *block && !(*block)->body.empty()) {
+        return &(*block)->location;
+    }
+    return nullptr;
 }
 
 // A local `let UPPER = ...` constant: an uppercase name bound to the zero-arg

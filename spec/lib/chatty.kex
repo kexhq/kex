@@ -1,0 +1,8 @@
+# A module file with a bare top-level statement, for
+# spec/error_main_in_used_module.kex: in a file another one uses, it is a
+# second `main`.
+module Chatty do
+  let shout(name: String) -> String = name.upcase
+end
+
+IO.printLine("chatty: top level ran")

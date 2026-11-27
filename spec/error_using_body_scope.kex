@@ -1,16 +1,16 @@
 # kex: check-only
 # A `using M do ... end` body scopes its imports: the names are usable
-# inside the block but not visible after it, at top level or in a
-# module body.
+# inside the block but not visible after it, at top level or in a function.
+# (In a module body a `using` has no body: error_using_body_in_module.)
 module M do
   let answer() = 42
 end
 
-module N do
+foul run do
   using M do
     IO.printLine(answer())
   end
-  let run() = answer()
+  IO.printLine(answer())
 end
 
 using M do

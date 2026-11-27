@@ -103,6 +103,7 @@ auto Workspace::updateFile(
             merged.push_back(std::move(item));
         }
         state.ast.items = std::move(merged);
+        state.ast.companionFiles.push_back(companion);
     }
 
     // Every name it declares, top-level and in its modules.

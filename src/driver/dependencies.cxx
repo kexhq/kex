@@ -599,12 +599,50 @@ auto mergeDependencies(
     const auto& sandboxesBefore = dependencies.sandboxesBefore;
     if (!deps.empty()) {
         std::vector<kex::ast::TopLevelItem> merged;
+        bool dependencyHasMain = false;
+        // A spec's base, merged already, is loaded again when the spec names
+        // its module. Its `main` is the program's own, not a used module's.
+        const auto canonical = [](const std::string& path) {
+            std::error_code error;
+            const auto resolved = std::filesystem::weakly_canonical(path, error);
+            return error ? path : resolved.string();
+        };
+        std::set<std::string> companions;
+        for (const auto& file : program.companionFiles) {
+            companions.insert(canonical(file));
+        }
         for (auto& dep : deps) {
+            const bool companion = companions.contains(canonical(*dep.path));
+            std::string moduleName;
+            for (const auto& item : dep.program->items) {
+                if (const auto* mod = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+                    mod && *mod && moduleName.empty()) {
+                    moduleName = (*mod)->name;
+                }
+            }
             for (auto& item : dep.program->items) {
-                if (kex::ast::isMergedDeclaration(item)) {
+                // A program has one `main`, in the file it runs from. A used
+                // file's `main` and bare statements were dropped without a
+                // word, and its `using X do ... end` bodies ran in the user's
+                // `main`: what ran depended on which file the build started from.
+                const auto* main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
+                const bool explicitMain = main && *main && (*main)->isExplicitMain;
+                const auto* at =
+                    explicitMain ? &(*main)->location : kex::ast::topLevelStatementAt(item);
+                if (at && !companion) {
+                    reportModuleFileError(
+                        *dep.path, at->line,
+                        explicitMain ? kex::diag::Code::MainInDependency
+                                     : kex::diag::Code::StatementInDependency,
+                        {{"module", moduleName.empty() ? shownPath(*dep.path) : moduleName}});
+                    dependencyHasMain = true;
+                } else if (kex::ast::isMergedDeclaration(item)) {
                     merged.push_back(std::move(item));
                 }
             }
+        }
+        if (dependencyHasMain) {
+            dependencyFailure("a used module has a `main`");
         }
         prependItems(program, std::move(merged));
     }
