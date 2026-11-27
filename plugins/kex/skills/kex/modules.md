@@ -108,5 +108,6 @@ end
 - Everything is public unless it sits in the module's `private do ... end`
   block, which goes after the public functions.
 - Inside a module, call its own functions by their bare names.
-- Standard-library modules outside the prelude need `using` too:
-  `using FS`, `using JSON`, `using Regex`. `kex -s <Name>` says which.
+- Standard-library modules outside the prelude work the same way: write
+  `FS.File.read` or `JSON.parse` for a use or two, or `using FS` to call its
+  names bare. `kex -s <Name>` says which module a name is in.

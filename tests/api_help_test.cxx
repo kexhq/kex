@@ -122,7 +122,7 @@ int main() {
         });
 
         it("says which using it needs, spelled as the source spells it",
-           [&]() { assertTrue(has(point, "needs `using Shapes`")); });
+           [&]() { assertTrue(has(point, "or `using Shapes` to use it bare")); });
 
         it("lists the module of the same name with the type",
            [&]() { assertTrue(has(point, "origin : Point")); });
@@ -186,6 +186,10 @@ int main() {
 
         it("is found by its bare name",
            [&]() { assertTrue(has(topic(index, "lead"), "List.lead  (make [Point])")); });
+
+        // Called on a list, it has no qualified spelling to write instead.
+        it("added to a prelude type needs the using",
+           [&]() { assertTrue(has(topic(index, "List.lead"), "needs `using Shapes`")); });
     });
 
     describe("doc tags", [&]() {
@@ -237,8 +241,27 @@ int main() {
     });
 
     describe("a prelude source", [&]() {
-        it("needs no using",
-           [&]() { assertFalse(has(topic(indexOf(""), "Point"), "needs `using")); });
+        it("needs no using", [&]() {
+            const auto shown = topic(indexOf(""), "Point");
+            assertFalse(has(shown, "needs `using"));
+            assertFalse(has(shown, "outside the prelude"));
+        });
+    });
+
+    describe("a source whose path is in snake case", [&]() {
+        // `net/http/web_socket.kex` declares `Net.HTTP.WebSocket`, and a
+        // program writes the declared name.
+        it("needs the using the source declares", [&]() {
+            kex::help::ApiIndex index;
+            index.addSource(
+                "net/http/web_socket.kex",
+                "module Net.HTTP.WebSocket\n\n# A frame.\nrecord Frame do\n  size : Integer = "
+                "0\nend\n",
+                "net.http.web_socket");
+            const auto frame = topic(index, "Net.HTTP.WebSocket.Frame");
+            assertTrue(has(frame, "or `using Net.HTTP.WebSocket` to use it bare"));
+            assertFalse(has(frame, "web_socket"));
+        });
     });
 
     describe("kex -s", [&]() {
@@ -253,6 +276,12 @@ int main() {
             const auto list = runKex("-s List");
             assertTrue(has(list, "type List<X> = [X]"));
             assertTrue(has(list, "first :> X?"));
+        });
+
+        it("spells an opt-in module as a program writes it", [&]() {
+            assertTrue(has(runKex("-s OptionParser"), "or `using OptionParser` to use it bare"));
+            assertTrue(has(
+                runKex("-s Net.HTTP.WebSocket"), "or `using Net.HTTP.WebSocket` to use it bare"));
         });
 
         it("still summarises a source file", [&]() {

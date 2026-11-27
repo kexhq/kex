@@ -47,7 +47,7 @@ endforeach()
 # is built into the binary; `-s` reads the stdlib sources the install ships.
 # Neither may quietly depend on the source tree the binary was built from.
 foreach(help IN ITEMS "--skill|name: kex" "--skill|make|functions on a type"
-                      "-s|List.first|first :> X?" "-s|FS|needs `using FS`")
+                      "-s|List.first|first :> X?" "-s|FS|or `using FS` to use it bare")
     string(REPLACE "|" ";" parts "${help}")
     list(POP_BACK parts expected)
     execute_process(
