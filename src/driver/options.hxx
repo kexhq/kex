@@ -64,7 +64,13 @@ struct Options {
     std::string outputDir = ".";
     std::string astFilename;
     bool outputDirExplicit = false;
-    // `--eval` was given: its lines are queued in g_replScript.
+    // `--eval` code, run in order and then the session ends.
+    std::vector<std::string> evalCode;
+    // `--using` modules, entered as `using M` before anything else.
+    std::vector<std::string> usingModules;
+    // `--init`: a file whose lines boot the REPL before its first prompt.
+    std::string initFile;
+    // Any of the three was given: their lines are queued in g_replScript.
     bool replEval = false;
     bool compileRun = false;
     bool skipPrelude = false;

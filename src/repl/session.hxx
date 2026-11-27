@@ -8,5 +8,10 @@
 auto runBeamRepl(bool skipPrelude, bool inspect = true) -> int;
 auto runWalkerRepl(bool skipPrelude, bool inspect = true) -> int;
 
-// A line `--eval` queues, read by the REPL before the terminal.
+// A line `--init`, `--eval` or `--using` queues, read by the REPL before the
+// terminal.
 auto queueReplScriptLine(const std::string& line) -> void;
+// `--eval`: the queued lines are the whole session. No banner and no prompt,
+// the terminal is never read, and the session ends when the lines run out.
+auto setReplScriptOnly(bool on) -> void;
+auto replScriptOnly() -> bool;

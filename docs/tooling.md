@@ -64,7 +64,9 @@ kex                         # start the interactive BEAM REPL (no file)
 kex -c <file.kex>           # compile to BEAM via Core Erlang
 kex -R <file.kex>           # run with the tree-walk interpreter
 kex -i                      # start the interactive tree-walk REPL
-kex -e <code>               # enter <code> in the REPL before its first prompt
+kex -e <code>               # run <code> and exit
+kex --init <file.kex>       # boot the REPL from a file
+kex -U <Module>             # `using Module` first, for -e or the REPL
 kex -C <file.kex>           # run semantic analysis only
 kex -E <file.kex>           # emit Core Erlang (.core) without invoking erlc
 kex -s <file.kex>           # print the file's public signatures
@@ -82,24 +84,46 @@ kex --name a@host.example.com --cookie secret <file.kex>
                             # the same, with a fully-qualified host name
 ```
 
-`-e`/`--eval` boots a REPL session: each `-e` is entered as if typed, in
-order, before the first prompt, so its bindings, definitions and spawned
-processes are there when the session starts. A failing line ends the session
-with status 1 rather than leaving it half booted. It takes no file; add `-i`
-for the tree-walk REPL:
+`-e`/`--eval` runs code and exits, as `ruby -e`, `python -c` and `elixir -e`
+do: no banner, no prompt, and no `=> value` echo, only what the code prints.
+Each `-e` is entered in order, as its own lines, so a block may span several
+lines. The status is 1 when a line fails to check or raises, and the lines
+after it do not run. It takes no file; add `-R` for the tree-walk interpreter:
 
 ```
-kex -e 'using App.Console' -e 'let store = App.Console.boot()'
+kex -e 'IO.printLine("Hello, world")'
+kex -e 'let n = 6 * 7' -e 'IO.printLine(n)'
 ```
+
+`-U`/`--using <Module>` enters `using Module` before anything else, so the
+module's names are there bare. It is repeatable, and works for `-e`, `--init`
+and a plain REPL alike:
+
+```
+kex -U FS -e 'IO.printLine(File.read("notes.txt").or(""))'
+kex -U Regex                # a REPL with Regex's names in scope
+```
+
+`--init <file>` boots a REPL session from a file: its lines are entered as if
+typed, before the first prompt, so its bindings, definitions and spawned
+processes are there when the session starts. A failing line ends the session
+with status 1 rather than leaving it half booted. Add `-i` for the tree-walk
+REPL. `-e` after `--init` runs its code in the booted session, then exits.
 
 `/with` keeps a capability replaced for the rest of the session, as if every
 later input were inside `with Capability = value do ... end`. The value is
 evaluated once and checked against the capability when it is set. It boots
-from `-e` like any other line, so an app console can hand every query its
-connection:
+from `--init` like any other line, so an app console can hand every query its
+connection. With `config/console.kex`:
 
 ```
-kex -e 'let conn = App.Console.boot()' -e '/with Harmat.Connection = conn'
+using App.Console
+let conn = App.Console.boot()
+/with Harmat.Connection = conn
+```
+
+```
+kex --init config/console.kex
 ```
 
 `kex` gates on type checking by default. Use `--no-check` to skip the
