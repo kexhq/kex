@@ -1,6 +1,6 @@
 {
   "name": "kex",
-  "description": "Teaches Claude to write, check and test Kex: the language guide the Kex compiler carries, as a skill.",
+  "description": "Teaches Claude to write, check and test Kex: the language guide the Kex compiler carries, as a skill, and the Kex language server for .kex files.",
   "author": {
     "name": "Kex",
     "url": "https://kex.run"
@@ -8,5 +8,14 @@
   "homepage": "https://kex.run",
   "repository": "https://github.com/kexhq/kex",
   "license": "MIT",
-  "keywords": ["kex", "language", "functional", "beam"]
+  "keywords": ["kex", "language", "functional", "beam", "lsp"],
+  "lspServers": {
+    "kex": {
+      "command": "kex",
+      "args": ["--lsp"],
+      "extensionToLanguage": {
+        ".kex": "kex"
+      }
+    }
+  }
 }
