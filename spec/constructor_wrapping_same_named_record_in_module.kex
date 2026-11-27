@@ -1,0 +1,22 @@
+# A module's constructor may wrap the record it is named after:
+# `type Node = Tag(Tag)` makes `Tag(Tag { ... })` a constructor call, inside
+# the module as well as at the top level. The record-called-like-a-function
+# check looked the bare `Tag` up only among top-level constructors, so it
+# rejected every `Tag(...)` in Metro's `module Html`.
+
+module Html do
+  record Tag do
+    name : String
+  end
+
+  type Node = Tag(Tag) | Text(String)
+
+  let element(name) = Tag(Tag { name: name })
+
+  let render(Tag(tag)) = "<${tag.name}>"
+  let render(Text(text)) = text
+end
+
+main do
+  IO.printLine(Html.render(Html.element("p")))
+end
