@@ -89,7 +89,6 @@ inline const std::string kAnyType = "Any";
 inline const std::string kUnknownType = "Unknown";
 // The numeric tower: §6, and decision 2 of the plan.
 inline const std::string kNumberTrait = "Number";
-inline const std::string kMonadTrait = "Monad";
 inline const std::string kIntAlias = "Int";
 inline const std::string kByteType = "Byte";
 inline const std::string kFloat32Type = "Float32";

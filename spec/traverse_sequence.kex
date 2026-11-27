@@ -1,4 +1,4 @@
-# `traverse` and `sequence`, written once over Applicable: every result
+# `Algebra.traverse` and `Algebra.sequence`, written once over Applicable: every result
 # gathered, or what the container makes of the failures (None, the first
 # Error, every Validation failure). A generic function of the program's own
 # takes its container from what the call answers, as the stdlib's does.
@@ -14,12 +14,12 @@ let gather(F is Applicable => xs: [A], f: A -> F<B>) -> F<[B]> do
 end
 
 main do
-  IO.printLine(traverse(["1", "2"]) { |s| s.to(Integer) }.inspected)
-  IO.printLine(traverse(["1", "x"]) { |s| s.to(Integer) }.inspected)
-  IO.printLine(sequence([Ok(1), Ok(2)]).inspected)
-  IO.printLine(sequence([Ok(1), Error("no")]).inspected)
-  IO.printLine(traverse([1, -2, -3]) { |n| checked(n) }.inspected)
-  IO.printLine(traverse([1, 2]) { |n| checked(n) }.inspected)
+  IO.printLine(Algebra.traverse(["1", "2"]) { |s| s.to(Integer) }.inspected)
+  IO.printLine(Algebra.traverse(["1", "x"]) { |s| s.to(Integer) }.inspected)
+  IO.printLine(Algebra.sequence([Ok(1), Ok(2)]).inspected)
+  IO.printLine(Algebra.sequence([Ok(1), Error("no")]).inspected)
+  IO.printLine(Algebra.traverse([1, -2, -3]) { |n| checked(n) }.inspected)
+  IO.printLine(Algebra.traverse([1, 2]) { |n| checked(n) }.inspected)
   IO.printLine(gather(["3", "4"]) { |s| s.to(Integer) }.inspected)
   IO.printLine(gather([1, -1]) { |n| checked(n) }.inspected)
 end

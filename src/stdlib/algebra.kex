@@ -246,7 +246,7 @@ end
 #     Signup { name: n, email: e }               # every failed check, or a Signup
 #   end
 #
-# +traverse+ and +sequence+ work with any of them.
+# +Algebra.traverse+ and +Algebra.sequence+ work with any of them.
 #
 # Implemented by +List+, +Optional+, +Result+ and +Validation+.
 trait Applicable<F> do
@@ -264,30 +264,34 @@ trait Applicable<F> do
   with : F<A> -> F<B> -> (A -> B -> C) -> F<C>
 end
 
-# Applies +f+ to every element and gathers the results into one container.
-# If any step fails, the result is a failure: the first one for an
-# +Optional+ or +Result+, all of them for a +Validation+.
-#
-# @param xs [[A]] the elements
-# @param f [A -> F<B>] the step for one element
-# @return [F<[B]>] the results, gathered
-#
-# @example
-#   traverse(["1", "2"]) { |s| s.to(Integer) }   # => Just([1, 2])
-#   traverse(["1", "x"]) { |s| s.to(Integer) }   # => None
-let traverse(F is Applicable => xs: [A], f: A -> F<B>) -> F<[B]> do
-  return xs.reduce(F.wrap([])) do |gathered, x|
-    gathered.with(f(x)) { |done, item| done + [item] }
+# Functions written once over +Applicable+, for any container that implements
+# it: a +List+, +Optional+, +Result+ or +Validation+.
+module Algebra do
+  # Applies +f+ to every element and gathers the results into one container.
+  # If any step fails, the result is a failure: the first one for an
+  # +Optional+ or +Result+, all of them for a +Validation+.
+  #
+  # @param xs [[A]] the elements
+  # @param f [A -> F<B>] the step for one element
+  # @return [F<[B]>] the results, gathered
+  #
+  # @example
+  #   Algebra.traverse(["1", "2"]) { |s| s.to(Integer) }   # => Just([1, 2])
+  #   Algebra.traverse(["1", "x"]) { |s| s.to(Integer) }   # => None
+  let traverse(F is Applicable => xs: [A], f: A -> F<B>) -> F<[B]> do
+    return xs.reduce(F.wrap([])) do |gathered, x|
+      gathered.with(f(x)) { |done, item| done + [item] }
+    end
   end
-end
 
-# Turns a list of containers into one container of a list; +traverse+ with
-# nothing to apply.
-#
-# @param xs [[F<A>]] the containers
-# @return [F<[A]>] their values, gathered
-#
-# @example
-#   sequence([Ok(1), Ok(2)])           # => Ok([1, 2])
-#   sequence([Ok(1), Error("no")])     # => Error("no")
-let sequence(F is Applicable => xs: [F<A>]) -> F<[A]> = traverse(xs) { |x| x }
+  # Turns a list of containers into one container of a list; +traverse+ with
+  # nothing to apply.
+  #
+  # @param xs [[F<A>]] the containers
+  # @return [F<[A]>] their values, gathered
+  #
+  # @example
+  #   Algebra.sequence([Ok(1), Ok(2)])           # => Ok([1, 2])
+  #   Algebra.sequence([Ok(1), Error("no")])     # => Error("no")
+  let sequence(F is Applicable => xs: [F<A>]) -> F<[A]> = traverse(xs) { |x| x }
+end
