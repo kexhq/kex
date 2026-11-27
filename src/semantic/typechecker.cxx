@@ -8048,6 +8048,7 @@ auto TypeChecker::checkTraitDef(const ast::TraitDef& def) -> void {
 }
 
 auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
+    m_owedFunctions.erase(&def);
     if (def.implements.empty()) {
         return;
     }
@@ -8161,6 +8162,29 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
                     trait->defaultBodies.end()) {
                     continue;
                 }
+                // The receiver is never among a requirement's parameters, but
+                // under `trait Functor<F<_>>` it is written first (`F<A>`), and
+                // `describe : () -> String` takes nothing.
+                std::vector<TypePtr> owedParams = req.params;
+                if (!owedParams.empty() && owedParams[0] &&
+                    std::holds_alternative<TypeApp>(resolve(owedParams[0])->kind)) {
+                    owedParams.erase(owedParams.begin());
+                }
+                if (owedParams.size() == 1) {
+                    const auto only = owedParams[0] ? resolve(owedParams[0]) : Type::unknown();
+                    const auto* tuple = std::get_if<TupleType>(&only->kind);
+                    if ((tuple && tuple->elements.empty()) || typesEqual(only, Type::voidType())) {
+                        owedParams.clear();
+                    }
+                }
+                OwedFunction owed{req.name, written, req.isFoul, {}, {}};
+                for (const auto& param : owedParams) {
+                    owed.params.push_back(param ? typeToString(resolve(param)) : "");
+                }
+                if (req.result && !isUndetermined(resolve(req.result))) {
+                    owed.result = typeToString(resolve(req.result));
+                }
+                m_owedFunctions[&def].push_back(std::move(owed));
                 error(
                     diag::Code::MissingRequiredMethod, def.location,
                     {{"type", shownType}, {"trait", written}, {"method", req.name}});

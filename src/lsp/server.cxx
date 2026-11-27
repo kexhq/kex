@@ -3092,6 +3092,40 @@ private:
         return {};
     }
 
+    // The functions a `make … implement:` block at `site` still owes its
+    // traits, as snippets: what the checker reports missing
+    // (TypeChecker::owedFunctions) for that block. The word being typed is
+    // dropped, and a header with no `do` yet gets an empty block, so the
+    // buffer parses.
+    auto makeStubSnippets(const Document& document, size_t cursor, const MakeSite& site)
+        -> std::vector<Snippet> {
+        const auto& text = document.text;
+        cursor = std::min(cursor, text.size());
+        auto wordStart = cursor;
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_')) {
+            --wordStart;
+        }
+        auto probe = text;
+        probe.replace(wordStart, cursor - wordStart, site.header ? "do\nend" : "");
+        auto checked = checkAsDocument(document, document.path, probe);
+        if (!checked) {
+            return {};
+        }
+        for (const auto& [make, owed] : checked->analyzer->checker().owedFunctions()) {
+            if (!make || make->location.file != document.path ||
+                make->location.startOffset != static_cast<int>(site.makeOffset)) {
+                continue;
+            }
+            std::vector<Stub> stubs;
+            for (const auto& function : owed) {
+                stubs.push_back({function.name, function.foul, function.params, function.result});
+            }
+            return stubSnippets(text, cursor, site, stubs);
+        }
+        return {};
+    }
+
     // Member completion at `position` when it follows `receiver.`: the
     // checker's own answer (Analyzer::memberCompletions) for the receiver's
     // type where it is written. Nothing is matched by name: a function is
@@ -4723,6 +4757,12 @@ private:
                 snippets.insert(
                     snippets.begin(), std::make_move_iterator(arms.begin()),
                     std::make_move_iterator(arms.end()));
+            }
+            if (const auto site = makeSiteAt(text, cursor)) {
+                auto stubs = makeStubSnippets(found->second, cursor, *site);
+                snippets.insert(
+                    snippets.begin(), std::make_move_iterator(stubs.begin()),
+                    std::make_move_iterator(stubs.end()));
             }
             for (auto& snippet : snippets) {
                 result.push_back({

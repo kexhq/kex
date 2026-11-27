@@ -201,6 +201,23 @@ public:
     // or when an unguarded arm takes every value. Completion reads this to
     // write the arms out; it is what the exhaustiveness checks weigh.
     auto owedArms(const ast::MatchExpr& node, const TypePtr& subject) -> std::vector<OwedArm>;
+    // A function a `make … implement:` block owes a trait it claims: one the
+    // trait requires, gives no default and no block of the type defines (what
+    // MissingRequiredMethod reports), its types as written in source.
+    // `params` leaves out the receiver; `result` is "" when not determined.
+    struct OwedFunction {
+        std::string name;
+        std::string trait;
+        bool foul = false;
+        std::vector<std::string> params;
+        std::string result;
+    };
+    // What each checked `make` block owes, in the order its traits list them.
+    // Completion reads this to write the stubs out.
+    auto owedFunctions() const
+        -> const std::unordered_map<const ast::MakeDef*, std::vector<OwedFunction>>& {
+        return m_owedFunctions;
+    }
     // What `.try` on a value of `operand` yields: an Optional's or a Result's
     // success payload; null when `.try` does not apply.
     auto tryPayload(const TypePtr& operand) const -> TypePtr;
@@ -1196,6 +1213,7 @@ private:
     // says.
     int m_clauseVarMark = std::numeric_limits<int>::max();
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
+    std::unordered_map<const ast::MakeDef*, std::vector<OwedFunction>> m_owedFunctions;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     // resolveRecordName's last guess, by bare name: the imported record a
     // name is the unique suffix of, if any. It depends on nothing but the

@@ -3101,6 +3101,41 @@ int main() {
                 reply.find(R"(Just(${1:_}) => $2\n    None => $0)") != std::string::npos,
                 "no Just and None arms for an Optional: " + reply);
         });
+
+        it("writes the trait's required functions after `make …, implement:`", [=]() {
+            const std::string text = "trait Shape do\n"
+                                     "  area :> Float\n"
+                                     "  perimeter :> Float\n\n"
+                                     "  let describe = \"area\"\n"
+                                     "end\n\n"
+                                     "record Circle do\n  radius: Float\nend\n\n"
+                                     "make Circle, implement: Shape d\n";
+            const auto reply = askAt(uri, text, "completion", 11, 31, snippets);
+            assertTrue(
+                reply.find(R"("insertText":"do\n  let area = $1\n  let perimeter = $0\nend")") !=
+                    std::string::npos,
+                "no `do` with the required functions: " + reply);
+        });
+
+        it("offers the functions a make block still owes its trait", [=]() {
+            const std::string text = "trait Ranked do\n"
+                                     "  compare : This -> Integer\n"
+                                     "  weight :> Integer\n"
+                                     "end\n\n"
+                                     "record V do\n  major: Integer\nend\n\n"
+                                     "make V, implement: Ranked do\n"
+                                     "  let weight = @major\n"
+                                     "  l\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 11, 3, snippets);
+            assertTrue(
+                reply.find(
+                    R"("insertText":"let compare(${1:other}) -> Integer do\n    $0\n  end")") !=
+                    std::string::npos,
+                "no stub for the owed `compare`: " + reply);
+            assertTrue(
+                !offers(reply, "let weight -> Integer"), "the defined `weight` offered: " + reply);
+        });
     });
     return runAll();
 }

@@ -218,6 +218,7 @@ namespace {
 struct Walk {
     SnippetContext context = SnippetContext::None;
     std::optional<MatchSite> match;
+    std::optional<MakeSite> make;
 };
 
 auto walk(const std::string& text, size_t cursor) -> Walk {
@@ -242,6 +243,9 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
     const Token* previous = nullptr; // the last token before the word on its line
     TokenType classifier = TokenType::Eof;
     size_t classifierOffset = 0;
+    // `implement` written after `make` on this line: the block it opens
+    // claims a trait.
+    bool claims = false;
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto& token = tokens[i];
         if (token.type == TokenType::Eof || token.startOffset < 0) {
@@ -262,6 +266,7 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
             case TokenType::Newline:
                 previous = nullptr;
                 classifier = TokenType::Eof;
+                claims = false;
                 continue;
             case TokenType::Do:
                 stack.push_back(
@@ -320,6 +325,10 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
                     classifier = token.type;
                     classifierOffset = start;
                 }
+                if (classifier == TokenType::Make && token.type == TokenType::LowerIdent &&
+                    token.value == "implement") {
+                    claims = true;
+                }
                 break;
         }
         previous = &token;
@@ -352,6 +361,11 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
         }
         return {};
     }
+    if (lineStartsHere && block == Block::Functions && !stack.empty() &&
+        stack.back().opener == TokenType::Make) {
+        // A line of its own in a `make` block: where a trait's functions go.
+        return {SnippetContext::Functions, std::nullopt, MakeSite{stack.back().offset, false}};
+    }
     if (lineStartsHere) {
         switch (block) {
             case Block::TopLevel: return {SnippetContext::TopLevel};
@@ -373,6 +387,11 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
         // `match shape d`: the `do` that opens the match's arms.
         if (classifier == TokenType::Match) {
             return {SnippetContext::BlockArgument, MatchSite{classifierOffset, true}};
+        }
+        // `make Circle, implement: Shape d`: the `do` of a block that owes the
+        // trait its functions.
+        if (classifier == TokenType::Make && claims) {
+            return {SnippetContext::BlockArgument, std::nullopt, MakeSite{classifierOffset, true}};
         }
         return {SnippetContext::BlockArgument};
     }
@@ -406,12 +425,16 @@ auto indentationAt(const std::string& text, size_t wordStart) -> Indentation {
 // at the cursor line's indentation.
 auto indented(std::string_view body, const Indentation& indentation) -> std::string {
     std::string out;
-    for (const char c : body) {
+    for (size_t i = 0; i < body.size(); ++i) {
+        const char c = body[i];
         if (c == '\t') {
             out += indentation.unit;
         } else if (c == '\n') {
             out += '\n';
-            out += indentation.base;
+            // A blank line stays empty: no trailing whitespace.
+            if (i + 1 < body.size() && body[i + 1] != '\n') {
+                out += indentation.base;
+            }
         } else {
             out += c;
         }
@@ -547,6 +570,138 @@ auto armSnippets(
         snippets.push_back(
             {"every missing arm", arms.front().type ? std::string(word) : arms.front().name,
              "match arms for every missing case", std::move(body)});
+    }
+    return snippets;
+}
+
+namespace {
+
+// A parameter name for a value of type `type`: `other` for the implementor's
+// own type, else the type's initial.
+auto parameterName(const std::string& type) -> std::string {
+    if (type == "This") {
+        return "other";
+    }
+    const auto dot = type.rfind('.');
+    const auto leaf = dot == std::string::npos ? type : type.substr(dot + 1);
+    if (!leaf.empty() && std::isalpha(static_cast<unsigned char>(leaf.front()))) {
+        return std::string(
+            1, static_cast<char>(std::tolower(static_cast<unsigned char>(leaf.front()))));
+    }
+    return "x";
+}
+
+// One stub, its tab stops from `*stop` on: `let area = $1` for a requirement
+// taking nothing, otherwise a `do … end` body.
+auto stubBody(const Stub& stub, int* stop) -> std::string {
+    const auto next = [&] { return std::to_string((*stop)++); };
+    std::string out = (stub.foul ? "foul " : "let ") + stub.name;
+    if (stub.params.empty() && !stub.foul) {
+        return out + " = $" + next();
+    }
+    if (!stub.params.empty()) {
+        std::vector<std::string> names;
+        out += "(";
+        for (size_t i = 0; i < stub.params.size(); ++i) {
+            auto name = parameterName(stub.params[i]);
+            const auto base = name;
+            for (int n = 2; std::find(names.begin(), names.end(), name) != names.end(); ++n) {
+                name = base + std::to_string(n);
+            }
+            names.push_back(name);
+            out += (i ? ", ${" : "${") + next() + ":" + name + "}";
+        }
+        out += ")";
+    }
+    if (!stub.result.empty()) {
+        out += " -> " + stub.result;
+    }
+    return out + " do\n\t$" + next() + "\nend";
+}
+
+auto stubLabel(const Stub& stub) -> std::string {
+    std::string label = (stub.foul ? "foul " : "let ") + stub.name;
+    if (!stub.params.empty()) {
+        label += "(";
+        for (size_t i = 0; i < stub.params.size(); ++i) {
+            label += (i ? ", " : "") + stub.params[i];
+        }
+        label += ")";
+    }
+    if (!stub.result.empty()) {
+        label += " -> " + stub.result;
+    }
+    return label;
+}
+
+// Every stub, a blank line between those with a body, the last stop final.
+auto stubLines(const std::vector<Stub>& stubs) -> std::string {
+    std::string out;
+    int stop = 1;
+    for (size_t i = 0; i < stubs.size(); ++i) {
+        if (i) {
+            out += stubs[i].params.empty() && !stubs[i].foul && stubs[i - 1].params.empty() &&
+                           !stubs[i - 1].foul
+                       ? "\n"
+                       : "\n\n";
+        }
+        out += stubBody(stubs[i], &stop);
+    }
+    const auto last = out.rfind("$" + std::to_string(stop - 1));
+    if (last != std::string::npos) {
+        out.replace(last, 1 + std::to_string(stop - 1).size(), "$0");
+    }
+    return out;
+}
+
+} // namespace
+
+auto makeSiteAt(const std::string& text, size_t cursor) -> std::optional<MakeSite> {
+    return walk(text, std::min(cursor, text.size())).make;
+}
+
+auto stubSnippets(
+    const std::string& text, size_t cursor, const MakeSite& site, const std::vector<Stub>& stubs)
+    -> std::vector<Snippet> {
+    if (stubs.empty()) {
+        return {};
+    }
+    cursor = std::min(cursor, text.size());
+    const auto wordStart = wordStartBefore(text, cursor);
+    const std::string_view word(text.data() + wordStart, cursor - wordStart);
+    const auto indentation = indentationAt(text, wordStart);
+    std::vector<Snippet> snippets;
+    if (site.header) {
+        if (!std::string_view("do").starts_with(word)) {
+            return {};
+        }
+        // The stubs one step in from the `make` line, `end` level with it.
+        auto inner = indentation;
+        inner.base += inner.unit;
+        snippets.push_back(
+            {"do with every required function", "do", "the functions the trait requires",
+             "do\n" + inner.base + indented(stubLines(stubs), inner) + "\n" + indentation.base +
+                 "end"});
+        return snippets;
+    }
+    // A stub is written from `let` or `foul`, or from its own name.
+    for (const auto& stub : stubs) {
+        const std::string keyword = stub.foul ? "foul" : "let";
+        const auto filter = keyword.starts_with(word) ? keyword : stub.name;
+        if (!filter.starts_with(word)) {
+            continue;
+        }
+        int stop = 1;
+        auto body = stubBody(stub, &stop);
+        const auto last = body.rfind("$" + std::to_string(stop - 1));
+        body.replace(last, 1 + std::to_string(stop - 1).size(), "$0");
+        snippets.push_back(
+            {stubLabel(stub), filter, "required by its trait", indented(body, indentation)});
+    }
+    if (stubs.size() > 1 && !snippets.empty()) {
+        snippets.push_back(
+            {"every required function", snippets.front().filterText,
+             "the functions the trait requires", indented(stubLines(stubs), indentation)});
     }
     return snippets;
 }

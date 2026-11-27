@@ -61,4 +61,27 @@ auto armSnippets(
     const std::string& text, size_t cursor, const MatchSite& site, const std::vector<Arm>& arms)
     -> std::vector<Snippet>;
 
+// A word that writes the functions a `make … implement:` block owes: the `do`
+// after its header (`header`), or a line of its own inside a `make` block.
+// `makeOffset` is where that `make` keyword is.
+struct MakeSite {
+    size_t makeOffset = 0;
+    bool header = false;
+};
+auto makeSiteAt(const std::string& text, size_t cursor) -> std::optional<MakeSite>;
+
+// A function the checker says a block owes a trait (TypeChecker::OwedFunction).
+struct Stub {
+    std::string name;
+    bool foul = false;
+    std::vector<std::string> params; // their types, the receiver left out
+    std::string result;              // "" when not determined
+};
+// The snippets that write `stubs` at a make site: after the header, a `do`
+// with every stub and its `end`; inside the block, each stub, and all of
+// them at once.
+auto stubSnippets(
+    const std::string& text, size_t cursor, const MakeSite& site, const std::vector<Stub>& stubs)
+    -> std::vector<Snippet>;
+
 } // namespace kex::lsp
