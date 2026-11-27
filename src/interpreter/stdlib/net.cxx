@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <array>
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -66,9 +67,13 @@ auto validEscapes(const std::string& text, size_t* bad = nullptr) -> bool {
     return true;
 }
 
+// The URIErrorKind for text that is not a URI at all (as opposed to a bad
+// authority, port or escape).
+constexpr std::string_view kURIInvalidSyntax = "InvalidSyntax";
+
 // Why parseURI rejected a text: the URIErrorKind and its message.
 struct URIFailure {
-    std::string kind = "InvalidSyntax", message = "malformed URI reference";
+    std::string kind{kURIInvalidSyntax}, message = "malformed URI reference";
 };
 
 auto parseURI(const std::string& source, bool asciiOnly, URIFailure* failure = nullptr)
@@ -708,7 +713,8 @@ auto Evaluator::registerNetBuiltins() -> void {
         auto parsed = parseURI(source, true, &failure);
         if (!parsed) {
             return uriError(
-                failure.kind, failure.kind == "InvalidSyntax" ? "malformed URL" : failure.message);
+                failure.kind,
+                failure.kind == kURIInvalidSyntax ? "malformed URL" : failure.message);
         }
         if (parsed->scheme.empty()) {
             return uriError("NotAbsolute", "URL requires a scheme");
