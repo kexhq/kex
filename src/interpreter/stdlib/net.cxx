@@ -624,6 +624,11 @@ struct IPValue {
 
 auto parseIP(const std::string& text) -> std::optional<IPValue> {
     IPValue out;
+    // inet_pton reads a C string, so a NUL would end the address early and
+    // "1.2.3.4\0junk" would parse; the BEAM backend rejects it.
+    if (text.find('\0') != std::string::npos) {
+        return std::nullopt;
+    }
     if (inet_pton(AF_INET, text.c_str(), out.bytes.data()) == 1) {
         out.family = AF_INET;
     } else if (inet_pton(AF_INET6, text.c_str(), out.bytes.data()) == 1) {
@@ -1052,14 +1057,17 @@ auto Evaluator::registerNetBuiltins() -> void {
         if (!ip) {
             return netError("Parse", "Connect", "invalid network address");
         }
+        // Plain decimal only: std::stoi would also take a sign, leading
+        // spaces and leading zeros, and the BEAM backend takes none of them.
+        auto prefixText = source.substr(slash + 1);
         int prefix = -1;
-        try {
-            size_t used = 0;
-            prefix = std::stoi(source.substr(slash + 1), &used);
-            if (used != source.size() - slash - 1) {
-                prefix = -1;
-            }
-        } catch (...) {}
+        if (!prefixText.empty() && prefixText.size() <= 3 &&
+            (prefixText == "0" || prefixText[0] != '0') &&
+            std::all_of(prefixText.begin(), prefixText.end(), [](unsigned char c) {
+                return std::isdigit(c) != 0;
+            })) {
+            prefix = std::stoi(prefixText);
+        }
         int bits = ip->family == AF_INET ? 32 : 128;
         if (prefix < 0 || prefix > bits) {
             return netError("Parse", "Connect", "invalid network prefix");
