@@ -309,8 +309,9 @@ is in `kex --skill tey`). `kex -s` lists the rest: JSON, regular expressions,
 files, paths, dates and times, sets, queues.
 
 `IO`, `List`, `Map`, `String`, `Math`, `Process` and the rest of the prelude
-need nothing. Everything else needs `using`; `kex -s <Name>` says which. Your
-own files work the same way: see `kex --skill modules`. A program of more
+need nothing. Everything else is outside the prelude: write its qualified
+name (`FS.File.read`) or bring its names in with `using`; `kex -s <Name>` says
+which module. Your own files work the same way: see `kex --skill modules`. A program of more
 than a few files should be a package: see `kex --skill tey`.
 
 ```kex

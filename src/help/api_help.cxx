@@ -19,6 +19,7 @@
 #include <ostream>
 #include <set>
 #include <sstream>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -712,8 +713,17 @@ auto memberMatches(const ApiMember& member, std::string_view name) -> bool {
            (member.name.back() == '?' || member.name.back() == '!');
 }
 
+// A function an opt-in module adds to a prelude type is called on a value, so
+// it has no qualified spelling: only the `using` brings it in.
 auto needsUsingLine(const std::string& module) -> std::string {
     return "  needs " + diagnostics::highlightCodeSpans("`using " + module + "`") + "\n";
+}
+
+// A name outside the prelude works qualified (`FS.File.read`) with no import;
+// the `using` is for calling it bare.
+auto outsidePreludeLine(const std::string& module) -> std::string {
+    return "  outside the prelude: write the qualified name, or " +
+           diagnostics::highlightCodeSpans("`using " + module + "`") + " to use it bare\n";
 }
 
 auto printMember(const ApiOwner& owner, const ApiMember& member, std::ostream& out) -> void {
@@ -722,9 +732,10 @@ auto printMember(const ApiOwner& owner, const ApiMember& member, std::ostream& o
         out << "  (" << diagnostics::highlightKex(member.group) << ")";
     }
     out << "\n  " << diagnostics::highlightKex(member.signature) << "\n";
-    const auto& needed = member.requiresUsing.empty() ? owner.requiresUsing : member.requiresUsing;
-    if (!needed.empty()) {
-        out << needsUsingLine(needed);
+    if (!member.requiresUsing.empty()) {
+        out << needsUsingLine(member.requiresUsing);
+    } else if (!owner.requiresUsing.empty()) {
+        out << outsidePreludeLine(owner.requiresUsing);
     }
     if (!member.doc.empty()) {
         out << "\n" << renderDoc(member.doc) << "\n";
@@ -766,11 +777,16 @@ auto ApiIndex::addSource(const std::string& path, std::string source, const std:
         return;
     }
 
-    // The path spells the module in lower case; the source spells it as a
-    // program must.
+    // The path spells the module in snake case (`net/http/web_socket`); the
+    // source declares it as a program must write it (`Net.HTTP.WebSocket`).
+    const auto pathSpelling = [](std::string_view name) {
+        auto spelling = lowered(name);
+        std::erase(spelling, '_');
+        return spelling;
+    };
     auto spelled = usingName;
     for (const auto& name : collector.declared()) {
-        if (lowered(name) == lowered(usingName)) {
+        if (pathSpelling(name) == pathSpelling(usingName)) {
             spelled = name;
         }
     }
@@ -899,7 +915,7 @@ auto ApiIndex::printOverview(std::ostream& out) const -> void {
         }
     };
     section("Always available (the prelude):", false);
-    section("After a `using` (kex -s <Name> says which):", true);
+    section("Outside the prelude (qualified, or bare after a `using`):", true);
 }
 
 auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> void {
@@ -912,7 +928,7 @@ auto ApiIndex::printOwner(const ApiOwner& owner, std::ostream& out) const -> voi
             << "\n";
     }
     if (!owner.requiresUsing.empty()) {
-        out << needsUsingLine(owner.requiresUsing);
+        out << outsidePreludeLine(owner.requiresUsing);
     }
     if (!owner.doc.empty()) {
         out << "\n" << renderDoc(owner.doc) << "\n";
