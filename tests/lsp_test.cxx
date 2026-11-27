@@ -64,15 +64,18 @@ auto jsonText(const std::string& text) -> std::string {
 
 // Opens `text` as `uri` and answers one request (`hover`, `completion`,
 // `definition`) at a 0-based line and character: the server's reply to it.
+// `capabilities` is the client capabilities object `initialize` sends.
 auto askAt(
     const std::string& uri,
     const std::string& text,
     const std::string& method,
     int line,
-    int character) -> std::string {
+    int character,
+    const std::string& capabilities = "{}") -> std::string {
     std::string messages;
     messages += frame(
-        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":)" +
+        capabilities + "}}");
     messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
     messages += frame(
         R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
@@ -2934,6 +2937,102 @@ int main() {
             assertTrue(
                 text.find("KEXEP-0164") != std::string::npos,
                 "no statement-beside-main diagnostic: " + text.substr(0, 3000));
+        });
+    });
+
+    describe("Kex LSP snippets", []() {
+        const std::string snippets =
+            R"({"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}})";
+        const std::string uri = "file:///tmp/kex-lsp-snippets.kex";
+        const auto offers = [](const std::string& reply, const std::string& label) {
+            return reply.find("\"label\":\"" + label + "\"") != std::string::npos;
+        };
+        const auto anySnippet = [](const std::string& reply) {
+            return reply.find("\"insertTextFormat\":2") != std::string::npos;
+        };
+
+        it("sends no snippets to a client that cannot expand them", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n  i\n  x\nend\n";
+            const auto reply = askAt(uri, text, "completion", 1, 3);
+            assertTrue(!anySnippet(reply), "a snippet went to a plain-text client: " + reply);
+        });
+
+        it("offers control structures in a function body, indented for its line", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n  i\n  x\nend\n";
+            const auto reply = askAt(uri, text, "completion", 1, 3, snippets);
+            assertTrue(
+                reply.find(R"("insertText":"if ${1:condition}\n    $0\n  end")") !=
+                    std::string::npos,
+                "no indented `if` snippet in a function body: " + reply);
+            assertTrue(offers(reply, "if else"), "no `if else` snippet: " + reply);
+            assertTrue(!offers(reply, "main"), "`main` offered in a function body: " + reply);
+        });
+
+        it("offers declarations at the top level and not statements", [=]() {
+            const std::string text = "re\n";
+            const auto reply = askAt(uri, text, "completion", 0, 2, snippets);
+            assertTrue(offers(reply, "record"), "no `record` snippet at the top level: " + reply);
+            assertTrue(!offers(reply, "receive"), "`receive` offered at the top level: " + reply);
+            const auto main = askAt(uri, "ma\n", "completion", 0, 2, snippets);
+            assertTrue(offers(main, "main"), "no `main` snippet at the top level: " + main);
+            assertTrue(offers(main, "make implement"), "no `make implement` snippet: " + main);
+            assertTrue(!offers(main, "match"), "`match` offered at the top level: " + main);
+        });
+
+        it("offers only function declarations inside make", [=]() {
+            const std::string text =
+                "record Box do\n  size: Integer\nend\n\nmake Box do\n  l\nend\n";
+            const auto reply = askAt(uri, text, "completion", 5, 3, snippets);
+            assertTrue(offers(reply, "let"), "no `let` snippet inside make: " + reply);
+            assertTrue(!offers(reply, "loop"), "`loop` offered inside make: " + reply);
+        });
+
+        it("offers main, not match, once a function with a trailing if has ended", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n"
+                                     "  return 0 if x < 0\n"
+                                     "  if x > 10 then 10 else x end\n"
+                                     "end\n"
+                                     "ma\n";
+            const auto reply = askAt(uri, text, "completion", 4, 2, snippets);
+            assertTrue(offers(reply, "main"), "no `main` after the function ended: " + reply);
+            assertTrue(!offers(reply, "match"), "`match` offered at the top level: " + reply);
+        });
+
+        it("offers value constructs after `=`", [=]() {
+            const std::string text = "main do\n  let y = ma\nend\n";
+            const auto reply = askAt(uri, text, "completion", 1, 12, snippets);
+            assertTrue(offers(reply, "match"), "no `match` snippet after `=`: " + reply);
+        });
+
+        it("offers a do block after a call", [=]() {
+            const std::string text = "main do\n  [1, 2].each d\nend\n";
+            const auto reply = askAt(uri, text, "completion", 1, 15, snippets);
+            assertTrue(offers(reply, "do |x|"), "no `do |x|` snippet after a call: " + reply);
+            assertTrue(
+                reply.find(R"("insertText":"do\n    $0\n  end")") != std::string::npos,
+                "the `do` snippet is not indented for its line: " + reply);
+        });
+
+        it("offers nothing in a string, a comment or a record body", [=]() {
+            const std::string text = "record Box do\n  i\nend\n\nmain do\n"
+                                     "  IO.printLine(\"wh\")\n"
+                                     "  # wh\n"
+                                     "end\n";
+            const auto record = askAt(uri, text, "completion", 1, 3, snippets);
+            assertTrue(!anySnippet(record), "a snippet in a record body: " + record);
+            const auto string = askAt(uri, text, "completion", 5, 18, snippets);
+            assertTrue(!anySnippet(string), "a snippet in a string: " + string);
+            const auto comment = askAt(uri, text, "completion", 6, 6, snippets);
+            assertTrue(!anySnippet(comment), "a snippet in a comment: " + comment);
+        });
+
+        it("indents by the file's own unit", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n    x\n    wh\nend\n";
+            const auto reply = askAt(uri, text, "completion", 2, 6, snippets);
+            assertTrue(
+                reply.find(R"("insertText":"while ${1:condition} do\n        $0\n    end")") !=
+                    std::string::npos,
+                "the `while` snippet is not indented by four spaces: " + reply);
         });
     });
     return runAll();

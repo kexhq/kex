@@ -17,6 +17,7 @@
 #include "../module/resolver.hxx"
 #include "../validation/tag_validator.hxx"
 #include "ket_template.hxx"
+#include "snippets.hxx"
 #include "tey_roots.hxx"
 
 #include <lsp/connection.h>
@@ -2961,6 +2962,13 @@ private:
             m_workspaceRoots.push_back(params.rootUri->fsPath());
         }
         m_configuredSourceRoots = configuredSourceRoots(params);
+        // Snippets (`if ${1:condition}` ...) only reach a client that can expand
+        // them; any other would insert the placeholders as text.
+        if (params.capabilities.textDocument && params.capabilities.textDocument->completion &&
+            params.capabilities.textDocument->completion->completionItem) {
+            m_snippetSupport = params.capabilities.textDocument->completion->completionItem
+                                   ->snippetSupport.value_or(false);
+        }
         return {
             .capabilities =
                 {
@@ -4647,6 +4655,36 @@ private:
                 item.sortText = "1" + item.label;
             }
             result.push_back(std::move(item));
+        }
+        // Whole constructs (`if … end`, `make … do … end`) where one can
+        // start. Not in a `.ket` hole: its text is synthetic Kex, whose
+        // indentation is not the buffer's.
+        if (m_snippetSupport && found->second.ketOriginalText.empty()) {
+            const auto& text = found->second.text;
+            size_t lineStart = 0;
+            for (unsigned int line = 0; line < params.position.line; ++line) {
+                const auto newline = text.find('\n', lineStart);
+                if (newline == std::string::npos) {
+                    lineStart = text.size();
+                    break;
+                }
+                lineStart = newline + 1;
+            }
+            const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
+            const auto cursor =
+                byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character);
+            for (auto& snippet : snippetCompletions(text, cursor)) {
+                result.push_back({
+                    .label = std::move(snippet.label),
+                    .kind = ::lsp::CompletionItemKind::Snippet,
+                    .detail = std::move(snippet.detail),
+                    .filterText = std::move(snippet.filterText),
+                    .insertText = std::move(snippet.body),
+                    .insertTextFormat = ::lsp::InsertTextFormat::Snippet,
+                    // The body is already indented for the cursor's line.
+                    .insertTextMode = ::lsp::InsertTextMode::AsIs,
+                });
+            }
         }
         return result;
     }
@@ -6393,6 +6431,7 @@ private:
     std::string m_referenceIndexWord;
     bool m_running = true;
     bool m_initialized = false;
+    bool m_snippetSupport = false;
     bool m_cleanShutdown = false;
 };
 
