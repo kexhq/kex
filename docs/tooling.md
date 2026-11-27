@@ -139,3 +139,10 @@ Every ```` ```kex ```` block in those files is a whole program, and
 `skill_test` checks and runs each one, so an example that stops compiling
 fails the build rather than misleading a reader. `--help` points at `--skill`
 in its first lines, which is where an agent that has just met `kex` looks.
+
+The same plugin (`plugins/kex/`) also registers `kex --lsp` as the language
+server for `.kex` files. Claude Code then shows the checker's diagnostics after
+each edit, and its LSP tool answers hover, go-to-definition and
+find-references from the checker's own resolution. It starts whichever `kex` is
+first on `PATH`, so when working on the compiler itself, put the freshly built
+one first.
