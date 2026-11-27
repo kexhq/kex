@@ -624,13 +624,21 @@ struct IPValue {
 
 // The syntax both backends take, checked here rather than left to the
 // platform's inet_pton(3): macOS's takes a leading zero (`010.0.0.1`, which
-// other parsers read as octal) and a `%zone` suffix, glibc's does not. Only hex
-// digits, `:` and `.` reach inet_pton, and each octet of a dotted quad, alone
-// or ending an IPv6 address, is one to three decimal digits with no leading
-// zero. A NUL is rejected with the rest, since inet_pton would stop at it.
+// other parsers read as octal), a five-digit group (`00042::1`) and a `%zone`
+// suffix, glibc's does not. Only hex digits, `:` and `.` reach inet_pton, no
+// IPv6 group is over four hex digits, and each octet of a dotted quad, alone or
+// ending an IPv6 address, is one to three decimal digits with no leading zero.
+// A NUL is rejected with the rest, since inet_pton would stop at it.
 auto strictIPText(const std::string& text) -> bool {
     for (unsigned char c : text) {
         if (!std::isxdigit(c) && c != ':' && c != '.') {
+            return false;
+        }
+    }
+    std::stringstream groups(text);
+    std::string group;
+    while (std::getline(groups, group, ':')) {
+        if (group.size() > 4 && group.find('.') == std::string::npos) {
             return false;
         }
     }
