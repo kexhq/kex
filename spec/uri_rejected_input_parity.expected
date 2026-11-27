@@ -1,0 +1,44 @@
+URI http://[::1/: InvalidAuthority  invalid URI authority
+URL http://[::1/: InvalidAuthority  invalid URI authority
+URI http://::1/: InvalidAuthority  invalid URI authority
+URL http://::1/: InvalidAuthority  invalid URI authority
+URI http://a:b:80/: InvalidAuthority  invalid URI authority
+URL http://a:b:80/: InvalidAuthority  invalid URI authority
+URI http://[::1]x/: InvalidAuthority  invalid URI authority
+URL http://[::1]x/: InvalidAuthority  invalid URI authority
+URI http://e.com:-1/: InvalidPort  URI port must be a number from 0 to 65535
+URL http://e.com:-1/: InvalidPort  URI port must be a number from 0 to 65535
+URI http://e.com:65536/: InvalidPort  URI port must be a number from 0 to 65535
+URL http://e.com:65536/: InvalidPort  URI port must be a number from 0 to 65535
+URI http://e.com:73786976294838206464/: InvalidPort  URI port must be a number from 0 to 65535
+URL http://e.com:73786976294838206464/: InvalidPort  URI port must be a number from 0 to 65535
+URI http://e.com:/: InvalidPort  URI port must be a number from 0 to 65535
+URL http://e.com:/: InvalidPort  URI port must be a number from 0 to 65535
+URI http://[::1]:/: InvalidPort  URI port must be a number from 0 to 65535
+URL http://[::1]:/: InvalidPort  URI port must be a number from 0 to 65535
+URI 1http://e.com/: InvalidSyntax  malformed URI reference
+URL 1http://e.com/: InvalidSyntax  malformed URL
+URI http:///path: InvalidSyntax  malformed URI reference
+URL http:///path: InvalidSyntax  malformed URL
+URI http://e.com/%zz: InvalidEscape 13 invalid URI text
+URL http://e.com/%zz: InvalidEscape 13 invalid URI text
+URI http://e.com/a b: InvalidSyntax 14 invalid URI text
+URL http://e.com/a b: InvalidSyntax 14 invalid URI text
+URI http://[fe80::1%25eth0]/: ok scheme=http host=[fe80::1%25eth0] query=
+URL http://[fe80::1%25eth0]/: ok scheme=http host=[fe80::1%25eth0] shown=http://[fe80::1%25eth0]/
+URI http://[v1.fe]/: ok scheme=http host=[v1.fe] query=
+URL http://[v1.fe]/: ok scheme=http host=[v1.fe] shown=http://[v1.fe]/
+URI http://[::1]:8080/a?x=1: ok scheme=http host=[::1] query=[(x, Just(1))]
+URL http://[::1]:8080/a?x=1: ok scheme=http host=[::1] shown=http://[::1]:8080/a?x=1
+URI http://e.com:0/: ok scheme=http host=e.com query=
+URL http://e.com:0/: ok scheme=http host=e.com shown=http://e.com:0/
+URI http://e.com:65535/: ok scheme=http host=e.com query=
+URL http://e.com:65535/: ok scheme=http host=e.com shown=http://e.com:65535/
+URI https://ada:secret@Example.COM:443/p?q=a+b#frag: ok scheme=https host=example.com query=[(q, Just(a+b))]
+URL https://ada:secret@Example.COM:443/p?q=a+b#frag: ok scheme=https host=example.com shown=https://ada:***@Example.COM:443/p?q=a+b#frag
+URI mailto:a@b.c: ok scheme=mailto host= query=
+URL mailto:a@b.c: MissingAuthority  URL requires an authority
+URI ../x?y=1: ok scheme= host= query=[(y, Just(1))]
+URL ../x?y=1: NotAbsolute  URL requires a scheme
+NotAbsolute base URI must be absolute
+MissingAuthority resolved URL has no authority

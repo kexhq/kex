@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <array>
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -66,7 +67,27 @@ auto validEscapes(const std::string& text, size_t* bad = nullptr) -> bool {
     return true;
 }
 
-auto parseURI(const std::string& source, bool asciiOnly) -> std::optional<ParsedURI> {
+// The URIErrorKind for text that is not a URI at all (as opposed to a bad
+// authority, port or escape).
+constexpr std::string_view kURIInvalidSyntax = "InvalidSyntax";
+
+// Why parseURI rejected a text: the URIErrorKind and its message.
+struct URIFailure {
+    std::string kind{kURIInvalidSyntax}, message = "malformed URI reference";
+};
+
+auto parseURI(const std::string& source, bool asciiOnly, URIFailure* failure = nullptr)
+    -> std::optional<ParsedURI> {
+    auto reject = [failure](const char* kind, const char* message) -> std::optional<ParsedURI> {
+        if (failure) {
+            *failure = {kind, message};
+        }
+        return std::nullopt;
+    };
+    auto badAuthority = [&] { return reject("InvalidAuthority", "invalid URI authority"); };
+    auto badPort = [&] {
+        return reject("InvalidPort", "URI port must be a number from 0 to 65535");
+    };
     if (asciiOnly) {
         for (unsigned char c : source) {
             if (c >= 0x80) {
@@ -133,12 +154,12 @@ auto parseURI(const std::string& source, bool asciiOnly) -> std::optional<Parsed
         if (!hostport.empty() && hostport.front() == '[') {
             auto close = hostport.find(']');
             if (close == std::string::npos) {
-                return std::nullopt;
+                return badAuthority();
             }
             out.host = hostport.substr(0, close + 1);
             if (close + 1 < hostport.size()) {
                 if (hostport[close + 1] != ':') {
-                    return std::nullopt;
+                    return badAuthority();
                 }
                 out.port = hostport.substr(close + 2);
             }
@@ -150,6 +171,10 @@ auto parseURI(const std::string& source, bool asciiOnly) -> std::optional<Parsed
             } else {
                 out.host = hostport;
             }
+            // Only an IP literal in brackets may hold a colon: `http://::1/` is no host.
+            if (out.host.find(':') != std::string::npos) {
+                return badAuthority();
+            }
         }
         if (out.host.empty()) {
             return std::nullopt;
@@ -158,17 +183,17 @@ auto parseURI(const std::string& source, bool asciiOnly) -> std::optional<Parsed
             if (!std::all_of(out.port.begin(), out.port.end(), [](unsigned char c) {
                     return std::isdigit(c);
                 })) {
-                return std::nullopt;
+                return badPort();
             }
             try {
                 if (std::stoul(out.port) > 65535) {
-                    return std::nullopt;
+                    return badPort();
                 }
             } catch (...) {
-                return std::nullopt;
+                return badPort();
             }
         } else if (!hostport.empty() && hostport.back() == ':') {
-            return std::nullopt;
+            return badPort();
         }
         start = authorityEnd;
     }
@@ -177,6 +202,23 @@ auto parseURI(const std::string& source, bool asciiOnly) -> std::optional<Parsed
         return std::nullopt;
     }
     return out;
+}
+
+// The text checks URI.parse and URL.parse make before reading the parts: only
+// ASCII, no space or control character, and every `%` starts an escape.
+auto uriTextError(const std::string& source) -> ValuePtr {
+    for (unsigned char c : source) {
+        if (c >= 0x80) {
+            return uriError("NonASCII", "URI contains non-ASCII text");
+        }
+    }
+    size_t bad = 0;
+    if (!validEscapes(source, &bad)) {
+        return uriError(
+            source[bad] == '%' ? "InvalidEscape" : "InvalidSyntax", "invalid URI text",
+            static_cast<int64_t>(bad));
+    }
+    return nullptr;
 }
 
 auto hexValue(char c) -> unsigned {
@@ -648,29 +690,31 @@ auto Evaluator::registerNetBuiltins() -> void {
             return uriError("InvalidSyntax", "URI must be text");
         }
         const auto& source = *textOf(args[0]);
-        size_t bad = 0;
-        for (unsigned char c : source) {
-            if (c >= 0x80) {
-                return uriError("NonASCII", "URI contains non-ASCII text");
-            }
+        if (auto error = uriTextError(source)) {
+            return error;
         }
-        if (!validEscapes(source, &bad)) {
-            return uriError(
-                source[bad] == '%' ? "InvalidEscape" : "InvalidSyntax", "invalid URI text", bad);
-        }
-        if (!parseURI(source, true)) {
-            return uriError("InvalidSyntax", "malformed URI reference");
+        URIFailure failure;
+        if (!parseURI(source, true, &failure)) {
+            return uriError(failure.kind, failure.message);
         }
         return Value::ok(uriRecord("URI.URI", source));
     });
+    // The same checks as URI.parse, with the same kinds, then a scheme and an
+    // authority are required.
     defineIntrinsic("URL.parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) {
             return uriError("InvalidSyntax", "URL must be text");
         }
         const auto& source = *textOf(args[0]);
-        auto parsed = parseURI(source, true);
+        if (auto error = uriTextError(source)) {
+            return error;
+        }
+        URIFailure failure;
+        auto parsed = parseURI(source, true, &failure);
         if (!parsed) {
-            return uriError("InvalidSyntax", "malformed URL");
+            return uriError(
+                failure.kind,
+                failure.kind == kURIInvalidSyntax ? "malformed URL" : failure.message);
         }
         if (parsed->scheme.empty()) {
             return uriError("NotAbsolute", "URL requires a scheme");

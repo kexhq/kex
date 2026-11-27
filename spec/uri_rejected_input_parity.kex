@@ -1,0 +1,44 @@
+# URI.parse and URL.parse answer every input with a Result on both backends.
+# BEAM used to end the program with `Internal error: {badmap,...}` on input
+# uri_string rejects (an unclosed IP literal, a zone ID, a negative or huge
+# port, a scheme starting with a digit), because uri_string:parse returns an
+# error rather than raising. A bad port is InvalidPort and a bad authority
+# InvalidAuthority, the same kind and message on both backends.
+using URI
+
+foul show(text: String) -> Void do
+  match URI.parse(text) do
+    Ok(u) => IO.printLine("URI ${text}: ok scheme=${u.scheme} host=${u.host.map(&.ascii)} query=${u.query.map(&.entries)}")
+    Error(e) => IO.printLine("URI ${text}: ${e.kind} ${e.position} ${e.message}")
+  end
+  match URL.parse(text) do
+    Ok(u) => IO.printLine("URL ${text}: ok scheme=${u.scheme} host=${u.host.ascii} shown=${u}")
+    Error(e) => IO.printLine("URL ${text}: ${e.kind} ${e.position} ${e.message}")
+  end
+end
+
+main do
+  show("http://[::1/")
+  show("http://::1/")
+  show("http://a:b:80/")
+  show("http://[::1]x/")
+  show("http://e.com:-1/")
+  show("http://e.com:65536/")
+  show("http://e.com:73786976294838206464/")
+  show("http://e.com:/")
+  show("http://[::1]:/")
+  show("1http://e.com/")
+  show("http:///path")
+  show("http://e.com/%zz")
+  show("http://e.com/a b")
+  show("http://[fe80::1%25eth0]/")
+  show("http://[v1.fe]/")
+  show("http://[::1]:8080/a?x=1")
+  show("http://e.com:0/")
+  show("http://e.com:65535/")
+  show("https://ada:secret@Example.COM:443/p?q=a+b#frag")
+  show("mailto:a@b.c")
+  show("../x?y=1")
+  IO.printLine(URI.parse("rel/x").try.resolve(URI.parse("y").try).error.map { |e| "${e.kind} ${e.message}" })
+  IO.printLine(URL.parse("http://e.com/").try.resolve(URI.parse("mailto:x@y").try).error.map { |e| "${e.kind} ${e.message}" })
+end

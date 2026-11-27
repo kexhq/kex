@@ -1,16 +1,15 @@
 -module(kex_intrinsic_uri).
--export([parse/1, fromIRI/1, normalize/1, resolve/2, scheme/1, host/1, query/1, bracketed/1,
-         queryParse/1, queryEncode/1, formFrom/1, formParse/1, formEncode/1,
+-export([parse/1, fromIRI/1, normalize/1, resolve/2, scheme/1, host/1, query/1,
+         components/1, queryParse/1, queryEncode/1, formFrom/1, formParse/1, formEncode/1,
          idnaHost/1, redacted/1]).
 
 %% The same checks, in the same order and with the same kinds and positions,
-%% as the walker's URI::parse (src/interpreter/stdlib/net.cxx): uri_string on
-%% its own accepts a space, an empty authority and any port number.
+%% as the walker's URI::parse (src/interpreter/stdlib/net.cxx).
 parse(Text) when is_binary(Text) ->
     case check_text(Text) of
-        ok -> case well_formed(Text) of
-            true -> {'Ok', {'URI.URI', Text}};
-            false -> uri_error('InvalidSyntax', <<"malformed URI reference">>)
+        ok -> case components(Text) of
+            {ok, _} -> {'Ok', {'URI.URI', Text}};
+            {error, Kind, Message} -> uri_error(Kind, Message)
         end;
         Error -> Error
     end.
@@ -32,31 +31,111 @@ check_bytes(<<$%, A, B, Rest/binary>>, I) ->
 check_bytes(<<$%, _/binary>>, I) -> uri_error('InvalidEscape', <<"invalid URI text">>, I);
 check_bytes(<<_, Rest/binary>>, I) -> check_bytes(Rest, I + 1).
 
-%% An authority, when there is one, names a host, and a port fits in 16 bits.
-well_formed(Text) ->
-    case safe_parse(Text) of
-        {ok, Map} ->
-            HostOk = case maps:find(host, Map) of
-                {ok, Host} -> Host =/= <<>>;
-                error -> binary:match(Text, <<"//">>) =:= nomatch orelse
-                         not authority_marker(Text)
-            end,
-            PortOk = case maps:find(port, Map) of
-                {ok, Port} when is_integer(Port) -> Port =< 65535;
-                {ok, _} -> false;
-                error -> true
-            end,
-            HostOk andalso PortOk;
-        error -> false
+%% The parts of a URI reference, read as the walker's parseURI reads them,
+%% check for check and kind for kind, so both backends accept the same texts
+%% and report the same parts: {ok, #{scheme, authority, host, port, query}},
+%% or {error, Kind, Message}. uri_string:parse is not used for this: it
+%% accepts a space, an empty authority and any port, rejects IP literals the
+%% walker accepts (`[fe80::1%25eth0]`, `[v1.fe]`), and reports a rejection by
+%% returning {error, _, _} rather than by raising.
+components(Text) ->
+    case ascii(Text) andalso check_bytes(Text, 0) =:= ok of
+        false -> {error, 'InvalidSyntax', <<"malformed URI reference">>};
+        true ->
+            try {ok, read_components(Text)}
+            catch throw:{uri_rejected, Kind, Message} -> {error, Kind, Message}
+            end
     end.
 
-%% Whether "//" starts an authority (right after the scheme, or at the start
-%% of a relative reference), rather than appearing inside a path.
-authority_marker(Text) ->
-    case binary:match(Text, <<":">>) of
-        {Colon, 1} -> binary:part(Text, Colon + 1, min(2, byte_size(Text) - Colon - 1)) =:= <<"//">>;
-        nomatch -> binary:part(Text, 0, min(2, byte_size(Text))) =:= <<"//">>
+read_components(Text) ->
+    Size = byte_size(Text),
+    FragmentAt = find(Text, $#, 0),
+    {End, Query} = case find(Text, $?, 0) of
+        At when At < FragmentAt -> {At, binary:part(Text, At + 1, FragmentAt - At - 1)};
+        _ -> {FragmentAt, undefined}
+    end,
+    Colon = find(Text, $:, 0),
+    {Scheme, Start} = case Colon < End andalso Colon < find(Text, $/, 0) of
+        true -> {lower(scheme_of(binary:part(Text, 0, Colon))), Colon + 1};
+        false -> {undefined, 0}
+    end,
+    Parts = #{scheme => Scheme, authority => false, host => undefined,
+              port => undefined, query => Query},
+    case binary:part(Text, Start, min(2, Size - Start)) of
+        <<"//">> ->
+            AuthorityEnd = min(find(Text, $/, Start + 2), End),
+            Authority = binary:part(Text, Start + 2, AuthorityEnd - Start - 2),
+            Authority =/= <<>> orelse reject_syntax(),
+            {Host, Port} = host_port(Authority),
+            Parts#{authority => true, host => Host, port => Port};
+        _ -> Parts
     end.
+
+%% The first position of Char at or after From, or the size when there is none.
+find(Text, Char, From) ->
+    Size = byte_size(Text),
+    case From =< Size andalso binary:match(Text, <<Char>>, [{scope, {From, Size - From}}]) of
+        {At, 1} -> At;
+        _ -> Size
+    end.
+
+scheme_of(<<First, Rest/binary>> = Scheme) ->
+    (alpha(First) andalso lists:all(fun scheme_char/1, binary_to_list(Rest)))
+        orelse reject_syntax(),
+    Scheme;
+scheme_of(<<>>) -> reject_syntax().
+
+scheme_char(C) -> alpha(C) orelse (C >= $0 andalso C =< $9) orelse C =:= $+ orelse
+                  C =:= $- orelse C =:= $..
+alpha(C) -> (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z).
+
+%% An authority names a host, an IP literal keeps its brackets, and a port
+%% is a number from 0 to 65535.
+host_port(Authority) ->
+    HostPort = case binary:matches(Authority, <<"@">>) of
+        [] -> Authority;
+        Ats -> {At, 1} = lists:last(Ats),
+               binary:part(Authority, At + 1, byte_size(Authority) - At - 1)
+    end,
+    {Host, Port} = split_port(HostPort),
+    Host =/= <<>> orelse reject_syntax(),
+    case Port of
+        <<>> ->
+            binary:last(HostPort) =/= $: orelse reject_port(),
+            {Host, undefined};
+        _ ->
+            lists:all(fun(C) -> C >= $0 andalso C =< $9 end, binary_to_list(Port))
+                orelse reject_port(),
+            binary_to_integer(Port) =< 65535 orelse reject_port(),
+            {Host, binary_to_integer(Port)}
+    end.
+
+split_port(<<"[", _/binary>> = HostPort) ->
+    case binary:match(HostPort, <<"]">>) of
+        nomatch -> reject_authority();
+        {Close, 1} ->
+            Host = binary:part(HostPort, 0, Close + 1),
+            case binary:part(HostPort, Close + 1, byte_size(HostPort) - Close - 1) of
+                <<>> -> {Host, <<>>};
+                <<$:, Port/binary>> -> {Host, Port};
+                _ -> reject_authority()
+            end
+    end;
+split_port(HostPort) ->
+    {Host, Port} = case binary:matches(HostPort, <<":">>) of
+        [] -> {HostPort, <<>>};
+        Colons -> {At, 1} = lists:last(Colons),
+                  {binary:part(HostPort, 0, At),
+                   binary:part(HostPort, At + 1, byte_size(HostPort) - At - 1)}
+    end,
+    %% Only an IP literal in brackets may hold a colon: `http://::1/` is no host.
+    binary:match(Host, <<":">>) =:= nomatch orelse reject_authority(),
+    {Host, Port}.
+
+reject_syntax() -> throw({uri_rejected, 'InvalidSyntax', <<"malformed URI reference">>}).
+reject_authority() -> throw({uri_rejected, 'InvalidAuthority', <<"invalid URI authority">>}).
+reject_port() ->
+    throw({uri_rejected, 'InvalidPort', <<"URI port must be a number from 0 to 65535">>}).
 
 fromIRI(Text) when is_binary(Text) ->
     try
@@ -65,42 +144,41 @@ fromIRI(Text) when is_binary(Text) ->
                 _ -> throw(invalid_unicode)
             end,
         ASCII = iri_to_uri(unicode:characters_to_nfc_binary(Text)),
-        case safe_parse(ASCII) of
+        case components(ASCII) of
             {ok, _} -> {'Ok', {'URI.URI', ASCII}};
-            error -> uri_error('InvalidSyntax', <<"malformed IRI reference">>)
+            {error, _, _} -> uri_error('InvalidSyntax', <<"malformed IRI reference">>)
         end
     catch _:_ -> uri_error('InvalidSyntax', <<"malformed IRI reference">>) end.
 
 normalize(Value) -> {'URI.URI', normalized(source(Value))}.
 
+%% As on the walker, the base must have a scheme.
 resolve(Base, Reference) ->
-    try {'Ok', {'URI.URI', unicode:characters_to_binary(uri_string:resolve(source(Reference), source(Base)))}}
-    catch _:_ -> uri_error('InvalidSyntax', <<"could not resolve URI">>) end.
+    case components(source(Base)) of
+        {ok, #{scheme := Scheme}} when Scheme =/= undefined ->
+            try {'Ok', {'URI.URI', unicode:characters_to_binary(
+                                       uri_string:resolve(source(Reference), source(Base)))}}
+            catch _:_ -> uri_error('InvalidSyntax', <<"could not resolve URI">>) end;
+        _ -> uri_error('NotAbsolute', <<"base URI must be absolute">>)
+    end.
 
 scheme(Value) ->
-    case safe_parse(source(Value)) of
-        {ok, Map} -> case maps:get(scheme, Map, undefined) of
-            undefined -> 'None'; S -> {'Just', lower(S)}
-        end;
-        error -> 'None'
+    case components(source(Value)) of
+        {ok, #{scheme := Scheme}} when is_binary(Scheme) -> {'Just', Scheme};
+        _ -> 'None'
     end.
 
 host(Value) ->
-    case safe_parse(source(Value)) of
-        {ok, Map} -> case maps:get(host, Map, undefined) of
-            undefined -> 'None';
-            <<>> -> 'None';
-            H0 -> H = bracketed(H0), {'Just', {'URI.Host', H, lower(H)}}
-        end;
-        error -> 'None'
+    case components(source(Value)) of
+        {ok, #{host := Host}} when is_binary(Host) -> {'Just', {'URI.Host', Host, lower(Host)}};
+        _ -> 'None'
     end.
 
 query(Value) ->
-    case safe_parse(source(Value)) of
-        {ok, Map} -> case maps:get(query, Map, undefined) of
-            undefined -> 'None'; Q -> case queryParse(Q) of {'Ok', V} -> {'Just', V}; _ -> 'None' end
-        end;
-        error -> 'None'
+    case components(source(Value)) of
+        {ok, #{query := Q}} when is_binary(Q) ->
+            case queryParse(Q) of {'Ok', V} -> {'Just', V}; _ -> 'None' end;
+        _ -> 'None'
     end.
 
 queryParse(Text) -> parse_pairs(Text, false, 'URI.Query').
@@ -138,22 +216,33 @@ decode(Text, Form) ->
 
 normalized(Text) ->
     try unicode:characters_to_binary(uri_string:normalize(Text)) catch _:_ -> Text end.
-safe_parse(Text) -> try {ok, uri_string:parse(Text)} catch _:_ -> error end.
 source({'URI.URI', Text}) -> Text; source({'URI.URL', Text}) -> Text.
+%% The walker's redactedURI: the password, from the authority's first `:` to
+%% its last `@`, is written as `***`. Read from the text, not uri_string, so a
+%% URI uri_string rejects still prints.
 redacted(Value) ->
     Text = source(Value),
-    try
-        Map = uri_string:parse(Text),
-        case maps:find(userinfo, Map) of
-            {ok, UserInfo} -> unicode:characters_to_binary(
-                uri_string:recompose(Map#{userinfo => redact_userinfo(UserInfo)}));
-            error -> Text
-        end
-    catch _:_ -> <<"<invalid URI>">> end.
-redact_userinfo(UserInfo) ->
-    case binary:split(UserInfo, <<":">>) of
-        [User, _] -> <<User/binary, ":***">>;
-        [_] -> UserInfo
+    Size = byte_size(Text),
+    case binary:match(Text, <<"//">>) of
+        nomatch -> Text;
+        {Slashes, 2} ->
+            Start = Slashes + 2,
+            End = case binary:match(Text, [<<"/">>, <<"?">>, <<"#">>],
+                                    [{scope, {Start, Size - Start}}]) of
+                {Found, 1} -> Found;
+                nomatch -> Size
+            end,
+            Authority = binary:part(Text, Start, End - Start),
+            case {binary:match(Authority, <<":">>), binary:matches(Authority, <<"@">>)} of
+                {{Colon, 1}, [_ | _] = Ats} ->
+                    case lists:last(Ats) of
+                        {At, 1} when Colon < At ->
+                            <<(binary:part(Text, 0, Start + Colon + 1))/binary, "***",
+                              (binary:part(Text, Start + At, Size - Start - At))/binary>>;
+                        _ -> Text
+                    end;
+                _ -> Text
+            end
     end.
 lower(B) -> string:lowercase(B).
 ascii(B) -> lists:all(fun(C) -> C < 128 end, binary:bin_to_list(B)).
@@ -300,11 +389,3 @@ quote_non_ascii(Text) -> iolist_to_binary([quote_iri_byte(C) || <<C>> <= Text]).
 quote_iri_byte(C) when C < 16#20; C =:= 16#7f -> throw(invalid_character);
 quote_iri_byte(C) when C < 128 -> <<C>>;
 quote_iri_byte(C) -> io_lib:format("%~2.16.0B", [C]).
-
-%% uri_string drops the brackets of an IP literal; the host component keeps
-%% them (RFC 3986 3.2.2), as the walker reports it: `[::1]`, not `::1`.
-bracketed(Host) ->
-    case binary:match(Host, <<":">>) of
-        nomatch -> Host;
-        _ -> <<"[", Host/binary, "]">>
-    end.
