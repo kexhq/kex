@@ -248,7 +248,7 @@ int main() {
             const std::array<std::string, 6> bodies = {
                 "IO.printLine([1, 2].with([10, 20]) { |a, b| a + b }.inspected)\n",
                 "IO.printLine(Valid(1).with(Invalid([\"b\"])) { |a, b| a + b }.inspected)\n",
-                "IO.printLine(traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
+                "IO.printLine(Algebra.traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
                 "IO.printLine(\"${3.is?(Discrete)} ${Optional.wrap(1).inspected}\")\n",
                 "IO.printLine(\"hey\".find { |c| c == 'e' }.inspected)\n",
                 "IO.printLine([1, 2].into { |x| [x, x * 10] }.inspected)\n",

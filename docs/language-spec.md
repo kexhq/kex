@@ -1539,12 +1539,12 @@ name.checked.with(email.checked) { |n, e| Signup { name: n, email: e } }
 # Invalid(["name is empty", "email has no @"]), not just the first
 ```
 
-`traverse` and `sequence` are written once over it: every result gathered,
+`Algebra.traverse` and `Algebra.sequence` are written once over it: every result gathered,
 or what the container makes of the failures.
 
 ```kex
-traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
-sequence([Ok(1), Error("no")])               # Error("no")
+Algebra.traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
+Algebra.sequence([Ok(1), Error("no")])               # Error("no")
 ```
 
 `into` is a Monad's bind, what other languages call `flatMap`:
