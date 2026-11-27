@@ -154,8 +154,8 @@ int main() {
         it("processes.kex", []() { assertTrue(parseFile("examples/processes.kex")); });
         it("parser_combinators/main.kex",
            []() { assertTrue(parseFile("examples/parser_combinators/main.kex")); });
-        it("parser_combinators/lib/parsing.kex",
-           []() { assertTrue(parseFile("examples/parser_combinators/lib/parsing.kex")); });
+        it("parser_combinators/lib/combinators.kex",
+           []() { assertTrue(parseFile("examples/parser_combinators/lib/combinators.kex")); });
         it("parsing_stdlib.kex", []() { assertTrue(parseFile("examples/parsing_stdlib.kex")); });
     });
 
