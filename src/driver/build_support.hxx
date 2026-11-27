@@ -144,7 +144,6 @@ auto specBaseCandidates(const std::string& filepath) -> std::vector<std::string>
 // `--source-root` directories, searched before the stdlib by moduleRootsFor.
 extern std::vector<std::string> cliSourceRoots;
 extern bool quietBuild;
-auto distributionArgsForShell() -> std::string;
 auto isSpecEntry(const std::string& filepath) -> bool;
 // Merges the entry's companion (a spec's base, a manifest's vocabulary) into
 // `program`; the file merged, or "". `rawSource` receives its text.

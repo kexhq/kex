@@ -1077,6 +1077,15 @@ target_compile_definitions(run_cache_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_
 add_dependencies(run_cache_cli_test kex)
 add_test(NAME run_cache_cli_test COMMAND run_cache_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+# A BEAM program's arguments reach main verbatim (kexhq/kex#837): erl is
+# started with an argument vector, never through `sh -c`.
+add_executable(beam_args_cli_test tests/beam_args_cli_test.cxx)
+target_link_libraries(beam_args_cli_test PRIVATE kex_lib)
+target_include_directories(beam_args_cli_test PRIVATE tests)
+target_compile_definitions(beam_args_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(beam_args_cli_test kex)
+add_test(NAME beam_args_cli_test COMMAND beam_args_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 # Risk #2: the prelude interface cache keyed on stdlib sources + version
 # only, so a same-version compiler rebuild served the previous build's
 # interfaces. Same shape as run_cache_cli_test above.

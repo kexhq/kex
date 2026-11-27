@@ -44,7 +44,7 @@
 
 using kex::prebuiltRuntimeBeamDir;
 using kex::readFile;
-using kex::process::runShellCommand;
+using kex::process::runCommand;
 
 auto preludeExternalModules() -> const kex::ir::ExternalModules& {
     static const auto modules = [] {
@@ -416,9 +416,16 @@ auto buildPrelude(const std::string& dir, bool verifyHir) -> int {
             // they carry no source location (`no_file:`) and the emitter's dead
             // statement-value lets make them inevitable. Real errors still fail
             // the exit-code check below.
-            std::string cmd = erlcExecutable() + " +from_core -W0 -pa " + dir + " -o " + dir + " " +
-                              dir + "/" + module.emitted.moduleName + ".core";
-            if (runShellCommand(cmd) != 0) {
+            const kex::process::Command cmd{
+                erlcExecutable(),
+                "+from_core",
+                "-W0",
+                "-pa",
+                dir,
+                "-o",
+                dir,
+                dir + "/" + module.emitted.moduleName + ".core"};
+            if (runCommand(cmd) != 0) {
                 return 1;
             }
         }

@@ -10,6 +10,8 @@
 #ifndef __EMSCRIPTEN__
 #include <cerrno>
 #include <csignal>
+#include <cstring>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -24,12 +26,57 @@ namespace kex::process {
 // POSIX headers the implementation below needs are not included there either.
 // Keep the one entry point so every call site stays shared, and let
 // `std::system` answer the way it did before the signal-forwarding version
-// existed.
-auto runShellCommand(const std::string& command) -> int {
-    return std::system(command.c_str());
+// existed, every argument quoted so the shell hands it over unchanged.
+namespace {
+auto shellLine(const Command& command) -> std::string {
+    std::string line;
+    for (const auto& arg : command) {
+        if (!line.empty()) {
+            line += ' ';
+        }
+        line += shellSingleQuote(arg);
+    }
+    return line;
+}
+} // namespace
+
+auto runCommand(const Command& command) -> int {
+    return std::system(shellLine(command).c_str());
 }
 #else
-// The pid of the program `runShellCommand` is currently waiting on, for the
+namespace {
+// The `char*` array execvp takes, built BEFORE fork: the build can run
+// subprocesses from more than one thread, and a forked child of a threaded
+// process must not allocate.
+auto argvFor(const Command& command) -> std::vector<char*> {
+    std::vector<char*> argv;
+    argv.reserve(command.size() + 1);
+    for (const auto& arg : command) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+    return argv;
+}
+
+// In the forked child: become the program, or say why not and exit 127 — the
+// status `sh` gave a command it could not find, which is what a missing `erl`
+// reported while these ran through one.
+[[noreturn]] void execOrExit(const std::vector<char*>& argv) {
+    if (argv.front() != nullptr) {
+        execvp(argv.front(), argv.data());
+    }
+    const char* name = argv.front() != nullptr ? argv.front() : "";
+    const char* reason = strerror(errno);
+    (void)!write(STDERR_FILENO, "kex: cannot run ", 16);
+    (void)!write(STDERR_FILENO, name, strlen(name));
+    (void)!write(STDERR_FILENO, ": ", 2);
+    (void)!write(STDERR_FILENO, reason, strlen(reason));
+    (void)!write(STDERR_FILENO, "\n", 1);
+    _exit(127);
+}
+} // namespace
+
+// The pid of the program `runCommand` is currently waiting on, for the
 // signal handler to forward to. A signal handler may only touch a
 // `volatile sig_atomic_t`, so the pid lives here rather than in a closure.
 static volatile sig_atomic_t g_childPid = -1;
@@ -61,7 +108,8 @@ extern "C" void forwardSignalToChild(int sig) {
 // Ctrl+C keeps reaching `erl` directly the way it already did. What is new
 // is the second path: a signal delivered to the LAUNCHER alone now reaches
 // the child too, and a launcher going down takes the child with it.
-auto runShellCommand(const std::string& command) -> int {
+auto runCommand(const Command& command) -> int {
+    const auto argv = argvFor(command);
     pid_t pid = fork();
     if (pid < 0) {
         return -1;
@@ -72,8 +120,7 @@ auto runShellCommand(const std::string& command) -> int {
         signal(SIGTERM, SIG_DFL);
         signal(SIGHUP, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
-        execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
-        _exit(127);
+        execOrExit(argv);
     }
     g_childPid = pid;
     struct sigaction forward{};
@@ -122,26 +169,39 @@ auto exitStatusOf(int waitStatus) -> int {
 // it ends, in the order they end — which is what lets a build say how far its
 // erlc runs have got while they run. Used for erlc only: these are short
 // compiler runs in the build's own process group, so a Ctrl+C at the terminal
-// reaches them directly and nothing needs forwarding (runShellCommand's
-// reason to exist does not apply).
-auto runShellCommandsTogether(
-    const std::vector<std::string>& commands, const std::function<void(std::size_t, int)>& finished)
-    -> void {
+// reaches them directly and nothing needs forwarding (runCommand's reason to
+// exist does not apply).
+auto runCommandsTogether(
+    const std::vector<Command>& commands,
+    bool discardOutput,
+    const std::function<void(std::size_t, int)>& finished) -> void {
 #ifdef __EMSCRIPTEN__
     for (std::size_t i = 0; i < commands.size(); ++i) {
-        finished(i, runShellCommand(commands[i]));
+        finished(
+            i, std::system(
+                   (shellLine(commands[i]) + (discardOutput ? " > /dev/null 2>&1" : "")).c_str()));
     }
 #else
     std::unordered_map<pid_t, std::size_t> running;
     for (std::size_t i = 0; i < commands.size(); ++i) {
+        const auto argv = argvFor(commands[i]);
         const pid_t pid = fork();
         if (pid < 0) {
             finished(i, -1);
             continue;
         }
         if (pid == 0) {
-            execl("/bin/sh", "sh", "-c", commands[i].c_str(), nullptr);
-            _exit(127);
+            if (discardOutput) {
+                const int devNull = open("/dev/null", O_WRONLY);
+                if (devNull >= 0) {
+                    dup2(devNull, STDOUT_FILENO);
+                    dup2(devNull, STDERR_FILENO);
+                    if (devNull > STDERR_FILENO) {
+                        ::close(devNull);
+                    }
+                }
+            }
+            execOrExit(argv);
         }
         running.emplace(pid, i);
     }

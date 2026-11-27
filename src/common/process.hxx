@@ -17,20 +17,30 @@ namespace kex::process {
 // idiom (`'\''`).
 auto shellSingleQuote(const std::string& s) -> std::string;
 
-// Run a shell command and wait for it, the way `std::system` does — except
-// that POSIX requires `system()` to IGNORE SIGINT and SIGQUIT in the calling
-// process for the whole call, and gives back no pid. Returns a wait status,
-// as `std::system` does — pass it to `exitStatusOf`.
-auto runShellCommand(const std::string& command) -> int;
+// One program to run: `argv[0]` is looked up on PATH the way `execvp` does,
+// and every element reaches the program as exactly one argument. No shell is
+// involved, so nothing in an argument — a space, a quote, `$(...)`, a
+// backtick, an empty string — is reinterpreted on the way.
+using Command = std::vector<std::string>;
 
-// Decode a wait status (from `runShellCommand`) into a process exit code.
+// Run `command` and wait for it. Unlike `std::system`, which POSIX requires to
+// IGNORE SIGINT and SIGQUIT in the calling process for the whole call and
+// which gives back no pid, signals the launcher receives are forwarded to the
+// child. Returns a wait status, as `std::system` does — pass it to
+// `exitStatusOf`. A program that cannot be started exits 127, as a shell
+// reports it.
+auto runCommand(const Command& command) -> int;
+
+// Decode a wait status (from `runCommand`) into a process exit code.
 auto exitStatusOf(int waitStatus) -> int;
 
 // Run `commands` side by side and call `finished(index, status)` for each as
-// it ends, in the order they end.
-auto runShellCommandsTogether(
-    const std::vector<std::string>& commands, const std::function<void(std::size_t, int)>& finished)
-    -> void;
+// it ends, in the order they end. `discardOutput` sends each one's stdout and
+// stderr to /dev/null.
+auto runCommandsTogether(
+    const std::vector<Command>& commands,
+    bool discardOutput,
+    const std::function<void(std::size_t, int)>& finished) -> void;
 
 // `kex_test:configure(Mode, Filters), ` for the `-eval` the BEAM runner
 // builds, or "" for an ordinary run.
