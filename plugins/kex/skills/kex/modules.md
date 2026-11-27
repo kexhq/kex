@@ -99,7 +99,10 @@ end
   `module Name do ... end`.
 - File names are snake_case, as `using` finds a module by its name: `module
   OptionParser` lives in `option_parser.kex`, `module Net.HTTP.WebSocket` in
-  `net/http/web_socket.kex`.
+  `net/http/web_socket.kex`. A program's own file cannot replace a
+  standard-library module: for `using Units.SI`, a `units.kex` beside the
+  program is skipped with a warning (KEXWM-0002). Give your modules names of
+  their own.
 - `using M` brings in every public name; `using M, only: [f, g]` brings in
   those; `using M, as: Short` only shortens the prefix. Put `using` in the
   narrowest place that needs it: a function body may start with one.

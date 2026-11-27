@@ -5,10 +5,10 @@
 # consumed plus the advanced parser, or a `ParseError`. Combinators build bigger
 # parsers out of smaller ones using `.try` to short-circuit on failure.
 #
-# Resolved as `Parsing` → `lib/parsing.kex` by convention; import it with
-# `using Parsing`.
+# Resolved as `Combinators` → `lib/combinators.kex` by convention; import it with
+# `using Combinators`.
 
-module Parsing
+module Combinators
 
 type ParseError = Unexpected(String, Int) | NoMatch(Int)
 

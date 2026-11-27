@@ -1004,6 +1004,13 @@ target_compile_definitions(multi_module_check_cli_test PRIVATE KEX_BINARY_PATH="
 add_dependencies(multi_module_check_cli_test kex)
 add_test(NAME multi_module_check_cli_test COMMAND multi_module_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+add_executable(stdlib_shadow_cli_test tests/stdlib_shadow_cli_test.cxx)
+target_link_libraries(stdlib_shadow_cli_test PRIVATE kex_lib)
+target_include_directories(stdlib_shadow_cli_test PRIVATE tests)
+target_compile_definitions(stdlib_shadow_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(stdlib_shadow_cli_test kex)
+add_test(NAME stdlib_shadow_cli_test COMMAND stdlib_shadow_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 add_executable(compiled_dependency_cli_test tests/compiled_dependency_cli_test.cxx)
 target_link_libraries(compiled_dependency_cli_test PRIVATE kex_lib)
 target_include_directories(compiled_dependency_cli_test PRIVATE tests)
