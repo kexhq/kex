@@ -1,0 +1,57 @@
+# `Address.parse` and `Network.parse` take the same syntax on both backends,
+# a strict one of their own rather than the platform's inet_pton(3) (macOS's
+# takes `010.0.0.1` and `%zone`) or Erlang's lax `inet:parse_address`.
+# Shorthand IPv4 (`127.1`, `1`, `1.2.3`), hex and octal octets, `+` signs and
+# `%zone` suffixes are rejected, since they are how an address slips past an
+# allow-list. Canonical text is RFC 5952's on both: `::1.2.3.4` prints as
+# `::102:304`, only `::ffff:` keeps a dotted quad. A prefix length is plain
+# decimal: `/024`, `/+8` and `/ 8` are rejected.
+using Net.IP
+
+foul showAddress(text: String) -> Void do
+  match Address.parse(text) do
+    Ok(a) => IO.printLine("[${text}] ${a.string} v${a.version}")
+    Error(e) => IO.printLine("[${text}] error: ${e.message}")
+  end
+end
+
+foul showNetwork(text: String) -> Void do
+  match Network.parse(text) do
+    Ok(n) => IO.printLine("[${text}] ${n.string} p=${n.prefix} ${n.first.string}-${n.last.string}")
+    Error(e) => IO.printLine("[${text}] error: ${e.message}")
+  end
+end
+
+main do
+  IO.printLine("accepted addresses:")
+  [
+    "127.0.0.1", "0.0.0.0", "255.255.255.255", "::", "::1", "::2", "::0.0.0.2",
+    "::1.2.3.4", "::ffff:127.0.0.1", "::ffff:0:0", "0:0:0:0:0:ffff:7f00:1",
+    "2001:0db8:0:0::42", "FE80::1", "0042::1", "1:2:3:4:5:6:7::",
+    "::1:2:3:4:5:6:7", "1:0:2:3:4:5:6:7", "1:0:0:2:0:0:0:3", "1:2:3:4:5:6:1.2.3.4",
+  ].each { |t| showAddress(t) }
+
+  IO.printLine("rejected addresses:")
+  [
+    "127.1", "1", "1.2.3", "1.2.3.4.5", "0x7f.0.0.1", "010.0.0.1", "1.2.3.04",
+    "00.0.0.0", "256.0.0.1", "+1.2.3.4", "-1.2.3.4", " 1.2.3.4", "1.2.3.4 ",
+    "1..2.3", "1.2.3.4.", "", "fe80::1%eth0", "fe80::1%1", "[::1]", "00042::1",
+    "1::2::3", ":1::", "1:::2", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8::",
+    "::ffff:010.0.0.1", "::ffff:127.1", "::ffff:1.2.3", "::g", "1.2.3.4:80",
+  ].each { |t| showAddress(t) }
+
+  IO.printLine("networks:")
+  [
+    "192.0.2.9/24", "10.0.0.0/8", "0.0.0.0/0", "1.2.3.4/32", "::1/128",
+    "2001:db8::1/32", "::ffff:10.1.2.3/104", "1.2.3.4/33", "2001:db8::/129",
+    "1.2.3.4/-1", "1.2.3.4/", "1.2.3.4/024", "1.2.3.4/00", "1.2.3.4/+8",
+    "1.2.3.4/ 8", "1.2.3.4/8 ", "1.2.3.4/0x8", "1.2.3.4", "x/8", "127.1/8",
+    "010.0.0.0/8", "fe80::%eth0/64", "1.2.3.4/8/8",
+  ].each { |t| showNetwork(t) }
+
+  let net = Network.parse("10.0.0.0/8").try
+  IO.printLine(net.contains?(Address.parse("10.255.0.1").try))
+  IO.printLine(Address.parse("10.1").ok?)
+  IO.printLine(Address.parse("1.2.3.4\0x").ok?)
+  IO.printLine(Network.parse("10.0.0.0\0/8").ok?)
+end
