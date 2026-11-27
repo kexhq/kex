@@ -3048,6 +3048,50 @@ private:
             std::move(retained)};
     }
 
+    // The arms a `match` at `site` still owes, as snippets: the checker's
+    // answer (TypeChecker::owedArms) for the subject's type there. The word
+    // being typed is replaced by an arm that takes nothing (a guarded `_`),
+    // so a match with no arms yet, or a header with no `do`, still parses.
+    auto matchArmSnippets(const Document& document, size_t cursor, const MatchSite& site)
+        -> std::vector<Snippet> {
+        const auto& text = document.text;
+        cursor = std::min(cursor, text.size());
+        auto wordStart = cursor;
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_')) {
+            --wordStart;
+        }
+        auto probe = text;
+        probe.replace(
+            wordStart, cursor - wordStart,
+            site.header ? "do\n_ when false => 0\nend" : "_ when false => 0");
+        auto checked = checkAsDocument(document, document.path, probe);
+        if (!checked) {
+            return {};
+        }
+        const auto& types = checked->analyzer->typeMap();
+        for (const auto& [expression, _] : types) {
+            if (!expression || expression->location.file != document.path ||
+                expression->location.startOffset != static_cast<int>(site.matchOffset)) {
+                continue;
+            }
+            const auto* match = std::get_if<ast::MatchExpr>(&expression->kind);
+            if (!match || !match->subject) {
+                continue;
+            }
+            const auto subject = types.find(match->subject.get());
+            if (subject == types.end()) {
+                return {};
+            }
+            std::vector<Arm> arms;
+            for (auto& owed : checked->analyzer->owedArms(*match, subject->second)) {
+                arms.push_back({std::move(owed.name), owed.arity, owed.type});
+            }
+            return armSnippets(text, cursor, site, arms);
+        }
+        return {};
+    }
+
     // Member completion at `position` when it follows `receiver.`: the
     // checker's own answer (Analyzer::memberCompletions) for the receiver's
     // type where it is written. Nothing is matched by name: a function is
@@ -4673,7 +4717,14 @@ private:
             const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
             const auto cursor =
                 byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character);
-            for (auto& snippet : snippetCompletions(text, cursor)) {
+            auto snippets = snippetCompletions(text, cursor);
+            if (const auto site = matchSiteAt(text, cursor)) {
+                auto arms = matchArmSnippets(found->second, cursor, *site);
+                snippets.insert(
+                    snippets.begin(), std::make_move_iterator(arms.begin()),
+                    std::make_move_iterator(arms.end()));
+            }
+            for (auto& snippet : snippets) {
                 result.push_back({
                     .label = std::move(snippet.label),
                     .kind = ::lsp::CompletionItemKind::Snippet,

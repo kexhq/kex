@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 #include <string_view>
 
 namespace kex::lsp {
@@ -211,20 +212,36 @@ auto contextBit(SnippetContext context) -> unsigned {
 
 } // namespace
 
-auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext {
+namespace {
+
+// What the tokens before a word say about it.
+struct Walk {
+    SnippetContext context = SnippetContext::None;
+    std::optional<MatchSite> match;
+};
+
+auto walk(const std::string& text, size_t cursor) -> Walk {
     const auto wordStart = wordStartBefore(text, cursor);
     if (wordStart > 0 && (text[wordStart - 1] == '.' || text[wordStart - 1] == '@' ||
                           text[wordStart - 1] == ':' || text[wordStart - 1] == '%')) {
-        return SnippetContext::None;
+        return {};
     }
 
     Lexer lexer(text);
     const auto tokens = lexer.tokenizeAll();
 
-    std::vector<Block> stack;
-    const auto current = [&] { return stack.empty() ? Block::TopLevel : stack.back(); };
+    // An open block, the keyword that says what kind it is, and where that
+    // keyword is.
+    struct Open {
+        Block block;
+        TokenType opener = TokenType::Eof;
+        size_t offset = 0;
+    };
+    std::vector<Open> stack;
+    const auto current = [&] { return stack.empty() ? Block::TopLevel : stack.back().block; };
     const Token* previous = nullptr; // the last token before the word on its line
     TokenType classifier = TokenType::Eof;
+    size_t classifierOffset = 0;
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto& token = tokens[i];
         if (token.type == TokenType::Eof || token.startOffset < 0) {
@@ -236,7 +253,7 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext 
         // unterminated one the lexer reported as an error, is not code.
         if (start < wordStart &&
             (wordStart < end || (token.type == TokenType::Error && wordStart <= end))) {
-            return SnippetContext::None;
+            return {};
         }
         if (start >= wordStart) {
             break;
@@ -247,7 +264,8 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext 
                 classifier = TokenType::Eof;
                 continue;
             case TokenType::Do:
-                stack.push_back(blockOpenedBy(classifier, current()));
+                stack.push_back(
+                    {blockOpenedBy(classifier, current()), classifier, classifierOffset});
                 classifier = TokenType::Eof;
                 break;
             case TokenType::FatArrow: classifier = TokenType::Eof; break;
@@ -269,24 +287,28 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext 
                 }
                 if (block) {
                     const auto parent = current();
-                    stack.push_back(parent == Block::Bracket ? Block::Statements : parent);
+                    stack.push_back(
+                        {parent == Block::Bracket ? Block::Statements : parent, TokenType::If,
+                         start});
                 }
                 break;
             }
             case TokenType::End:
-                if (!stack.empty() && stack.back() != Block::Bracket) {
+                if (!stack.empty() && stack.back().block != Block::Bracket) {
                     stack.pop_back();
                 }
                 break;
             case TokenType::LParen:
             case TokenType::LBracket:
             case TokenType::LBrace:
-            case TokenType::HashLBracket: stack.push_back(Block::Bracket); break;
+            case TokenType::HashLBracket:
+                stack.push_back({Block::Bracket, token.type, start});
+                break;
             case TokenType::RParen:
             case TokenType::RBracket:
             case TokenType::RBrace:
                 while (!stack.empty()) {
-                    const auto popped = stack.back();
+                    const auto popped = stack.back().block;
                     stack.pop_back();
                     if (popped == Block::Bracket) {
                         break;
@@ -296,6 +318,7 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext 
             default:
                 if (classifiesBlock(token.type)) {
                     classifier = token.type;
+                    classifierOffset = start;
                 }
                 break;
         }
@@ -312,38 +335,46 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext 
         }
         for (auto at = gapStart; at < wordStart; ++at) {
             if (text[at] == '#' && (at + 1 >= text.size() || text[at + 1] != '[')) {
-                return SnippetContext::None;
+                return {};
             }
         }
     }
 
     const auto block = current();
-    if (block == Block::Closed || block == Block::Bracket) {
-        return SnippetContext::None;
-    }
     const bool lineStartsHere = std::all_of(
         text.begin() + static_cast<std::ptrdiff_t>(lineStart),
         text.begin() + static_cast<std::ptrdiff_t>(wordStart),
         [](char c) { return c == ' ' || c == '\t'; });
+    if (block == Block::Closed || block == Block::Bracket) {
+        // A line of its own in a `match` block starts an arm.
+        if (lineStartsHere && !stack.empty() && stack.back().opener == TokenType::Match) {
+            return {SnippetContext::None, MatchSite{stack.back().offset, false}};
+        }
+        return {};
+    }
     if (lineStartsHere) {
         switch (block) {
-            case Block::TopLevel: return SnippetContext::TopLevel;
-            case Block::Declarations: return SnippetContext::Declarations;
-            case Block::Functions: return SnippetContext::Functions;
-            default: return SnippetContext::Statements;
+            case Block::TopLevel: return {SnippetContext::TopLevel};
+            case Block::Declarations: return {SnippetContext::Declarations};
+            case Block::Functions: return {SnippetContext::Functions};
+            default: return {SnippetContext::Statements};
         }
     }
     if (!previous || wordStart == 0 ||
         !std::isspace(static_cast<unsigned char>(text[wordStart - 1]))) {
-        return SnippetContext::None;
+        return {};
     }
     if (block == Block::Statements || block == Block::TopLevel) {
         if (previous->type == TokenType::Equals || previous->type == TokenType::FatArrow) {
-            return SnippetContext::Expression;
+            return {SnippetContext::Expression};
         }
     }
     if (endsValue(previous->type) && previous->type != TokenType::End) {
-        return SnippetContext::BlockArgument;
+        // `match shape d`: the `do` that opens the match's arms.
+        if (classifier == TokenType::Match) {
+            return {SnippetContext::BlockArgument, MatchSite{classifierOffset, true}};
+        }
+        return {SnippetContext::BlockArgument};
     }
     switch (previous->type) {
         case TokenType::Loop:
@@ -351,9 +382,105 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext 
         case TokenType::Receive:
         case TokenType::Main:
         case TokenType::Spawn:
-        case TokenType::Compiled: return SnippetContext::BlockArgument;
-        default: return SnippetContext::None;
+        case TokenType::Compiled: return {SnippetContext::BlockArgument};
+        default: return {};
     }
+}
+
+// The cursor line's indentation, and the file's step inward.
+struct Indentation {
+    std::string base;
+    std::string unit;
+};
+
+auto indentationAt(const std::string& text, size_t wordStart) -> Indentation {
+    const auto lineStart = lineStartOf(text, wordStart);
+    auto indentEnd = lineStart;
+    while (indentEnd < text.size() && (text[indentEnd] == ' ' || text[indentEnd] == '\t')) {
+        ++indentEnd;
+    }
+    return {text.substr(lineStart, indentEnd - lineStart), indentUnit(text)};
+}
+
+// `body` with each `\t` one indentation step and each line after the first
+// at the cursor line's indentation.
+auto indented(std::string_view body, const Indentation& indentation) -> std::string {
+    std::string out;
+    for (const char c : body) {
+        if (c == '\t') {
+            out += indentation.unit;
+        } else if (c == '\n') {
+            out += '\n';
+            out += indentation.base;
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+// One arm as a pattern with tab stops from `*stop` on, and `=> ` before its
+// body's stop.
+auto armPattern(const Arm& arm, int* stop) -> std::string {
+    const auto next = [&] { return std::to_string((*stop)++); };
+    if (arm.type) {
+        std::string binder(
+            1, static_cast<char>(std::tolower(
+                   static_cast<unsigned char>(arm.name.empty() ? 'x' : arm.name.front()))));
+        if (const auto dot = arm.name.rfind('.');
+            dot != std::string::npos && dot + 1 < arm.name.size()) {
+            binder = std::string(
+                1, static_cast<char>(std::tolower(static_cast<unsigned char>(arm.name[dot + 1]))));
+        }
+        return "${" + next() + ":" + binder + "}: " + arm.name;
+    }
+    if (arm.arity == 0) {
+        return arm.name;
+    }
+    std::string pattern = arm.name + "(";
+    for (size_t i = 0; i < arm.arity; ++i) {
+        pattern += (i ? ", ${" : "${") + next() + ":_}";
+    }
+    return pattern + ")";
+}
+
+auto armLabel(const Arm& arm) -> std::string {
+    if (arm.type) {
+        return "_: " + arm.name + " =>";
+    }
+    std::string label = arm.name;
+    if (arm.arity) {
+        label += "(";
+        for (size_t i = 0; i < arm.arity; ++i) {
+            label += i ? ", _" : "_";
+        }
+        label += ")";
+    }
+    return label + " =>";
+}
+
+// The arms one after another, a line each, the last body the final stop.
+auto armLines(const std::vector<Arm>& arms, const std::string& lineStart) -> std::string {
+    std::string out;
+    int stop = 1;
+    for (size_t i = 0; i < arms.size(); ++i) {
+        out += lineStart + armPattern(arms[i], &stop) + " => ";
+        out += i + 1 == arms.size() ? std::string("$0") : "$" + std::to_string(stop++);
+        if (i + 1 < arms.size()) {
+            out += "\n";
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext {
+    return walk(text, std::min(cursor, text.size())).context;
+}
+
+auto matchSiteAt(const std::string& text, size_t cursor) -> std::optional<MatchSite> {
+    return walk(text, std::min(cursor, text.size())).match;
 }
 
 auto snippetCompletions(const std::string& text, size_t cursor) -> std::vector<Snippet> {
@@ -367,32 +494,59 @@ auto snippetCompletions(const std::string& text, size_t cursor) -> std::vector<S
     if (!bit) {
         return {};
     }
-
-    const auto lineStart = lineStartOf(text, wordStart);
-    auto indentEnd = lineStart;
-    while (indentEnd < text.size() && (text[indentEnd] == ' ' || text[indentEnd] == '\t')) {
-        ++indentEnd;
-    }
-    const auto base = text.substr(lineStart, indentEnd - lineStart);
-    const auto unit = indentUnit(text);
+    const auto indentation = indentationAt(text, wordStart);
 
     std::vector<Snippet> snippets;
     for (const auto& entry : Entries) {
         if (!(entry.contexts & bit) || !std::string_view(entry.filterText).starts_with(word)) {
             continue;
         }
-        std::string body;
-        for (const char* c = entry.body; *c; ++c) {
-            if (*c == '\t') {
-                body += unit;
-            } else if (*c == '\n') {
-                body += '\n';
-                body += base;
-            } else {
-                body += *c;
-            }
+        snippets.push_back(
+            {entry.label, entry.filterText, entry.detail, indented(entry.body, indentation)});
+    }
+    return snippets;
+}
+
+auto armSnippets(
+    const std::string& text, size_t cursor, const MatchSite& site, const std::vector<Arm>& arms)
+    -> std::vector<Snippet> {
+    if (arms.empty()) {
+        return {};
+    }
+    cursor = std::min(cursor, text.size());
+    const auto wordStart = wordStartBefore(text, cursor);
+    const std::string_view word(text.data() + wordStart, cursor - wordStart);
+    const auto indentation = indentationAt(text, wordStart);
+    std::vector<Snippet> snippets;
+    if (site.header) {
+        if (!std::string_view("do").starts_with(word)) {
+            return {};
         }
-        snippets.push_back({entry.label, entry.filterText, entry.detail, std::move(body)});
+        // The arms one step in from the line `match` is on, `end` level with it.
+        std::string body = "do\n";
+        body += armLines(arms, indentation.base + indentation.unit);
+        body += "\n" + indentation.base + "end";
+        snippets.push_back(
+            {"do with every arm", "do", "match arms for every case", std::move(body)});
+        return snippets;
+    }
+    // Written where the cursor is: the first line at the cursor, the others
+    // at its line's indentation.
+    for (const auto& arm : arms) {
+        if (!arm.name.starts_with(word) && !arm.type) {
+            continue;
+        }
+        int stop = 1;
+        snippets.push_back(
+            {armLabel(arm), arm.type ? std::string(word) : arm.name, "missing match arm",
+             armPattern(arm, &stop) + " => $0"});
+    }
+    if (arms.size() > 1) {
+        auto body = armLines(arms, indentation.base);
+        body.erase(0, indentation.base.size());
+        snippets.push_back(
+            {"every missing arm", arms.front().type ? std::string(word) : arms.front().name,
+             "match arms for every missing case", std::move(body)});
     }
     return snippets;
 }

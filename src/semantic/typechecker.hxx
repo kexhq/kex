@@ -188,6 +188,19 @@ public:
     // use there reaches (bareNameDeclared, under the module and `using`s in
     // force at `at`). Lowercase locals first is the caller's to decide.
     auto bareCompletions(const ast::Expr& at) -> std::vector<std::string>;
+    // An arm a `match` still owes: a member of the subject's sum type or
+    // union that no unguarded arm takes. A constructor is written with its
+    // payloads (`Circle(r)`), a type member as a type pattern (`s : String`).
+    struct OwedArm {
+        std::string name;
+        std::size_t arity = 0;
+        bool type = false;
+    };
+    // The arms `node` still owes on a subject of type `subject`, in the order
+    // its type declares them. Empty when the subject is no sum type or union,
+    // or when an unguarded arm takes every value. Completion reads this to
+    // write the arms out; it is what the exhaustiveness checks weigh.
+    auto owedArms(const ast::MatchExpr& node, const TypePtr& subject) -> std::vector<OwedArm>;
     // What `.try` on a value of `operand` yields: an Optional's or a Result's
     // success payload; null when `.try` does not apply.
     auto tryPayload(const TypePtr& operand) const -> TypePtr;

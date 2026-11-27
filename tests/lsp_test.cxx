@@ -3034,6 +3034,73 @@ int main() {
                     std::string::npos,
                 "the `while` snippet is not indented by four spaces: " + reply);
         });
+
+        it("writes an arm per constructor after `match subject`", [=]() {
+            const std::string text = "type Shape = Circle(Float) | Rect(Float, Float) | Empty\n\n"
+                                     "let area(s: Shape) -> Float do\n"
+                                     "  match s d\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 3, 11, snippets);
+            assertTrue(
+                reply.find(
+                    R"("insertText":"do\n    Circle(${1:_}) => $2\n    Rect(${3:_}, ${4:_}) => $5\n    Empty => $0\n  end")") !=
+                    std::string::npos,
+                "no `do` with every arm after `match s`: " + reply);
+        });
+
+        it("offers the arms a match still owes inside its block", [=]() {
+            const std::string text = "type Shape = Circle(Float) | Rect(Float, Float) | Empty\n\n"
+                                     "let area(s: Shape) -> Float do\n"
+                                     "  match s do\n"
+                                     "    Circle(r) => r\n"
+                                     "    R\n"
+                                     "  end\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 5, 5, snippets);
+            assertTrue(
+                reply.find(R"("insertText":"Rect(${1:_}, ${2:_}) => $0")") != std::string::npos,
+                "no `Rect` arm in the match: " + reply);
+            assertTrue(
+                reply.find(R"("insertText":"Rect(${1:_}, ${2:_}) => $3\n    Empty => $0")") !=
+                    std::string::npos,
+                "no arm for every missing case: " + reply);
+            assertTrue(
+                !offers(reply, "Circle(_) =>"), "the taken `Circle` offered again: " + reply);
+        });
+
+        it("writes a type pattern for each member of a union of types", [=]() {
+            const std::string text = "record Safe do\n  html: String\nend\n\n"
+                                     "type Reply = String | Safe\n\n"
+                                     "let show(r: Reply) -> String do\n"
+                                     "  match r d\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 7, 11, snippets);
+            assertTrue(
+                reply.find(R"(${1:s}: String => $2\n    ${3:s}: Safe => $0)") != std::string::npos,
+                "no type patterns for the union's members: " + reply);
+        });
+
+        it("offers no arms when an arm already takes everything", [=]() {
+            const std::string text = "type Shape = Circle(Float) | Empty\n\n"
+                                     "let area(s: Shape) -> Float do\n"
+                                     "  match s do\n"
+                                     "    _ => 0.0\n"
+                                     "    E\n"
+                                     "  end\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 5, 5, snippets);
+            assertTrue(!offers(reply, "Empty =>"), "an arm offered after `_`: " + reply);
+        });
+
+        it("writes the arms of a standard-library sum type", [=]() {
+            const std::string text = "let show(x: Integer?) -> Integer do\n"
+                                     "  match x d\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 1, 11, snippets);
+            assertTrue(
+                reply.find(R"(Just(${1:_}) => $2\n    None => $0)") != std::string::npos,
+                "no Just and None arms for an Optional: " + reply);
+        });
     });
     return runAll();
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,5 +38,27 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext;
 // of `text` starts and that the word is a prefix of. Empty when no word is
 // being typed.
 auto snippetCompletions(const std::string& text, size_t cursor) -> std::vector<Snippet>;
+
+// A word that writes `match` arms: the `do` after `match subject` (`header`),
+// or a line of its own inside a `match … do` block. `matchOffset` is where
+// that `match` keyword is, so the caller can ask the checker about it.
+struct MatchSite {
+    size_t matchOffset = 0;
+    bool header = false;
+};
+auto matchSiteAt(const std::string& text, size_t cursor) -> std::optional<MatchSite>;
+
+// An arm the checker says a match still owes (TypeChecker::OwedArm).
+struct Arm {
+    std::string name;
+    size_t arity = 0;
+    bool type = false; // a union member taken by a type pattern, `s: String`
+};
+// The snippets that write `arms` at a match site: after the header, a `do`
+// with every arm and its `end`; inside the block, each arm, and all of them
+// at once.
+auto armSnippets(
+    const std::string& text, size_t cursor, const MatchSite& site, const std::vector<Arm>& arms)
+    -> std::vector<Snippet>;
 
 } // namespace kex::lsp

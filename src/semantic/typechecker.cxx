@@ -4328,6 +4328,96 @@ auto TypeChecker::checkClauseCoverage() -> void {
 // other kind of arm leaves the question to checkMatchExhaustiveness (see
 // kexhq/kex#645). Dropping the `Redirect` arm was accepted, and failed at run
 // time with no matching clause (found by `make fuzz-metamorphic`).
+auto TypeChecker::owedArms(const ast::MatchExpr& node, const TypePtr& subject)
+    -> std::vector<OwedArm> {
+    if (!subject || isUndetermined(resolve(subject))) {
+        return {};
+    }
+    // `X?` is its own kind of type, matched by the prelude's `Optional` arms.
+    auto adt = adtNameOfType(expandTypeAliases(resolve(subject)));
+    auto members = unionMemberNames(subject);
+    if (members.empty() && !adt.empty()) {
+        members = m_adtVariants.at(adt);
+    }
+    if (members.empty()) {
+        return {};
+    }
+    if (adt.empty()) {
+        if (const auto* named =
+                std::get_if<NamedType>(&expandTypeAliases(resolve(subject))->kind)) {
+            adt = named->name;
+        }
+    }
+    std::vector<bool> taken(members.size(), false);
+    for (const auto& clause : node.clauses) {
+        if (clause.guard && *clause.guard) {
+            continue;
+        }
+        for (const auto& pattern : clause.patterns) {
+            if (!pattern) {
+                continue;
+            }
+            std::string constructor;
+            if (const auto* written = std::get_if<ast::ConstructorPattern>(&pattern->kind)) {
+                constructor = written->name;
+            } else if (const auto* literal = std::get_if<ast::LiteralPattern>(&pattern->kind);
+                       literal && literal->literal.type == TokenType::None) {
+                constructor = "None";
+            }
+            if (!constructor.empty()) {
+                for (std::size_t i = 0; i < members.size(); ++i) {
+                    taken[i] = taken[i] || members[i] == constructor;
+                }
+                continue;
+            }
+            if (const auto takes = unionMembersTaken(*pattern, members)) {
+                for (std::size_t i = 0; i < members.size(); ++i) {
+                    taken[i] = taken[i] || (*takes)[i];
+                }
+            }
+        }
+    }
+    if (std::all_of(taken.begin(), taken.end(), [](bool whole) { return whole; })) {
+        return {};
+    }
+    std::vector<OwedArm> owed;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        if (taken[i]) {
+            continue;
+        }
+        const auto& member = members[i];
+        // A union of bare names is registered as a sum type, so a record or
+        // a primitive among them is listed as if a constructor: it is a type.
+        const bool type = adt.empty() || isPrimitiveTypeName(member) ||
+                          m_recordFields.contains(resolveRecordName(member));
+        std::size_t arity = 0;
+        if (!type) {
+            bool found = false;
+            if (const auto owners = m_constructorOwners.find(member);
+                owners != m_constructorOwners.end()) {
+                for (const auto& owner : owners->second) {
+                    if (owner.adt == adt) {
+                        arity = owner.arity;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                if (const auto known = m_constructorResult.find(member);
+                    known != m_constructorResult.end() && known->second.adtName == adt) {
+                    arity = known->second.slots.size();
+                } else if (const auto counted = m_constructorArity.find(member);
+                           counted != m_constructorArity.end()) {
+                    arity = counted->second;
+                }
+            }
+        }
+        owed.push_back({member, arity, type});
+    }
+    return owed;
+}
+
 auto TypeChecker::unionMemberNames(const TypePtr& subject) -> std::vector<std::string> {
     const auto nameOf = [](const TypePtr& type) {
         const auto* named = std::get_if<NamedType>(&type->kind);
