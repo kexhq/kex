@@ -105,7 +105,9 @@ struct EnterEdit {
 // The edit for an Enter that left the cursor at byte `cursor` of `text`, on
 // a line holding nothing but its indentation. Nothing when the line before
 // opens no block, or every block in the file already has its `end`.
-auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEdit>;
+// `unit` is one step inward, from the client's formatting options.
+auto endOnEnter(const std::string& text, size_t cursor, const std::string& unit)
+    -> std::optional<EnterEdit>;
 
 // Where the `end` closing the block whose keyword starts at `openerOffset`
 // (`match` in `match x do`) begins, when it is the first thing on its line;
@@ -116,7 +118,8 @@ auto closingEndOf(const std::string& text, size_t openerOffset) -> std::optional
 // body a `die` that names its case, so the program checks until it is filled in.
 auto armSource(const std::vector<Arm>& arms, const std::string& indent) -> std::string;
 
-// The indentation of the line holding byte `offset`, and the file's step in.
+// The indentation of the line holding byte `offset`, and the file's step in:
+// the one most blocks in it are indented by, two spaces when none is.
 auto lineIndentation(const std::string& text, size_t offset) -> std::string;
 auto indentStep(const std::string& text) -> std::string;
 

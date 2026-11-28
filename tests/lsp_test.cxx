@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include "test.hxx"
 #include "../src/lsp/server.hxx"
+#include "../src/lsp/snippets.hxx"
 #include "../src/lsp/tey_roots.hxx"
 
 #include <iterator>
@@ -2978,9 +2979,8 @@ int main() {
             const std::string text = "let f(x: Integer) -> Integer do\n  i\n  x\nend\n";
             const auto reply = askAt(uri, text, "completion", 1, 3, snippets);
             assertTrue(
-                reply.find(R"("insertText":"if ${1:condition}\n    $0\n  end")") !=
-                    std::string::npos,
-                "no indented `if` snippet in a function body: " + reply);
+                reply.find(R"("insertText":"if ${1:condition}\n\t$0\nend")") != std::string::npos,
+                "no `if` snippet in a function body: " + reply);
             assertTrue(offers(reply, "if else"), "no `if else` snippet: " + reply);
             assertTrue(!offers(reply, "main"), "`main` offered in a function body: " + reply);
         });
@@ -3028,7 +3028,7 @@ int main() {
                 offers(reply, "do |i|"),
                 "no `do |i|` snippet after a call: " + snippetItems(reply));
             assertTrue(
-                reply.find(R"("insertText":"do\n    $0\n  end")") != std::string::npos,
+                reply.find(R"("insertText":"do\n\t$0\nend")") != std::string::npos,
                 "the `do` snippet is not indented for its line: " + snippetItems(reply));
         });
 
@@ -3036,13 +3036,12 @@ int main() {
             const auto strings = askAt(
                 uri, "main do\n  [\"a\", \"b\"].each d\nend\n", "completion", 1, 19, snippets);
             assertTrue(
-                strings.find(R"("insertText":"do |${1:s}|\n    $0\n  end")") != std::string::npos,
+                strings.find(R"("insertText":"do |${1:s}|\n\t$0\nend")") != std::string::npos,
                 "no `do |s|` for each over Strings: " + snippetItems(strings));
             const auto pairs =
                 askAt(uri, "main do\n  [(\"a\", 1)].each d\nend\n", "completion", 1, 19, snippets);
             assertTrue(
-                pairs.find(R"("insertText":"do |${1:s}, ${2:i}|\n    $0\n  end")") !=
-                    std::string::npos,
+                pairs.find(R"("insertText":"do |${1:s}, ${2:i}|\n\t$0\nend")") != std::string::npos,
                 "no `do |s, i|` for each over pairs: " + snippetItems(pairs));
         });
 
@@ -3059,24 +3058,28 @@ int main() {
             assertTrue(!anySnippet(comment), "a snippet in a comment: " + comment);
         });
 
-        it("indents by the file's own unit", [=]() {
+        it("leaves the step inward to the editor's indentation setting", [=]() {
+            // A tab, which the client expands as its settings say; the
+            // cursor line's own indentation it adds itself.
             const std::string text = "let f(x: Integer) -> Integer do\n    x\n    wh\nend\n";
             const auto reply = askAt(uri, text, "completion", 2, 6, snippets);
             assertTrue(
-                reply.find(R"("insertText":"while ${1:condition} do\n        $0\n    end")") !=
+                reply.find(R"("insertText":"while ${1:condition} do\n\t$0\nend")") !=
                     std::string::npos,
-                "the `while` snippet is not indented by four spaces: " + reply);
+                "the `while` body is not one tab in: " + snippetItems(reply));
+            assertTrue(
+                reply.find(R"("insertTextMode")") == std::string::npos,
+                "the snippet asks to be inserted as it is: " + snippetItems(reply));
         });
 
-        it("leaves a client that indents snippets itself the relative lines", [=]() {
-            // Neovim declares snippets but no insertTextMode, and indents a
-            // snippet's later lines by the cursor's line itself.
+        it("writes the same snippet for a client that declares no insertTextMode", [=]() {
+            // Neovim declares snippets but no insertTextMode.
             const std::string adjusting =
                 R"({"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}})";
             const std::string text = "let f(x: Integer) -> Integer do\n  i\n  x\nend\n";
             const auto reply = askAt(uri, text, "completion", 1, 3, adjusting);
             assertTrue(
-                reply.find(R"("insertText":"if ${1:condition}\n  $0\nend")") != std::string::npos,
+                reply.find(R"("insertText":"if ${1:condition}\n\t$0\nend")") != std::string::npos,
                 "the `if` body is not relative to its line: " + snippetItems(reply));
             assertTrue(
                 reply.find(R"("insertTextMode")") == std::string::npos,
@@ -3092,10 +3095,10 @@ int main() {
                                      "end\n";
             const auto reply = askAt(uri, text, "completion", 3, 6, snippets);
             assertTrue(
-                reply.find(R"("newText":"  elif ${1:condition}\n    $0")") != std::string::npos,
+                reply.find(R"("newText":"  elif ${1:condition}\n  \t$0")") != std::string::npos,
                 "no `elif` level with its `if`: " + reply);
             assertTrue(
-                reply.find(R"("newText":"  else\n    $0")") != std::string::npos,
+                reply.find(R"("newText":"  else\n  \t$0")") != std::string::npos,
                 "no `else` level with its `if`: " + reply);
         });
 
@@ -3125,6 +3128,42 @@ int main() {
                 "no `end` for the `do` block: " + block);
         });
 
+        it("indents the new line by the editor's tab size", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n"
+                                     "  if x > 0\n"
+                                     "  \n"
+                                     "end\n";
+            const auto four = askAt(
+                uri, text, "onTypeFormatting", 2, 2, "{}",
+                R"(,"ch":"\n","options":{"tabSize":4,"insertSpaces":true})");
+            assertTrue(
+                four.find(R"({"newText":"      ","range")") != std::string::npos,
+                "the new line is not four spaces past the `if`: " + four);
+            const auto tabs = askAt(
+                uri, text, "onTypeFormatting", 2, 2, "{}",
+                R"(,"ch":"\n","options":{"tabSize":4,"insertSpaces":false})");
+            assertTrue(
+                tabs.find(R"({"newText":"  \t","range")") != std::string::npos,
+                "the new line is not a tab past the `if`: " + tabs);
+        });
+
+        it("infers the file's step from block bodies, not continuation lines", [=]() {
+            const std::string text = "type Day = Monday\n"
+                                     "         | Tuesday\n\n"
+                                     "let f(x: Integer) -> Integer do\n"
+                                     "    if x > 0\n"
+                                     "        x\n"
+                                     "    else\n"
+                                     "        0\n"
+                                     "    end\n"
+                                     "end\n";
+            assertTrue(
+                kex::lsp::indentStep(text) == "    ",
+                "not four spaces: [" + kex::lsp::indentStep(text) + "]");
+            assertTrue(kex::lsp::indentStep("main do\n  1\nend\n") == "  ", "not two spaces");
+            assertTrue(kex::lsp::indentStep("1\n") == "  ", "no default of two spaces");
+        });
+
         it("writes no end for a block that has one", [=]() {
             const std::string text = "let f(x: Integer) -> Integer do\n"
                                      "  if x > 0\n"
@@ -3146,7 +3185,7 @@ int main() {
             const auto reply = askAt(uri, text, "completion", 3, 11, snippets);
             assertTrue(
                 reply.find(
-                    R"("insertText":"do\n    Circle(${1:_}) => $2\n    Rect(${3:_}, ${4:_}) => $5\n    Empty => $0\n  end")") !=
+                    R"("insertText":"do\n\tCircle(${1:_}) => $2\n\tRect(${3:_}, ${4:_}) => $5\n\tEmpty => $0\nend")") !=
                     std::string::npos,
                 "no `do` with every arm after `match s`: " + reply);
         });
@@ -3164,7 +3203,7 @@ int main() {
                 reply.find(R"("insertText":"Rect(${1:_}, ${2:_}) => $0")") != std::string::npos,
                 "no `Rect` arm in the match: " + reply);
             assertTrue(
-                reply.find(R"("insertText":"Rect(${1:_}, ${2:_}) => $3\n    Empty => $0")") !=
+                reply.find(R"("insertText":"Rect(${1:_}, ${2:_}) => $3\nEmpty => $0")") !=
                     std::string::npos,
                 "no arm for every missing case: " + reply);
             assertTrue(
@@ -3179,7 +3218,7 @@ int main() {
                                      "end\n";
             const auto reply = askAt(uri, text, "completion", 7, 11, snippets);
             assertTrue(
-                reply.find(R"(${1:s}: String => $2\n    ${3:s}: Safe => $0)") != std::string::npos,
+                reply.find(R"(${1:s}: String => $2\n\t${3:s}: Safe => $0)") != std::string::npos,
                 "no type patterns for the union's members: " + reply);
         });
 
@@ -3201,7 +3240,7 @@ int main() {
                                      "end\n";
             const auto reply = askAt(uri, text, "completion", 1, 11, snippets);
             assertTrue(
-                reply.find(R"(Just(${1:_}) => $2\n    None => $0)") != std::string::npos,
+                reply.find(R"(Just(${1:_}) => $2\n\tNone => $0)") != std::string::npos,
                 "no Just and None arms for an Optional: " + reply);
         });
 
@@ -3260,7 +3299,7 @@ int main() {
                                      "make Circle, implement: Shape d\n";
             const auto reply = askAt(uri, text, "completion", 11, 31, snippets);
             assertTrue(
-                reply.find(R"("insertText":"do\n  let area = $1\n  let perimeter = $0\nend")") !=
+                reply.find(R"("insertText":"do\n\tlet area = $1\n\tlet perimeter = $0\nend")") !=
                     std::string::npos,
                 "no `do` with the required functions: " + reply);
         });
@@ -3289,7 +3328,7 @@ int main() {
                                      "end\n";
             const auto reply = askAt(uri, text, "completion", 11, 3, snippets);
             assertTrue(
-                reply.find(R"("insertText":"let rank(${1:other}) -> Integer do\n    $0\n  end")") !=
+                reply.find(R"("insertText":"let rank(${1:other}) -> Integer do\n\t$0\nend")") !=
                     std::string::npos,
                 "no stub for the owed `rank`: " + snippetItems(reply));
             assertTrue(
