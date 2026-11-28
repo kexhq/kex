@@ -393,8 +393,8 @@ auto printCollapseReport(const std::vector<kex::compiled::CollapseNote>& notes) 
 // `[KEXET-0001]: Error,`: the code naming the kind of problem, then whether
 // it is an error or a warning, spelled out rather than left to the code's E or
 // W. A diagnostic with no code says `error:` or `warning:` instead. The color
-// stops before the comma, which belongs to the sentence, and in a terminal
-// that supports it the code links to its page on oops.kex.run.
+// stops before the comma or colon, which belongs to the sentence, and in a
+// terminal that supports it the code links to its page on oops.kex.run.
 static auto severityLabel(const kex::semantic::Diagnostic& diag) -> std::string {
     using namespace kex::color;
     const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
@@ -404,8 +404,8 @@ static auto severityLabel(const kex::semantic::Diagnostic& diag) -> std::string 
         out += isError ? "Error" : "Warning";
         return out + apply(reset) + ",";
     }
-    out += isError ? "error:" : "warning:";
-    return out + apply(reset);
+    out += isError ? "error" : "warning";
+    return out + apply(reset) + ":";
 }
 
 // --- Source snippets (kexhq/kex#657) ---------------------------------------

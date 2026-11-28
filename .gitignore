@@ -31,8 +31,9 @@ _deps/
 # Caches (clangd, etc.)
 .cache/
 
-# Editor/IDE
-.vscode/
+# Editor/IDE (the shared workspace settings are kept)
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo

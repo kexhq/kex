@@ -1,1 +1,3 @@
 *.kex linguist-language=Ruby
+# The diagnostic registry: X-macro lists included by C++.
+*.def linguist-language=C++
