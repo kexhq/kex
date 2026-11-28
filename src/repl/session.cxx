@@ -14,6 +14,7 @@
 #include "../module/discovery.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
+#include "../semantic/module_rules.hxx"
 #include "../semantic/symbol_info.hxx"
 #include "../common/runtime_dir.hxx"
 #include "../driver/dependencies.hxx"
@@ -431,6 +432,17 @@ auto BeamReplSession::define(const std::string& source) -> void {
                 }
             }
             throw std::runtime_error("semantic analysis failed");
+        }
+        // A `using` of a module no source root holds and no interface
+        // describes is refused, as a file's is (KEXEM-0009). The analyzer
+        // claims a module missing only in its entry files, and the session's
+        // are not named as such: `using Com` was kept, and replayed with
+        // every later input (kexhq/kex#892).
+        for (const auto& diagnostic : kex::semantic::findModuleRuleViolations(
+                 checkProgram, &preludeSemanticInterfaces(), nullptr, {"<repl>"})) {
+            if (diagnostic.code == kex::diag::Code::ModuleNotFoundInSourceRoots) {
+                throw kex::semantic::DiagnosticError(diagnostic);
+            }
         }
     } catch (...) {
         m_topDefs = previousTopDefs;
