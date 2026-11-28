@@ -318,10 +318,16 @@ auto lowerProgram(
     };
     // The module the make block being collected is written in.
     std::string makeModulePath;
+    // Each target type's overloads by name and arity, from every `make` block
+    // for it: the type's argument dispatcher holds them all. Built per block,
+    // a second `make Number` (an opt-in module's) with one `to` of its own was
+    // left out of the prelude block's `to/Number`, and its calls fell through
+    // to the generic `to`.
+    std::map<std::string, std::map<std::string, std::map<std::string, std::vector<std::string>>>>
+        overloadsByType;
     auto preMake = [&](const ast::MakeDef& md) {
         for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, md)) {
-            std::unordered_map<std::string, std::map<std::string, std::vector<std::string>>>
-                signaturesByNameAndArity;
+            auto& signaturesByNameAndArity = overloadsByType[typeName];
             auto collectMethod = [&](const ast::FunctionDef* fd) {
                 if (!fd) {
                     return;
@@ -406,27 +412,6 @@ auto lowerProgram(
             // Inherited trait defaults count as this type's methods too.
             for (const auto* fd : inheritedDefaults(md)) {
                 collectMethod(fd);
-            }
-            for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
-                if (signatures.size() < 2) {
-                    continue;
-                }
-                if (!separableOverloadSignatures(signatures)) {
-                    continue;
-                }
-                auto slash = nameAndArity.rfind('/');
-                if (slash == std::string::npos) {
-                    continue;
-                }
-                const auto method = nameAndArity.substr(0, slash);
-                const auto arity = static_cast<size_t>(std::stoul(nameAndArity.substr(slash + 1)));
-                L.argumentOverloadedMethods.insert(localOverloadKey(method, typeName, arity));
-                auto& recorded =
-                    L.argumentOverloadSignatures[localOverloadKey(method, typeName, arity)];
-                for (const auto& [signature, dispatchTypes] : signatures) {
-                    definedFns.insert(signature);
-                    recorded.push_back({signature, dispatchTypes});
-                }
             }
         }
     };
@@ -714,6 +699,29 @@ auto lowerProgram(
         } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
             if (*module) {
                 preModule(**module);
+            }
+        }
+    }
+    for (const auto& [typeName, signaturesByNameAndArity] : overloadsByType) {
+        for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
+            if (signatures.size() < 2) {
+                continue;
+            }
+            if (!separableOverloadSignatures(signatures)) {
+                continue;
+            }
+            auto slash = nameAndArity.rfind('/');
+            if (slash == std::string::npos) {
+                continue;
+            }
+            const auto method = nameAndArity.substr(0, slash);
+            const auto arity = static_cast<size_t>(std::stoul(nameAndArity.substr(slash + 1)));
+            L.argumentOverloadedMethods.insert(localOverloadKey(method, typeName, arity));
+            auto& recorded =
+                L.argumentOverloadSignatures[localOverloadKey(method, typeName, arity)];
+            for (const auto& [signature, dispatchTypes] : signatures) {
+                definedFns.insert(signature);
+                recorded.push_back({signature, dispatchTypes});
             }
         }
     }

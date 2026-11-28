@@ -1,0 +1,45 @@
+# kex: no-check
+# Overloads of one function for one type, told apart by their labels, across
+# several `make` blocks: `to(String, ...)` for Integer, beside the prelude's own
+# (`radix:`, `format:`, `culture:`). The standard library writes them this way
+# (an opt-in module adding an overload for a prelude type); a program's checker
+# rejects a second block's `to` as defined twice, hence no-check.
+#
+# On BEAM a type's overloads share one dispatcher, which was built per `make`
+# block: a block with a single overload was left out, and its call fell through
+# to the generic `to` (function_clause). Unchecked, the walker now takes the
+# receiver type's function whose clause declares the labels.
+record Stars do
+  count : Integer = 1
+end
+
+record Brackets do
+  open : String = "["
+  close : String = "]"
+end
+
+record Dashes do
+  width : Integer = 1
+end
+
+make Integer do
+  let to(String, stars: Stars) -> String? = Just("*".repeat(stars.count) + this.showValue)
+
+  let to(String, brackets: Brackets) -> String? = Just(brackets.open + this.showValue + brackets.close)
+end
+
+module Pad do
+  make Integer do
+    let to(String, dashes: Dashes) -> String? = Just(this.showValue + "-".repeat(dashes.width))
+  end
+end
+
+using Pad
+
+main do
+  IO.printLine(42.to(String, stars: Stars { count: 3 }).inspected)
+  IO.printLine(42.to(String, brackets: Brackets { open: "<", close: ">" }).inspected)
+  IO.printLine(42.to(String, dashes: Dashes { width: 2 }).inspected)
+  IO.printLine(255.to(String, radix: 16).inspected)
+  IO.printLine(42.to(String).inspected)
+end
