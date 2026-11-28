@@ -1,0 +1,7 @@
+hello, Anna
+hello, G
+hello, Third
+Greet { name: Anna }
+a Greet named Anna
+sum 6
+Shapes.Point { x: 3, y: 0 }

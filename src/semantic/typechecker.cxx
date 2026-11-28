@@ -1591,6 +1591,35 @@ auto TypeChecker::declaresOperatorFor(const TypePtr& type, const std::string& op
     return std::any_of(imported.begin(), imported.end(), owns);
 }
 
+auto TypeChecker::recordThroughAlias(const std::string& written) const -> TypePtr {
+    // The lookups an annotation naming `written` makes for an alias: its
+    // own name (a module's alias is registered by its last segment), one an
+    // import or an enclosing module reaches, then a qualified spelling's
+    // nominal identity.
+    TypePtr target = declaredTypeAlias(written);
+    if (!target) {
+        if (const auto reached = aliasReachedAs(written)) {
+            target = *reached;
+        } else if (written.find('.') != std::string::npos) {
+            if (const auto nominal = qualifiedNominalType(written)) {
+                target = Type::named(*nominal);
+            }
+        }
+    }
+    if (!target) {
+        return nullptr;
+    }
+    target = expandTypeAliases(target);
+    const auto* named = std::get_if<NamedType>(&target->kind);
+    if (!named || !named->variant.empty()) {
+        return nullptr;
+    }
+    const bool isRecord =
+        m_recordFields.count(named->name) ||
+        (m_importedInterfaces && m_importedInterfaces->recordArities.count(named->name));
+    return isRecord ? target : nullptr;
+}
+
 auto TypeChecker::resolveRecordName(const std::string& name) const -> std::string {
     // ADTs share the records' identity rule: one declared inside
     // `module Kex` is `Kex.Backend`, so it can never be mistaken for a

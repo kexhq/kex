@@ -1649,6 +1649,10 @@ private:
     auto aliasReachedAs(const std::string& written) const -> std::optional<TypePtr>;
     auto qualifiedNominalType(const std::string& qualified) const -> std::optional<std::string>;
     auto resolveRecordName(const std::string& name) const -> std::string;
+    // The record a construction's written name reaches through a type alias
+    // (`OtherGreeter { … }` for `type OtherGreeter = Greet`), with any type
+    // arguments the alias applies; null when the name aliases no record.
+    auto recordThroughAlias(const std::string& written) const -> TypePtr;
     // Whether the built-in `op` cannot apply to `type`: a record or ADT,
     // declared here or imported, a tuple, map or open record, a list for
     // anything but `+`, a distinct type over one of those, or a value typed

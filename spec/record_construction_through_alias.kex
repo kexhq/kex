@@ -1,0 +1,50 @@
+# kexhq/kex#891: a type alias naming a record constructs that record, as the
+# same alias in an annotation already means it. `OtherGreeter { … }` was
+# rejected with "unknown record type `OtherGreeter`".
+
+record Greet do
+  name : String
+end
+
+make Greet do
+  let hello -> String = "hello, ${@name}"
+end
+
+type OtherGreeter = Greet
+type ThirdGreeter = OtherGreeter
+
+record Box<A> do
+  items : [A]
+end
+
+type IntBox = Box<Integer>
+
+module Shapes do
+  record Point do
+    x : Integer
+    y : Integer = 0
+  end
+
+  type Spot = Point
+end
+
+let greet(g: Greet) -> String = g.hello
+
+main do
+  let anna = OtherGreeter { name: "Anna" }
+  let g : OtherGreeter = OtherGreeter { name: "G" }
+  IO.printLine(greet(anna))
+  IO.printLine(g.hello)
+  IO.printLine(ThirdGreeter { name: "Third" }.hello)
+  IO.printLine("${anna}")
+
+  match anna do
+    Greet { name: n } => IO.printLine("a Greet named ${n}")
+  end
+
+  let box = IntBox { items: [1, 2, 3] }
+  IO.printLine("sum ${box.items.sum}")
+
+  let spot = Shapes.Spot { x: 3 }
+  IO.printLine("${spot}")
+end
