@@ -212,6 +212,13 @@ public:
         std::vector<std::string> params;
         std::string result;
     };
+    // The parameters a call expects of the block it was given, by type: what
+    // its signature passed inferBlock, a lone tuple spread across its
+    // elements the way a block's parameters take one (`|k, v|` over a Map's
+    // entries). Completion reads this to name them. "" for a type not
+    // determined; empty when the call expects a block of no parameters, or
+    // nothing is known.
+    auto blockParameterTypes(const ast::Expr& block) const -> std::vector<std::string>;
     // What each checked `make` block owes, in the order its traits list them.
     // Completion reads this to write the stubs out.
     auto owedFunctions() const
@@ -1214,6 +1221,8 @@ private:
     int m_clauseVarMark = std::numeric_limits<int>::max();
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     std::unordered_map<const ast::MakeDef*, std::vector<OwedFunction>> m_owedFunctions;
+    // The parameter types each block was expected to take (inferBlock's hints).
+    std::unordered_map<const ast::Expr*, std::vector<TypePtr>> m_blockHints;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     // resolveRecordName's last guess, by bare name: the imported record a
     // name is the unique suffix of, if any. It depends on nothing but the

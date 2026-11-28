@@ -15,6 +15,9 @@ struct Snippet {
     std::string filterText;
     std::string detail;
     std::string body;
+    // Replaces the cursor's line up to the cursor rather than the word, so
+    // the line can move left: `elif` and `else` sit level with their `if`.
+    bool fromLineStart = false;
 };
 
 // Where the word being typed at a cursor sits, as far as which constructs
@@ -37,7 +40,11 @@ auto snippetContextAt(const std::string& text, size_t cursor) -> SnippetContext;
 // The snippets that can be written where the word ending at byte `cursor`
 // of `text` starts and that the word is a prefix of. Empty when no word is
 // being typed.
-auto snippetCompletions(const std::string& text, size_t cursor) -> std::vector<Snippet>;
+// `blockParameters`, when the checker knows them, are the types the call
+// before the cursor passes its block: `do |…|` then names one for each.
+auto snippetCompletions(
+    const std::string& text, size_t cursor, const std::vector<std::string>& blockParameters = {})
+    -> std::vector<Snippet>;
 
 // A word that writes `match` arms: the `do` after `match subject` (`header`),
 // or a line of its own inside a `match … do` block. `matchOffset` is where
@@ -83,5 +90,21 @@ struct Stub {
 auto stubSnippets(
     const std::string& text, size_t cursor, const MakeSite& site, const std::vector<Stub>& stubs)
     -> std::vector<Snippet>;
+
+// What pressing Enter after a line that opens a block (`if c`, `xs.each do`,
+// `make Box do`) adds when the block has no `end`: the new line indented one
+// step past the opener (`indent` replaces bytes [lineStart, lineEnd)), and
+// `closing`, the `end` level with the opener, inserted at `closingAt`.
+struct EnterEdit {
+    size_t lineStart = 0;
+    size_t lineEnd = 0;
+    std::string indent;
+    size_t closingAt = 0;
+    std::string closing;
+};
+// The edit for an Enter that left the cursor at byte `cursor` of `text`, on
+// a line holding nothing but its indentation. Nothing when the line before
+// opens no block, or every block in the file already has its `end`.
+auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEdit>;
 
 } // namespace kex::lsp

@@ -64,14 +64,16 @@ auto jsonText(const std::string& text) -> std::string {
 
 // Opens `text` as `uri` and answers one request (`hover`, `completion`,
 // `definition`) at a 0-based line and character: the server's reply to it.
-// `capabilities` is the client capabilities object `initialize` sends.
+// `capabilities` is the client capabilities object `initialize` sends, and
+// `extraParams` more of the request's params (`,"ch":"\\n"`).
 auto askAt(
     const std::string& uri,
     const std::string& text,
     const std::string& method,
     int line,
     int character,
-    const std::string& capabilities = "{}") -> std::string {
+    const std::string& capabilities = "{}",
+    const std::string& extraParams = "") -> std::string {
     std::string messages;
     messages += frame(
         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":)" +
@@ -83,13 +85,28 @@ auto askAt(
     messages += frame(
         R"({"jsonrpc":"2.0","id":2,"method":"textDocument/)" + method +
         R"(","params":{"textDocument":{"uri":")" + uri + R"("},"position":{"line":)" +
-        std::to_string(line) + R"(,"character":)" + std::to_string(character) + "}}}");
+        std::to_string(line) + R"(,"character":)" + std::to_string(character) + "}" + extraParams +
+        "}}");
     messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
     messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
     std::istringstream input(messages);
     std::ostringstream output;
     kex::lsp::run(input, output, testRuntimeBeamDir());
     return responseForId(output.str(), 2);
+}
+
+// The snippet items of a completion reply, for a failure message short
+// enough to read: the name items before them run to tens of kilobytes.
+auto snippetItems(const std::string& reply) -> std::string {
+    std::string items;
+    for (auto at = reply.find(R"("kind":15)"); at != std::string::npos;
+         at = reply.find(R"("kind":15)", at + 1)) {
+        const auto start = reply.rfind("{\"", at);
+        const auto end = reply.find("\"label\":", at);
+        const auto close = end == std::string::npos ? end : reply.find('"', end + 9);
+        items += reply.substr(start, close == std::string::npos ? 200 : close - start + 1) + "\n";
+    }
+    return items.empty() ? "(no snippets)" : items;
 }
 
 // `textDocument/rename` at a position of `uri`, opened with `text`, in the
@@ -3007,10 +3024,26 @@ int main() {
         it("offers a do block after a call", [=]() {
             const std::string text = "main do\n  [1, 2].each d\nend\n";
             const auto reply = askAt(uri, text, "completion", 1, 15, snippets);
-            assertTrue(offers(reply, "do |x|"), "no `do |x|` snippet after a call: " + reply);
+            assertTrue(
+                offers(reply, "do |i|"),
+                "no `do |i|` snippet after a call: " + snippetItems(reply));
             assertTrue(
                 reply.find(R"("insertText":"do\n    $0\n  end")") != std::string::npos,
-                "the `do` snippet is not indented for its line: " + reply);
+                "the `do` snippet is not indented for its line: " + snippetItems(reply));
+        });
+
+        it("names a block's parameters for what the call passes it", [=]() {
+            const auto strings = askAt(
+                uri, "main do\n  [\"a\", \"b\"].each d\nend\n", "completion", 1, 19, snippets);
+            assertTrue(
+                strings.find(R"("insertText":"do |${1:s}|\n    $0\n  end")") != std::string::npos,
+                "no `do |s|` for each over Strings: " + snippetItems(strings));
+            const auto pairs =
+                askAt(uri, "main do\n  [(\"a\", 1)].each d\nend\n", "completion", 1, 19, snippets);
+            assertTrue(
+                pairs.find(R"("insertText":"do |${1:s}, ${2:i}|\n    $0\n  end")") !=
+                    std::string::npos,
+                "no `do |s, i|` for each over pairs: " + snippetItems(pairs));
         });
 
         it("offers nothing in a string, a comment or a record body", [=]() {
@@ -3033,6 +3066,61 @@ int main() {
                 reply.find(R"("insertText":"while ${1:condition} do\n        $0\n    end")") !=
                     std::string::npos,
                 "the `while` snippet is not indented by four spaces: " + reply);
+        });
+
+        it("offers elif and else level with their if", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n"
+                                     "  if x > 0\n"
+                                     "    1\n"
+                                     "    el\n"
+                                     "  end\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "completion", 3, 6, snippets);
+            assertTrue(
+                reply.find(R"("newText":"  elif ${1:condition}\n    $0")") != std::string::npos,
+                "no `elif` level with its `if`: " + reply);
+            assertTrue(
+                reply.find(R"("newText":"  else\n    $0")") != std::string::npos,
+                "no `else` level with its `if`: " + reply);
+        });
+
+        const std::string enter = R"(,"ch":"\n","options":{"tabSize":2,"insertSpaces":true})";
+
+        it("writes the end of a block Enter opened", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n"
+                                     "  if x > 0\n"
+                                     "  \n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "onTypeFormatting", 2, 2, "{}", enter);
+            assertTrue(
+                reply.find(
+                    R"({"newText":"    ","range":{"end":{"character":2,"line":2},"start":{"character":0,"line":2}}})") !=
+                    std::string::npos,
+                "the new line is not indented into the `if`: " + reply);
+            assertTrue(
+                reply.find(
+                    R"({"newText":"  end\n","range":{"end":{"character":0,"line":3},"start":{"character":0,"line":3}}})") !=
+                    std::string::npos,
+                "no `end` for the `if`: " + reply);
+            const auto block = askAt(
+                uri, "main do\n  [1, 2].each do |x|\n\nend\n", "onTypeFormatting", 2, 0, "{}",
+                enter);
+            assertTrue(
+                block.find(R"("newText":"  end\n")") != std::string::npos,
+                "no `end` for the `do` block: " + block);
+        });
+
+        it("writes no end for a block that has one", [=]() {
+            const std::string text = "let f(x: Integer) -> Integer do\n"
+                                     "  if x > 0\n"
+                                     "  \n"
+                                     "  end\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "onTypeFormatting", 2, 2, "{}", enter);
+            assertTrue(
+                reply.find("end") == std::string::npos ||
+                    reply.find(R"("result":null)") != std::string::npos,
+                "an `end` for a closed block: " + reply);
         });
 
         it("writes an arm per constructor after `match subject`", [=]() {
@@ -3117,9 +3205,21 @@ int main() {
                 "no `do` with the required functions: " + reply);
         });
 
+        it("writes a stub with a parameter after the header", [=]() {
+            const std::string text = "trait Ranked do\n"
+                                     "  rank : This -> Integer\n"
+                                     "end\n\n"
+                                     "record V do\n  major: Integer\nend\n\n"
+                                     "make V, implement: Ranked d\n";
+            const auto reply = askAt(uri, text, "completion", 8, 27, snippets);
+            assertTrue(
+                reply.find(R"(let rank(${1:other}) -> Integer do)") != std::string::npos,
+                "no `rank` stub after the header: " + reply);
+        });
+
         it("offers the functions a make block still owes its trait", [=]() {
             const std::string text = "trait Ranked do\n"
-                                     "  compare : This -> Integer\n"
+                                     "  rank : This -> Integer\n"
                                      "  weight :> Integer\n"
                                      "end\n\n"
                                      "record V do\n  major: Integer\nend\n\n"
@@ -3129,10 +3229,9 @@ int main() {
                                      "end\n";
             const auto reply = askAt(uri, text, "completion", 11, 3, snippets);
             assertTrue(
-                reply.find(
-                    R"("insertText":"let compare(${1:other}) -> Integer do\n    $0\n  end")") !=
+                reply.find(R"("insertText":"let rank(${1:other}) -> Integer do\n    $0\n  end")") !=
                     std::string::npos,
-                "no stub for the owed `compare`: " + reply);
+                "no stub for the owed `rank`: " + snippetItems(reply));
             assertTrue(
                 !offers(reply, "let weight -> Integer"), "the defined `weight` offered: " + reply);
         });

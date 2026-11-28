@@ -4328,6 +4328,26 @@ auto TypeChecker::checkClauseCoverage() -> void {
 // other kind of arm leaves the question to checkMatchExhaustiveness (see
 // kexhq/kex#645). Dropping the `Redirect` arm was accepted, and failed at run
 // time with no matching clause (found by `make fuzz-metamorphic`).
+auto TypeChecker::blockParameterTypes(const ast::Expr& block) const -> std::vector<std::string> {
+    const auto found = m_blockHints.find(&block);
+    if (found == m_blockHints.end()) {
+        return {};
+    }
+    auto params = found->second;
+    if (params.size() == 1 && params[0]) {
+        if (const auto* tuple = std::get_if<TupleType>(&resolve(params[0])->kind);
+            tuple && tuple->elements.size() > 1) {
+            params = tuple->elements;
+        }
+    }
+    std::vector<std::string> types;
+    for (const auto& param : params) {
+        const auto type = param ? resolve(param) : nullptr;
+        types.push_back(!type || isUndetermined(type) ? "" : typeToString(type));
+    }
+    return types;
+}
+
 auto TypeChecker::owedArms(const ast::MatchExpr& node, const TypePtr& subject)
     -> std::vector<OwedArm> {
     if (!subject || isUndetermined(resolve(subject))) {

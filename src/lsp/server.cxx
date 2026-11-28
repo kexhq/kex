@@ -2991,6 +2991,9 @@ private:
                         },
                     .definitionProvider = true,
                     .referencesProvider = true,
+                    // Enter after a line opening a block writes its `end`.
+                    .documentOnTypeFormattingProvider =
+                        ::lsp::DocumentOnTypeFormattingOptions{.firstTriggerCharacter = "\n"},
                     .renameProvider = ::lsp::RenameOptions{.prepareProvider = true},
                     .inlayHintProvider = true,
                 },
@@ -3046,6 +3049,91 @@ private:
         return semantic::CheckedSource{
             std::shared_ptr<ast::Program>(std::shared_ptr<void>{}, &state->ast), analyzer,
             std::move(retained)};
+    }
+
+    // Enter after a line that opens a block: the `end` it lacks, level with
+    // the line, and the new line indented one step in (endOnEnter).
+    auto onTypeFormatting(::lsp::DocumentOnTypeFormattingParams&& params)
+        -> ::lsp::requests::TextDocument_OnTypeFormatting::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end() || params.ch != "\n" ||
+            !found->second.ketOriginalText.empty()) {
+            return nullptr;
+        }
+        const auto& text = found->second.text;
+        const auto cursor = byteOffsetAt(text, params.position);
+        const auto edit = endOnEnter(text, cursor);
+        if (!edit) {
+            return nullptr;
+        }
+        ::lsp::Array<::lsp::TextEdit> edits;
+        if (text.compare(edit->lineStart, edit->lineEnd - edit->lineStart, edit->indent) != 0) {
+            edits.push_back({
+                .range = {positionAt(text, edit->lineStart), positionAt(text, edit->lineEnd)},
+                .newText = edit->indent,
+            });
+        }
+        const auto closing = positionAt(text, edit->closingAt);
+        edits.push_back({.range = {closing, closing}, .newText = edit->closing});
+        return edits;
+    }
+
+    // The byte offset of an LSP position in `text`.
+    static auto byteOffsetAt(const std::string& text, const ::lsp::Position& position) -> size_t {
+        size_t lineStart = 0;
+        for (unsigned int line = 0; line < position.line; ++line) {
+            const auto newline = text.find('\n', lineStart);
+            if (newline == std::string::npos) {
+                return text.size();
+            }
+            lineStart = newline + 1;
+        }
+        const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
+        return byteOffsetForUtf16Column(text, lineStart, lineEnd, position.character);
+    }
+
+    // The LSP position of byte `offset` in `text`.
+    static auto positionAt(const std::string& text, size_t offset) -> ::lsp::Position {
+        offset = std::min(offset, text.size());
+        const auto line = static_cast<int>(
+            std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(offset), '\n'));
+        const auto newline = offset == 0 ? std::string::npos : text.rfind('\n', offset - 1);
+        const auto lineStart = newline == std::string::npos ? 0 : newline + 1;
+        return {
+            static_cast<unsigned int>(line),
+            static_cast<unsigned int>(
+                utf16Column(text, line + 1, static_cast<int>(offset - lineStart) + 1))};
+    }
+
+    // The parameter types the call before `cursor` passes the block it
+    // takes (TypeChecker::blockParameterTypes): the word being typed is
+    // replaced by an empty block, which is checked against what the call
+    // expects. Empty when the call expects none, or the buffer cannot be
+    // checked.
+    auto blockParameterTypesAt(const Document& document, size_t cursor)
+        -> std::vector<std::string> {
+        const auto& text = document.text;
+        cursor = std::min(cursor, text.size());
+        auto wordStart = cursor;
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_')) {
+            --wordStart;
+        }
+        auto probe = text;
+        probe.replace(wordStart, cursor - wordStart, "do\nend");
+        auto checked = checkAsDocument(document, document.path, probe);
+        if (!checked) {
+            return {};
+        }
+        for (const auto& [expression, _] : checked->analyzer->typeMap()) {
+            if (expression && expression->location.file == document.path &&
+                expression->location.startOffset == static_cast<int>(wordStart) &&
+                std::holds_alternative<ast::Lambda>(expression->kind)) {
+                return checked->analyzer->checker().blockParameterTypes(*expression);
+            }
+        }
+        return {};
     }
 
     // The arms a `match` at `site` still owes, as snippets: the checker's
@@ -4751,30 +4839,48 @@ private:
             const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
             const auto cursor =
                 byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character);
-            auto snippets = snippetCompletions(text, cursor);
-            if (const auto site = matchSiteAt(text, cursor)) {
+            const auto matchSite = matchSiteAt(text, cursor);
+            const auto makeSite = makeSiteAt(text, cursor);
+            // `xs.each d`: name the block's parameters for what `each` passes.
+            std::vector<std::string> blockParameters;
+            if (!matchSite && !makeSite &&
+                snippetContextAt(text, cursor) == SnippetContext::BlockArgument) {
+                blockParameters = blockParameterTypesAt(found->second, cursor);
+            }
+            auto snippets = snippetCompletions(text, cursor, blockParameters);
+            if (const auto& site = matchSite) {
                 auto arms = matchArmSnippets(found->second, cursor, *site);
                 snippets.insert(
                     snippets.begin(), std::make_move_iterator(arms.begin()),
                     std::make_move_iterator(arms.end()));
             }
-            if (const auto site = makeSiteAt(text, cursor)) {
+            if (const auto& site = makeSite) {
                 auto stubs = makeStubSnippets(found->second, cursor, *site);
                 snippets.insert(
                     snippets.begin(), std::make_move_iterator(stubs.begin()),
                     std::make_move_iterator(stubs.end()));
             }
             for (auto& snippet : snippets) {
-                result.push_back({
+                ::lsp::CompletionItem item{
                     .label = std::move(snippet.label),
                     .kind = ::lsp::CompletionItemKind::Snippet,
                     .detail = std::move(snippet.detail),
                     .filterText = std::move(snippet.filterText),
-                    .insertText = std::move(snippet.body),
                     .insertTextFormat = ::lsp::InsertTextFormat::Snippet,
                     // The body is already indented for the cursor's line.
                     .insertTextMode = ::lsp::InsertTextMode::AsIs,
-                });
+                };
+                if (snippet.fromLineStart) {
+                    // `elif` moves its line left: the edit takes the line
+                    // from its start, not just the word.
+                    item.textEdit = ::lsp::TextEdit{
+                        .range = {{params.position.line, 0}, params.position},
+                        .newText = std::move(snippet.body),
+                    };
+                } else {
+                    item.insertText = std::move(snippet.body);
+                }
+                result.push_back(std::move(item));
             }
         }
         return result;
@@ -6489,7 +6595,11 @@ private:
                     return prepareRename(std::move(params));
                 })
             .add<::lsp::requests::TextDocument_Rename>(
-                [this](::lsp::RenameParams&& params) { return rename(std::move(params)); });
+                [this](::lsp::RenameParams&& params) { return rename(std::move(params)); })
+            .add<::lsp::requests::TextDocument_OnTypeFormatting>(
+                [this](::lsp::DocumentOnTypeFormattingParams&& params) {
+                    return onTypeFormatting(std::move(params));
+                });
     }
 
     Iostream m_stream;

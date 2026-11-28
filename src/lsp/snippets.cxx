@@ -197,6 +197,21 @@ constexpr Entry Entries[] = {
     {Declaration, "compiled", "compiled", "compiled do … end", "compiled do\n\t$0\nend"},
 };
 
+// A block parameter's name for a value of `type`: its initial (`s` for a
+// String), `x` for a type variable, a compound type or one not known.
+auto blockParameterName(const std::string& type) -> std::string {
+    const auto dot = type.rfind('.');
+    const auto leaf = dot == std::string::npos ? type : type.substr(dot + 1);
+    if (leaf.size() < 2 || !std::isupper(static_cast<unsigned char>(leaf.front())) ||
+        !std::all_of(leaf.begin(), leaf.end(), [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c));
+        })) {
+        return "x";
+    }
+    return std::string(
+        1, static_cast<char>(std::tolower(static_cast<unsigned char>(leaf.front()))));
+}
+
 auto contextBit(SnippetContext context) -> unsigned {
     switch (context) {
         case SnippetContext::TopLevel: return TopLevelOnly;
@@ -215,10 +230,20 @@ auto contextBit(SnippetContext context) -> unsigned {
 namespace {
 
 // What the tokens before a word say about it.
+// An open block, the keyword that says what kind it is, and where that
+// keyword is (the `do` itself when nothing before it on its line says).
+struct Open {
+    Block block;
+    TokenType opener = TokenType::Eof;
+    size_t offset = 0;
+};
+
 struct Walk {
     SnippetContext context = SnippetContext::None;
     std::optional<MatchSite> match;
     std::optional<MakeSite> make;
+    // The blocks open where the word starts, innermost last.
+    std::vector<Open> open;
 };
 
 auto walk(const std::string& text, size_t cursor) -> Walk {
@@ -231,13 +256,6 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
     Lexer lexer(text);
     const auto tokens = lexer.tokenizeAll();
 
-    // An open block, the keyword that says what kind it is, and where that
-    // keyword is.
-    struct Open {
-        Block block;
-        TokenType opener = TokenType::Eof;
-        size_t offset = 0;
-    };
     std::vector<Open> stack;
     const auto current = [&] { return stack.empty() ? Block::TopLevel : stack.back().block; };
     const Token* previous = nullptr; // the last token before the word on its line
@@ -270,7 +288,8 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
                 continue;
             case TokenType::Do:
                 stack.push_back(
-                    {blockOpenedBy(classifier, current()), classifier, classifierOffset});
+                    {blockOpenedBy(classifier, current()), classifier,
+                     classifier == TokenType::Eof ? start : classifierOffset});
                 classifier = TokenType::Eof;
                 break;
             case TokenType::FatArrow: classifier = TokenType::Eof; break;
@@ -350,60 +369,66 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
     }
 
     const auto block = current();
-    const bool lineStartsHere = std::all_of(
-        text.begin() + static_cast<std::ptrdiff_t>(lineStart),
-        text.begin() + static_cast<std::ptrdiff_t>(wordStart),
-        [](char c) { return c == ' ' || c == '\t'; });
-    if (block == Block::Closed || block == Block::Bracket) {
-        // A line of its own in a `match` block starts an arm.
-        if (lineStartsHere && !stack.empty() && stack.back().opener == TokenType::Match) {
-            return {SnippetContext::None, MatchSite{stack.back().offset, false}};
+    const auto decide = [&]() -> Walk {
+        const bool lineStartsHere = std::all_of(
+            text.begin() + static_cast<std::ptrdiff_t>(lineStart),
+            text.begin() + static_cast<std::ptrdiff_t>(wordStart),
+            [](char c) { return c == ' ' || c == '\t'; });
+        if (block == Block::Closed || block == Block::Bracket) {
+            // A line of its own in a `match` block starts an arm.
+            if (lineStartsHere && !stack.empty() && stack.back().opener == TokenType::Match) {
+                return {SnippetContext::None, MatchSite{stack.back().offset, false}};
+            }
+            return {};
         }
-        return {};
-    }
-    if (lineStartsHere && block == Block::Functions && !stack.empty() &&
-        stack.back().opener == TokenType::Make) {
-        // A line of its own in a `make` block: where a trait's functions go.
-        return {SnippetContext::Functions, std::nullopt, MakeSite{stack.back().offset, false}};
-    }
-    if (lineStartsHere) {
-        switch (block) {
-            case Block::TopLevel: return {SnippetContext::TopLevel};
-            case Block::Declarations: return {SnippetContext::Declarations};
-            case Block::Functions: return {SnippetContext::Functions};
-            default: return {SnippetContext::Statements};
+        if (lineStartsHere && block == Block::Functions && !stack.empty() &&
+            stack.back().opener == TokenType::Make) {
+            // A line of its own in a `make` block: where a trait's functions go.
+            return {SnippetContext::Functions, std::nullopt, MakeSite{stack.back().offset, false}};
         }
-    }
-    if (!previous || wordStart == 0 ||
-        !std::isspace(static_cast<unsigned char>(text[wordStart - 1]))) {
-        return {};
-    }
-    if (block == Block::Statements || block == Block::TopLevel) {
-        if (previous->type == TokenType::Equals || previous->type == TokenType::FatArrow) {
-            return {SnippetContext::Expression};
+        if (lineStartsHere) {
+            switch (block) {
+                case Block::TopLevel: return {SnippetContext::TopLevel};
+                case Block::Declarations: return {SnippetContext::Declarations};
+                case Block::Functions: return {SnippetContext::Functions};
+                default: return {SnippetContext::Statements};
+            }
         }
-    }
-    if (endsValue(previous->type) && previous->type != TokenType::End) {
-        // `match shape d`: the `do` that opens the match's arms.
-        if (classifier == TokenType::Match) {
-            return {SnippetContext::BlockArgument, MatchSite{classifierOffset, true}};
+        if (!previous || wordStart == 0 ||
+            !std::isspace(static_cast<unsigned char>(text[wordStart - 1]))) {
+            return {};
         }
-        // `make Circle, implement: Shape d`: the `do` of a block that owes the
-        // trait its functions.
-        if (classifier == TokenType::Make && claims) {
-            return {SnippetContext::BlockArgument, std::nullopt, MakeSite{classifierOffset, true}};
+        if (block == Block::Statements || block == Block::TopLevel) {
+            if (previous->type == TokenType::Equals || previous->type == TokenType::FatArrow) {
+                return {SnippetContext::Expression};
+            }
         }
-        return {SnippetContext::BlockArgument};
-    }
-    switch (previous->type) {
-        case TokenType::Loop:
-        case TokenType::Trying:
-        case TokenType::Receive:
-        case TokenType::Main:
-        case TokenType::Spawn:
-        case TokenType::Compiled: return {SnippetContext::BlockArgument};
-        default: return {};
-    }
+        if (endsValue(previous->type) && previous->type != TokenType::End) {
+            // `match shape d`: the `do` that opens the match's arms.
+            if (classifier == TokenType::Match) {
+                return {SnippetContext::BlockArgument, MatchSite{classifierOffset, true}};
+            }
+            // `make Circle, implement: Shape d`: the `do` of a block that owes the
+            // trait its functions.
+            if (classifier == TokenType::Make && claims) {
+                return {
+                    SnippetContext::BlockArgument, std::nullopt, MakeSite{classifierOffset, true}};
+            }
+            return {SnippetContext::BlockArgument};
+        }
+        switch (previous->type) {
+            case TokenType::Loop:
+            case TokenType::Trying:
+            case TokenType::Receive:
+            case TokenType::Main:
+            case TokenType::Spawn:
+            case TokenType::Compiled: return {SnippetContext::BlockArgument};
+            default: return {};
+        }
+    };
+    auto result = decide();
+    result.open = std::move(stack);
+    return result;
 }
 
 // The cursor line's indentation, and the file's step inward.
@@ -506,22 +531,64 @@ auto matchSiteAt(const std::string& text, size_t cursor) -> std::optional<MatchS
     return walk(text, std::min(cursor, text.size())).match;
 }
 
-auto snippetCompletions(const std::string& text, size_t cursor) -> std::vector<Snippet> {
+auto snippetCompletions(
+    const std::string& text, size_t cursor, const std::vector<std::string>& blockParameters)
+    -> std::vector<Snippet> {
     cursor = std::min(cursor, text.size());
     const auto wordStart = wordStartBefore(text, cursor);
     const std::string_view word(text.data() + wordStart, cursor - wordStart);
     if (word.empty()) {
         return {};
     }
-    const auto bit = contextBit(snippetContextAt(text, cursor));
+    const auto walked = walk(text, cursor);
+    const auto bit = contextBit(walked.context);
     if (!bit) {
         return {};
     }
     const auto indentation = indentationAt(text, wordStart);
 
     std::vector<Snippet> snippets;
+    // On a line of its own in an `if`: its next branch, the line moved left
+    // to the `if`'s own indentation.
+    if (walked.context == SnippetContext::Statements && !walked.open.empty() &&
+        walked.open.back().opener == TokenType::If) {
+        const auto branch = indentationAt(text, walked.open.back().offset);
+        for (const auto& [keyword, body] :
+             {std::pair{"elif", "elif ${1:condition}\n\t$0"}, std::pair{"else", "else\n\t$0"}}) {
+            if (!std::string_view(keyword).starts_with(word)) {
+                continue;
+            }
+            Snippet snippet{
+                keyword, indentation.base + keyword,
+                std::string(keyword) + " branch of the `if` above",
+                branch.base + indented(body, branch), true};
+            snippets.push_back(std::move(snippet));
+        }
+    }
     for (const auto& entry : Entries) {
         if (!(entry.contexts & bit) || !std::string_view(entry.filterText).starts_with(word)) {
+            continue;
+        }
+        // The block the call expects, its parameters named for their types.
+        if (!blockParameters.empty() && std::string_view(entry.label) == "do |x|") {
+            std::vector<std::string> names;
+            std::string label = "do |";
+            std::string body = "do |";
+            for (size_t i = 0; i < blockParameters.size(); ++i) {
+                auto name = blockParameterName(blockParameters[i]);
+                const auto base = name;
+                for (int n = 2; std::find(names.begin(), names.end(), name) != names.end(); ++n) {
+                    name = base + std::to_string(n);
+                }
+                names.push_back(name);
+                label += (i ? ", " : "") + name;
+                body += (i ? ", ${" : "${") + std::to_string(i + 1) + ":" + name + "}";
+            }
+            label += "|";
+            body += "|\n\t$0\nend";
+            snippets.push_back(
+                {label, entry.filterText, "a block taking what the call passes",
+                 indented(body, indentation)});
             continue;
         }
         snippets.push_back(
@@ -704,6 +771,57 @@ auto stubSnippets(
              "the functions the trait requires", indented(stubLines(stubs), indentation)});
     }
     return snippets;
+}
+
+auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEdit> {
+    cursor = std::min(cursor, text.size());
+    const auto lineStart = lineStartOf(text, cursor);
+    const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
+    const auto blank = [&](size_t from, size_t to) {
+        return std::all_of(
+            text.begin() + static_cast<std::ptrdiff_t>(from),
+            text.begin() + static_cast<std::ptrdiff_t>(to),
+            [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
+    };
+    if (lineStart == 0 || !blank(lineStart, lineEnd)) {
+        return std::nullopt;
+    }
+    const auto previousStart = lineStartOf(text, lineStart - 1);
+    if (blank(previousStart, lineStart - 1)) {
+        return std::nullopt;
+    }
+    // The innermost block open here must be one the line above opened.
+    const auto here = walk(text, cursor);
+    if (here.open.empty()) {
+        return std::nullopt;
+    }
+    const auto& opened = here.open.back();
+    if (opened.block == Block::Bracket || opened.offset < previousStart ||
+        opened.offset >= lineStart) {
+        return std::nullopt;
+    }
+    // And some block in the file must still lack its `end`. An unclosed
+    // block takes the `end` after it, so it is an enclosing one that shows
+    // up open at the end of the file, not necessarily this one.
+    const auto whole = walk(text + "\n", text.size() + 1);
+    if (std::none_of(whole.open.begin(), whole.open.end(), [](const Open& block) {
+            return block.block != Block::Bracket;
+        })) {
+        return std::nullopt;
+    }
+    const auto opener = indentationAt(text, opened.offset);
+    EnterEdit edit;
+    edit.lineStart = lineStart;
+    edit.lineEnd = lineEnd;
+    edit.indent = opener.base + opener.unit;
+    if (lineEnd < text.size()) {
+        edit.closingAt = lineEnd + 1;
+        edit.closing = opener.base + "end\n";
+    } else {
+        edit.closingAt = lineEnd;
+        edit.closing = "\n" + opener.base + "end";
+    }
+    return edit;
 }
 
 } // namespace kex::lsp
