@@ -1630,6 +1630,20 @@ int main() {
             assertTrue(out.find("defined Regex") == std::string::npos, out);
         });
 
+        it("refuses `using` of a module that does not exist (BEAM)", []() {
+            // Accepted with "=> using Com" and kept in the session, while a
+            // file's `using Com` is KEXEM-0009 (kexhq/kex#892).
+            auto out = runBeamRepl("using Com\nusing Complex\nComplex.I * 2\n");
+            assertTrue(
+                out.find("[KEXEM-0009]: Error, module not found in source roots: Com") !=
+                    std::string::npos,
+                out);
+            assertTrue(out.find("=> using Com\n") == std::string::npos, out);
+            // Refused, it is not replayed: the next inputs still run.
+            assertTrue(out.find("=> using Complex") != std::string::npos, out);
+            assertTrue(out.find("Complex { re: 0, im: 2 }") != std::string::npos, out);
+        });
+
         it("retains argument-type dispatch under BEAM --no-check", []() {
             auto out = runBeamFile(
                 "using Regex\n"
