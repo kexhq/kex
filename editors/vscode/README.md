@@ -25,6 +25,14 @@ and an Elixir-style process model. Try the language in your browser at [kex.run]
   unsaved buffer, not just on save.
 - **Completion** — functions after `.`, and top-level names, with signatures and
   overload counts.
+- **Snippets** — whole constructs where one can start: `if`, `match`, `loop`,
+  `trying`, `record`, `make`, `trait` and the rest. After `match subject` they
+  write an arm for every case of its type, after `make Type, implement: Trait`
+  a stub for each function the trait requires, and after a call a `do |…|`
+  block with a parameter for each value the call passes.
+- **`end` on Enter** — pressing Enter after a line that opens a block (`if`,
+  `do`, `make … do`) indents the new line and adds the block's `end` when the
+  file is missing one.
 - **Go to definition** and **find references**.
 - **Test explorer** — every `describe`/`it` in a `*.spec.kex` file in the
   Testing view, runnable per case, with a failure marked on the line that
@@ -88,6 +96,11 @@ In full, the compiler is the first of:
 5. A bare `kex` on PATH.
 
 ## Settings
+
+The extension turns on `editor.formatOnType` for Kex files. That is what sends
+Enter to the language server, which adds the missing `end`. There is no Kex
+formatter yet, so nothing else is reformatted. To opt out, set it to `false`
+under `"[kex]"`.
 
 | Setting | Default | Description |
 | --- | --- | --- |

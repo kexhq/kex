@@ -94,6 +94,12 @@ public:
         -> std::vector<TypeChecker::MemberCompletion> {
         return m_checker.memberCompletions(receiver, at);
     }
+    // The arms a `match` still owes (TypeChecker::owedArms): reads the
+    // checker's sum types and union members, so not const.
+    auto owedArms(const ast::MatchExpr& node, const TypePtr& subject)
+        -> std::vector<TypeChecker::OwedArm> {
+        return m_checker.owedArms(node, subject);
+    }
     // What completion may offer for a bare name at `at` (TypeChecker::
     // bareCompletions).
     auto bareCompletions(const ast::Expr& at) -> std::vector<std::string> {

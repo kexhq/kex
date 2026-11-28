@@ -511,6 +511,9 @@ private:
 
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypePtr>& hintParams)
     -> TypePtr {
+    if (!hintParams.empty()) {
+        m_blockHints[&blockExpr] = hintParams;
+    }
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
         if (lam->params.empty() && !lam->collection) {
             // Zero-param lambda `{ }` / `do end`. Non-empty hintParams means
