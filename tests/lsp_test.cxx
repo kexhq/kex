@@ -2959,7 +2959,7 @@ int main() {
 
     describe("Kex LSP snippets", []() {
         const std::string snippets =
-            R"({"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}})";
+            R"({"textDocument":{"completion":{"completionItem":{"snippetSupport":true,"insertTextModeSupport":{"valueSet":[1,2]}}}}})";
         const std::string uri = "file:///tmp/kex-lsp-snippets.kex";
         const auto offers = [](const std::string& reply, const std::string& label) {
             return reply.find("\"label\":\"" + label + "\"") != std::string::npos;
@@ -3066,6 +3066,21 @@ int main() {
                 reply.find(R"("insertText":"while ${1:condition} do\n        $0\n    end")") !=
                     std::string::npos,
                 "the `while` snippet is not indented by four spaces: " + reply);
+        });
+
+        it("leaves a client that indents snippets itself the relative lines", [=]() {
+            // Neovim declares snippets but no insertTextMode, and indents a
+            // snippet's later lines by the cursor's line itself.
+            const std::string adjusting =
+                R"({"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}})";
+            const std::string text = "let f(x: Integer) -> Integer do\n  i\n  x\nend\n";
+            const auto reply = askAt(uri, text, "completion", 1, 3, adjusting);
+            assertTrue(
+                reply.find(R"("insertText":"if ${1:condition}\n  $0\nend")") != std::string::npos,
+                "the `if` body is not relative to its line: " + snippetItems(reply));
+            assertTrue(
+                reply.find(R"("insertTextMode")") == std::string::npos,
+                "insertTextMode sent to a client without it: " + snippetItems(reply));
         });
 
         it("offers elif and else level with their if", [=]() {

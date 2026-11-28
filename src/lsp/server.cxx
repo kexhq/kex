@@ -2968,6 +2968,16 @@ private:
             params.capabilities.textDocument->completion->completionItem) {
             m_snippetSupport = params.capabilities.textDocument->completion->completionItem
                                    ->snippetSupport.value_or(false);
+            // Whether a snippet's later lines may carry their full indentation:
+            // a client that cannot take them as they are (Neovim's) indents
+            // them by the cursor's line itself.
+            const auto& item = *params.capabilities.textDocument->completion->completionItem;
+            m_insertAsIs = item.insertTextModeSupport &&
+                           std::any_of(
+                               item.insertTextModeSupport->valueSet.begin(),
+                               item.insertTextModeSupport->valueSet.end(), [](const auto& mode) {
+                                   return mode == ::lsp::InsertTextMode::AsIs;
+                               });
         }
         return {
             .capabilities =
@@ -4956,6 +4966,9 @@ private:
                     snippets.begin(), std::make_move_iterator(stubs.begin()),
                     std::make_move_iterator(stubs.end()));
             }
+            // The cursor line's indentation, which a client that cannot take a
+            // body as it is adds to each later line itself.
+            const auto base = lineIndentation(text, cursor);
             for (auto& snippet : snippets) {
                 ::lsp::CompletionItem item{
                     .label = std::move(snippet.label),
@@ -4963,9 +4976,18 @@ private:
                     .detail = std::move(snippet.detail),
                     .filterText = std::move(snippet.filterText),
                     .insertTextFormat = ::lsp::InsertTextFormat::Snippet,
-                    // The body is already indented for the cursor's line.
-                    .insertTextMode = ::lsp::InsertTextMode::AsIs,
                 };
+                if (m_insertAsIs) {
+                    // The body is already indented for the cursor's line.
+                    item.insertTextMode = ::lsp::InsertTextMode::AsIs;
+                } else if (!snippet.fromLineStart && !base.empty()) {
+                    // Lines relative to the cursor's: the client indents them.
+                    const auto indented = "\n" + base;
+                    for (auto at = snippet.body.find(indented); at != std::string::npos;
+                         at = snippet.body.find(indented, at + 1)) {
+                        snippet.body.erase(at + 1, base.size());
+                    }
+                }
                 if (snippet.fromLineStart) {
                     // `elif` moves its line left: the edit takes the line
                     // from its start, not just the word.
@@ -6731,6 +6753,7 @@ private:
     bool m_running = true;
     bool m_initialized = false;
     bool m_snippetSupport = false;
+    bool m_insertAsIs = false;
     bool m_cleanShutdown = false;
 };
 
