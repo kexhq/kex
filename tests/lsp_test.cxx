@@ -3209,9 +3209,9 @@ int main() {
             const std::string text = "trait Ranked do\n"
                                      "  rank : This -> Integer\n"
                                      "end\n\n"
-                                     "record V do\n  major: Integer\nend\n\n"
-                                     "make V, implement: Ranked d\n";
-            const auto reply = askAt(uri, text, "completion", 8, 27, snippets);
+                                     "record Version do\n  major: Integer\nend\n\n"
+                                     "make Version, implement: Ranked d\n";
+            const auto reply = askAt(uri, text, "completion", 8, 33, snippets);
             assertTrue(
                 reply.find(R"(let rank(${1:other}) -> Integer do)") != std::string::npos,
                 "no `rank` stub after the header: " + reply);
@@ -3222,8 +3222,8 @@ int main() {
                                      "  rank : This -> Integer\n"
                                      "  weight :> Integer\n"
                                      "end\n\n"
-                                     "record V do\n  major: Integer\nend\n\n"
-                                     "make V, implement: Ranked do\n"
+                                     "record Version do\n  major: Integer\nend\n\n"
+                                     "make Version, implement: Ranked do\n"
                                      "  let weight = @major\n"
                                      "  l\n"
                                      "end\n";
