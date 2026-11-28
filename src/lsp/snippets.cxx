@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <optional>
 #include <string_view>
 
@@ -247,7 +248,12 @@ struct Walk {
     std::vector<Open> open;
 };
 
-auto walk(const std::string& text, size_t cursor) -> Walk {
+// `onClose`, when given, is told of each block an `end` before the cursor
+// closes, and where that `end` starts.
+auto walk(
+    const std::string& text,
+    size_t cursor,
+    const std::function<void(const Open&, size_t)>& onClose = {}) -> Walk {
     const auto wordStart = wordStartBefore(text, cursor);
     if (wordStart > 0 && (text[wordStart - 1] == '.' || text[wordStart - 1] == '@' ||
                           text[wordStart - 1] == ':' || text[wordStart - 1] == '%')) {
@@ -320,6 +326,9 @@ auto walk(const std::string& text, size_t cursor) -> Walk {
             }
             case TokenType::End:
                 if (!stack.empty() && stack.back().block != Block::Bracket) {
+                    if (onClose) {
+                        onClose(stack.back(), start);
+                    }
                     stack.pop_back();
                 }
                 break;
@@ -823,6 +832,55 @@ auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEd
         edit.closing = "\n" + opener.base + "end";
     }
     return edit;
+}
+
+auto closingEndOf(const std::string& text, size_t openerOffset) -> std::optional<size_t> {
+    std::optional<size_t> closing;
+    walk(text + "\n", text.size() + 1, [&](const Open& block, size_t end) {
+        if (!closing && block.offset == openerOffset) {
+            closing = end;
+        }
+    });
+    if (!closing) {
+        return std::nullopt;
+    }
+    const auto start = lineStartOf(text, *closing);
+    if (!std::all_of(
+            text.begin() + static_cast<std::ptrdiff_t>(start),
+            text.begin() + static_cast<std::ptrdiff_t>(*closing),
+            [](char c) { return c == ' ' || c == '\t'; })) {
+        return std::nullopt;
+    }
+    return closing;
+}
+
+auto armSource(const std::vector<Arm>& arms, const std::string& indent) -> std::string {
+    std::string out;
+    for (const auto& arm : arms) {
+        out += indent;
+        if (arm.type) {
+            out += "_: " + arm.name;
+        } else {
+            out += arm.name;
+            if (arm.arity) {
+                out += "(";
+                for (size_t i = 0; i < arm.arity; ++i) {
+                    out += i ? ", _" : "_";
+                }
+                out += ")";
+            }
+        }
+        out += " => die(\"" + arm.name + " is not handled yet\")\n";
+    }
+    return out;
+}
+
+auto lineIndentation(const std::string& text, size_t offset) -> std::string {
+    return indentationAt(text, std::min(offset, text.size())).base;
+}
+
+auto indentStep(const std::string& text) -> std::string {
+    return indentUnit(text);
 }
 
 } // namespace kex::lsp

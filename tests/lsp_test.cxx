@@ -3190,6 +3190,50 @@ int main() {
                 "no Just and None arms for an Optional: " + reply);
         });
 
+        const auto actionAt = [](int line, int character) {
+            const auto position =
+                R"({"line":)" + std::to_string(line) + R"(,"character":)" +
+                std::to_string(character) + "}";
+            return R"(,"range":{"start":)" + position + R"(,"end":)" + position +
+                   R"(},"context":{"diagnostics":[]})";
+        };
+
+        it("adds the arms a match is missing as a quick fix", [=]() {
+            const std::string text = "type Shape = Circle(Float) | Rect(Float, Float) | Empty\n\n"
+                                     "let area(s: Shape) -> Float do\n"
+                                     "  match s do\n"
+                                     "    Circle(r) => r\n"
+                                     "  end\n"
+                                     "end\n";
+            for (const auto& [line, character] : {std::pair{3, 2}, std::pair{4, 8}}) {
+                const auto reply =
+                    askAt(uri, text, "codeAction", line, character, "{}", actionAt(line, character));
+                assertTrue(
+                    reply.find(
+                        R"("newText":"    Rect(_, _) => die(\"Rect is not handled yet\")\n    Empty => die(\"Empty is not handled yet\")\n")") !=
+                        std::string::npos,
+                    "no missing arms inserted: " + reply);
+                assertTrue(
+                    reply.find(R"("start":{"character":0,"line":5})") != std::string::npos,
+                    "the arms are not inserted before the match's `end`: " + reply);
+                assertTrue(
+                    reply.find(R"("title":"Add the 2 missing match arms")") != std::string::npos,
+                    "the quick fix is not titled: " + reply);
+            }
+        });
+
+        it("offers no quick fix for a match that takes every case", [=]() {
+            const std::string text = "type Shape = Circle(Float) | Empty\n\n"
+                                     "let area(s: Shape) -> Float do\n"
+                                     "  match s do\n"
+                                     "    Circle(r) => r\n"
+                                     "    Empty => 0.0\n"
+                                     "  end\n"
+                                     "end\n";
+            const auto reply = askAt(uri, text, "codeAction", 3, 2, "{}", actionAt(3, 2));
+            assertTrue(reply.find("newText") == std::string::npos, "a quick fix for a whole match: " + reply);
+        });
+
         it("writes the trait's required functions after `make …, implement:`", [=]() {
             const std::string text = "trait Shape do\n"
                                      "  area :> Float\n"

@@ -107,4 +107,17 @@ struct EnterEdit {
 // opens no block, or every block in the file already has its `end`.
 auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEdit>;
 
+// Where the `end` closing the block whose keyword starts at `openerOffset`
+// (`match` in `match x do`) begins, when it is the first thing on its line;
+// nothing when the block is unclosed or its `end` shares a line.
+auto closingEndOf(const std::string& text, size_t openerOffset) -> std::optional<size_t>;
+
+// `arms` as source a code action inserts: one line each at `indent`, each
+// body a `die` that names its case, so the program checks until it is filled in.
+auto armSource(const std::vector<Arm>& arms, const std::string& indent) -> std::string;
+
+// The indentation of the line holding byte `offset`, and the file's step in.
+auto lineIndentation(const std::string& text, size_t offset) -> std::string;
+auto indentStep(const std::string& text) -> std::string;
+
 } // namespace kex::lsp

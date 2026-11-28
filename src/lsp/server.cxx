@@ -2991,6 +2991,13 @@ private:
                         },
                     .definitionProvider = true,
                     .referencesProvider = true,
+                    // A `match` missing arms gets them as a quick fix.
+                    .codeActionProvider =
+                        ::lsp::CodeActionOptions{
+                            .codeActionKinds =
+                                ::lsp::Array<::lsp::CodeActionKindEnum>{
+                                    ::lsp::CodeActionKind::QuickFix},
+                        },
                     // Enter after a line opening a block writes its `end`.
                     .documentOnTypeFormattingProvider =
                         ::lsp::DocumentOnTypeFormattingOptions{.firstTriggerCharacter = "\n"},
@@ -3049,6 +3056,98 @@ private:
         return semantic::CheckedSource{
             std::shared_ptr<ast::Program>(std::shared_ptr<void>{}, &state->ast), analyzer,
             std::move(retained)};
+    }
+
+    // Quick fixes at a range: for the innermost `match` holding its start,
+    // the arms it still owes (TypeChecker::owedArms), inserted before its
+    // `end` with bodies that fail until they are written.
+    auto codeActions(::lsp::CodeActionParams&& params)
+        -> ::lsp::requests::TextDocument_CodeAction::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end() || !found->second.ketOriginalText.empty()) {
+            return nullptr;
+        }
+        const auto& document = found->second;
+        const auto& text = document.text;
+        const auto at = byteOffsetAt(text, params.range.start);
+        auto checked = checkAsDocument(document, document.path, text);
+        if (!checked) {
+            return nullptr;
+        }
+        const auto& types = checked->analyzer->typeMap();
+        const ast::MatchExpr* match = nullptr;
+        size_t matchStart = 0;
+        size_t matchEnd = 0;
+        for (const auto& [expression, _] : types) {
+            if (!expression || expression->location.file != document.path ||
+                expression->location.startOffset < 0) {
+                continue;
+            }
+            const auto* candidate = std::get_if<ast::MatchExpr>(&expression->kind);
+            const auto start = static_cast<size_t>(expression->location.startOffset);
+            if (!candidate || start > at || (match && start <= matchStart)) {
+                continue;
+            }
+            const auto end = closingEndOf(text, start);
+            if (!end || *end < at) {
+                continue;
+            }
+            match = candidate;
+            matchStart = start;
+            matchEnd = *end;
+        }
+        if (!match || !match->subject) {
+            return nullptr;
+        }
+        const auto subject = types.find(match->subject.get());
+        if (subject == types.end()) {
+            return nullptr;
+        }
+        std::vector<Arm> arms;
+        for (auto& owed : checked->analyzer->owedArms(*match, subject->second)) {
+            arms.push_back({std::move(owed.name), owed.arity, owed.type});
+        }
+        if (arms.empty()) {
+            return nullptr;
+        }
+        // The new arms line up with the first one written, or sit one step
+        // in from `match` when there is none.
+        std::string indent = lineIndentation(text, matchStart) + indentStep(text);
+        if (!match->clauses.empty() && !match->clauses.front().patterns.empty() &&
+            match->clauses.front().patterns.front() &&
+            match->clauses.front().patterns.front()->location.startOffset >= 0) {
+            indent = lineIndentation(
+                text,
+                static_cast<size_t>(match->clauses.front().patterns.front()->location.startOffset));
+        }
+        const auto endLine = positionAt(text, matchEnd);
+        const ::lsp::Position insertAt{endLine.line, 0};
+        ::lsp::Map<::lsp::DocumentUri, ::lsp::Array<::lsp::TextEdit>> changes;
+        changes[params.textDocument.uri].push_back(
+            {.range = {insertAt, insertAt}, .newText = armSource(arms, indent)});
+        // The diagnostics this answers: those the client sent on the match's line.
+        ::lsp::Array<::lsp::Diagnostic> answered;
+        const auto matchLine = positionAt(text, matchStart).line;
+        for (const auto& diagnostic : params.context.diagnostics) {
+            if (diagnostic.range.start.line == matchLine) {
+                answered.push_back(diagnostic);
+            }
+        }
+        ::lsp::CodeAction action{
+            .title = arms.size() == 1 ? "Add the missing match arm for " + arms.front().name
+                                      : "Add the " + std::to_string(arms.size()) +
+                                            " missing match arms",
+            .kind = ::lsp::CodeActionKind::QuickFix,
+            .isPreferred = true,
+            .edit = ::lsp::WorkspaceEdit{.changes = std::move(changes)},
+        };
+        if (!answered.empty()) {
+            action.diagnostics = std::move(answered);
+        }
+        ::lsp::Array<::lsp::OneOf<::lsp::Command, ::lsp::CodeAction>> actions;
+        actions.push_back(std::move(action));
+        return actions;
     }
 
     // Enter after a line that opens a block: the `end` it lacks, level with
@@ -6596,6 +6695,10 @@ private:
                 })
             .add<::lsp::requests::TextDocument_Rename>(
                 [this](::lsp::RenameParams&& params) { return rename(std::move(params)); })
+            .add<::lsp::requests::TextDocument_CodeAction>(
+                [this](::lsp::CodeActionParams&& params) {
+                    return codeActions(std::move(params));
+                })
             .add<::lsp::requests::TextDocument_OnTypeFormatting>(
                 [this](::lsp::DocumentOnTypeFormattingParams&& params) {
                     return onTypeFormatting(std::move(params));
