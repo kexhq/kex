@@ -1,0 +1,9 @@
+List left identity: true
+List right identity: true
+List associativity: true
+Optional left identity: true
+Optional right identity: true
+Optional associativity: true
+Result left identity: true
+Result right identity: true
+Result associativity: true

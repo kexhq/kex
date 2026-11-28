@@ -1,0 +1,44 @@
+# The three Monad laws, written once over every Monad and checked against
+# each stdlib implementation (List, Optional, Result):
+#
+#   left identity   M.wrap(a).into(f)  ==  f(a)
+#   right identity  m.into(M.wrap)     ==  m
+#   associativity   m.into(f).into(g)  ==  m.into { |x| f(x).into(g) }
+#
+# Every container is tried in each shape it has (empty and not, failing and
+# not), with steps that succeed and steps that fail. The two steps for each
+# container do not commute, so associativity would notice them swapped.
+
+let leftIdentity(M is Monad => a: Integer, f: Integer -> M<Integer>) -> Bool = M.wrap(a).into(f) == f(a)
+
+let rightIdentity(M is Monad => m: M<Integer>) -> Bool = m.into { |x| M.wrap(x) } == m
+
+let associative(M is Monad => m: M<Integer>, f: Integer -> M<Integer>, g: Integer -> M<Integer>) -> Bool do
+  return m.into(f).into(g) == m.into { |x| f(x).into(g) }
+end
+
+let spread(n: Integer) -> [Integer] = [n, n * 10]
+let dropOdd(n: Integer) -> [Integer] = n.even? then [n] else []
+
+let halved(n: Integer) -> Integer? = n.even? then Just(n / 2) else None
+let decremented(n: Integer) -> Integer? = n > 0 then Just(n - 1) else None
+
+let checkedHalf(n: Integer) -> Result<Integer, String> = n.even? then Ok(n / 2) else Error("odd")
+let checkedDecrement(n: Integer) -> Result<Integer, String> = n > 0 then Ok(n - 1) else Error("not positive")
+
+main do
+  let lists = [[], [1], [2, 3, 4]]
+  IO.printLine("List left identity: ${[1, 2].all? { |a| leftIdentity(a, spread) && leftIdentity(a, dropOdd) }}")
+  IO.printLine("List right identity: ${lists.all? { |m| rightIdentity(m) }}")
+  IO.printLine("List associativity: ${lists.all? { |m| associative(m, spread, dropOdd) && associative(m, dropOdd, spread) }}")
+
+  let optionals = [None, Just(4), Just(3), Just(-2)]
+  IO.printLine("Optional left identity: ${[4, 3, -2].all? { |a| leftIdentity(a, halved) && leftIdentity(a, decremented) }}")
+  IO.printLine("Optional right identity: ${optionals.all? { |m| rightIdentity(m) }}")
+  IO.printLine("Optional associativity: ${optionals.all? { |m| associative(m, halved, decremented) && associative(m, decremented, halved) }}")
+
+  let results = [Error("given"), Ok(4), Ok(3), Ok(-2)]
+  IO.printLine("Result left identity: ${[4, 3, -2].all? { |a| leftIdentity(a, checkedHalf) && leftIdentity(a, checkedDecrement) }}")
+  IO.printLine("Result right identity: ${results.all? { |m| rightIdentity(m) }}")
+  IO.printLine("Result associativity: ${results.all? { |m| associative(m, checkedHalf, checkedDecrement) && associative(m, checkedDecrement, checkedHalf) }}")
+end
