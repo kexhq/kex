@@ -2431,9 +2431,9 @@ int main() {
 
         it("types open as a Result containing the refined handle", []() {
             assertTrue(noErrors(
+                "using FS\n"
                 "let accepts(value: Result<FileHandle<CannotRead, CanWrite>, "
                 "FileError>) = true\n"
-                "using FS\n"
                 "main do\n"
                 "  accepts(FS.File.open(\"output.txt\", FS.Write))\n"
                 "end\n"));

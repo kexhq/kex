@@ -9,6 +9,7 @@
 # time. Each gets one of the two messages; before, the second receive
 # replaced the first, which then waited for good.
 
+using Net
 using Net.HTTP.WebSocket
 using Net.HTTP, except: [ClientOptions]
 using Net.Socket

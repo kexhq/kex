@@ -80,6 +80,11 @@ struct ImportedModuleInterface {
     // of the program would, bare and by UFCS. The prelude's are reached
     // through its receiver functions instead.
     bool compiledApart = false;
+    // What it is compiled with (KexiStructuralMetadata::unitId; the source
+    // file, for an interface read from source), "" when unknown. A `using`
+    // of one module loads its whole unit, so its siblings there are in reach
+    // by their last segment as well: `UnorderedSet` under `using Data.Set`.
+    std::string unit;
     // Shared by the copies every unit's interfaces make of the prelude's.
     Cow<std::unordered_map<std::string, std::vector<ImportedFunction>>> exports;
 };

@@ -577,6 +577,12 @@ private:
     auto bareNameDeclared(const std::string& name) const -> bool;
     auto namesDeclaredType(const std::string& qualified, const std::string& last) const -> bool;
     auto reportUnknownType(const ast::TypeName& name, const SourceLocation& at) -> void;
+    // Reports a bare type name that names only `unreached` (imported types
+    // out of reach, unreachedImportedTypes); whether there were any.
+    auto reportUnreachedType(
+        const ast::TypeName& name,
+        const std::vector<std::string>& unreached,
+        const SourceLocation& at) -> bool;
     auto reportPendingUnknownTypes() -> void;
     auto spellingHasSeveralArities(const std::string& name) const -> bool;
     auto variantType(const TypePtr& result, const std::string& name) const -> TypePtr;
@@ -1224,11 +1230,11 @@ private:
     // The parameter types each block was expected to take (inferBlock's hints).
     std::unordered_map<const ast::Expr*, std::vector<TypePtr>> m_blockHints;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
-    // resolveRecordName's last guess, by bare name: the imported record a
-    // name is the unique suffix of, if any. It depends on nothing but the
-    // interfaces, which are fixed for the checker's life, and a name that
-    // nothing else claims (`String`, a type parameter) asked it on every use.
-    mutable std::unordered_map<std::string, std::optional<std::string>> m_recordSuffixes;
+    // resolveRecordName's last guess, by bare name: the records a name is a
+    // suffix of, sorted, before the `using`s in scope narrow them. It depends
+    // on nothing but the records known, and a name that nothing else claims
+    // (`String`, a type parameter) asked it on every use.
+    mutable std::unordered_map<std::string, std::vector<std::string>> m_recordSuffixes;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
     std::unordered_map<const ast::Expr*, const ast::MethodCall*> m_captureCalls;
     std::vector<std::unique_ptr<ast::Expr>> m_captureCallNodes;
@@ -1343,7 +1349,14 @@ private:
     // Type splices already reported outside a generated declaration (KEXEC-0058).
     std::unordered_set<const ast::TypeExpr*> m_reportedTypeSplices;
     bool m_declarationsRegistered = false;
-    std::vector<std::pair<const ast::TypeName*, SourceLocation>> m_pendingUnknownTypes;
+    // Each with the imported types it named out of reach where it was written
+    // (unreachedImportedTypes), which the `using`s there decided.
+    struct PendingUnknownType {
+        const ast::TypeName* name = nullptr;
+        SourceLocation at;
+        std::vector<std::string> unreached;
+    };
+    std::vector<PendingUnknownType> m_pendingUnknownTypes;
     std::unordered_map<std::string, std::string> m_typeDeclaringModules;
     // The trait each type spelling names in the module it was written in
     // (writtenKey), as resolveTypeExpr resolved it.
@@ -1708,6 +1721,30 @@ private:
     // The same, without the enclosing module's own nested modules.
     auto resolveImportedModulePath(const std::string& name, const std::string& member) const
         -> std::string;
+    // Whether an imported `module` may be named here by its last segment
+    // alone: it is the prelude's, this code is inside it, or a `using` of the
+    // program loaded it (named it, a module enclosing it, or a module of its
+    // unit). What both runtimes can reach: the walker looks a short name up
+    // among the modules it has loaded, and BEAM calls what the checker chose.
+    // A module no interface describes is not this rule's to refuse.
+    auto shortNameReaches(const std::string& module) const -> bool;
+    // The same for an imported type: its own module's, or else the module
+    // declaring it (`Parsing` for `Parsing.Input`).
+    auto shortTypeNameReaches(const std::string& type) const -> bool;
+    // The imported types a bare type name could be guessed to mean, none of
+    // them in reach (shortTypeNameReaches); empty when the name means a type
+    // here, or no module's type ends in it. Sorted.
+    auto unreachedImportedTypes(const std::string& name) const -> std::vector<std::string>;
+    // Whether a type is declared under the bare `name` itself: one of this
+    // program's, or one at the top level of an imported file.
+    auto bareTypeDeclared(const std::string& name) const -> bool;
+    // Reports the bare `name` that names only `candidates` out of reach:
+    // "`Parsing.Input` is not imported here", or the list of them.
+    auto reportUnreachedName(
+        const std::string& what,
+        const std::string& name,
+        const std::vector<std::string>& candidates,
+        const SourceLocation& at) -> void;
 
     // Type alias map — populated before function bodies are checked.
     std::unordered_map<std::string, TypePtr> m_typeAliases;

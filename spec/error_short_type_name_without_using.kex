@@ -1,0 +1,14 @@
+# kex: check-only
+# A type declared in an opt-in module is named bare only under a `using` that
+# loads it (kexhq/kex#840). `Input` alone was taken for `Parsing.Input`, and a
+# name several modules declare (`Address`: `Net.IP` and `Net.Socket.Unix`)
+# became an unknown nominal type with no error at all.
+let consumed(input: Input) -> String = "consumed"
+
+let host(address: Address) -> String = "host"
+
+let queued(queue: Queue<Integer>) -> String = "queued"
+
+main do
+  IO.printLine("unreached")
+end

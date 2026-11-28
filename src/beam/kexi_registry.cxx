@@ -841,6 +841,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
             imported.backendModule = module.beamAtom;
             imported.automaticImport = automaticModules.count(sourceModule) > 0;
             imported.isCapability = module.chunk.metadata.isCapability;
+            imported.unit = module.chunk.metadata.unitId;
             for (const auto& exported : module.chunk.typeInterface.exports) {
                 imported.exports[exported.name].push_back(
                     importedFunction(exported, module.beamAtom, sourceModule));

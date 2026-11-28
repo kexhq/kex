@@ -40,7 +40,7 @@ end
 # An HTTP request: method, target, headers and a body of type +B+.
 record Request<B> do
   method : String
-  target : URI
+  target : URI.URI
   headers : Headers
   body : B
 end

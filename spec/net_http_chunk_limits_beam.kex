@@ -2,6 +2,7 @@
 # A short chunk-size line can share a socket read with a body larger than
 # maximumHeaderBytes. Only the line counts against the header limit.
 
+using Net
 using Net.Socket
 using Net.HTTP
 

@@ -150,6 +150,21 @@ auto checkedStdlibInterfaces(const semantic::ImportedInterfaces& prelude)
     for (auto& [_, module] : described.modules) {
         module.compiledApart = true;
     }
+    // Each module's unit is the files it was built from, which a `using`
+    // loads together: a unit's id is its first module's, and data/set.kex,
+    // data/queue.kex and data/stack.kex all begin with `module Data`.
+    for (const auto& unit : program.described) {
+        std::string files;
+        for (const auto& file : unit.files) {
+            files += file + "\n";
+        }
+        for (const auto& module : unit.unit.modules) {
+            if (auto found = described.modules.find(module.chunk.metadata.sourceModule);
+                found != described.modules.end()) {
+                found->second.unit = files;
+            }
+        }
+    }
     return build::overlayDescribedInterfaces(&prelude, std::move(described), /*reached=*/false);
 }
 
