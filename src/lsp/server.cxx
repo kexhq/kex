@@ -2992,12 +2992,9 @@ private:
                     .definitionProvider = true,
                     .referencesProvider = true,
                     // A `match` missing arms gets them as a quick fix.
-                    .codeActionProvider =
-                        ::lsp::CodeActionOptions{
-                            .codeActionKinds =
-                                ::lsp::Array<::lsp::CodeActionKindEnum>{
-                                    ::lsp::CodeActionKind::QuickFix},
-                        },
+                    // Each action says it is a quick fix; no kinds are listed here,
+                    // since GCC 14 warns on the options temporary (alpine).
+                    .codeActionProvider = true,
                     // Enter after a line opening a block writes its `end`.
                     .documentOnTypeFormattingProvider =
                         ::lsp::DocumentOnTypeFormattingOptions{.firstTriggerCharacter = "\n"},
