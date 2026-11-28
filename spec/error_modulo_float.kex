@@ -1,0 +1,17 @@
+# kex: check-only
+# `%` is the remainder of two Integers. On a Float both backends refuse it at
+# run time (the walker "modulo requires integers", BEAM `badarith`), while the
+# checker typed it as a Float, so `a % b` checked clean and then failed (found
+# by `make fuzz-metamorphic`).
+
+let both(a: Float, b: Float) -> Float = a % b
+
+let mixed(a: Integer, b: Float) = a % b
+
+main do
+  IO.printLine(5.5 % 2.0)
+  IO.printLine(7 % 2.5)
+  IO.printLine(7 % 2)
+  IO.printLine(both(5.5, 2.0))
+  IO.printLine(mixed(7, 2.0))
+end
