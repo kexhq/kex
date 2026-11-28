@@ -3953,12 +3953,24 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                                 ? std::string{}
                                                 : m_programs.successWrapperAfter(*node.body.back());
                 auto collectionDepth = std::make_shared<int>(0);
+                // The module the block is written in. A module's function that
+                // calls it must not lend it its own names: `Box.call { |s|
+                // s.to(Integer) }` reached Box's `to` from inside Box.call.
+                auto capturedModule = m_currentModule;
                 lambda->data = FunctionValue{
                     "<lambda>",
                     [this, bodyPtr, paramNames, capturedEnv, rescuePtr, collection, namedFunction,
-                     successWrapper, collectionDepth,
-                     capturedCapabilities](std::vector<ValuePtr> args) -> ValuePtr {
+                     successWrapper, collectionDepth, capturedCapabilities,
+                     capturedModule](std::vector<ValuePtr> args) -> ValuePtr {
                         CapabilityScope capabilityScope{m_capabilityBindings, capturedCapabilities};
+                        struct ModuleScopeGuard {
+                            std::string& current;
+                            std::string saved;
+                            ~ModuleScopeGuard() {
+                                current = std::move(saved);
+                            }
+                        } moduleGuard{m_currentModule, m_currentModule};
+                        m_currentModule = capturedModule;
                         auto prevEnv = m_env;
                         m_env = std::make_shared<Environment>(capturedEnv);
                         // A named local function (`let f(x) do ... end` in a

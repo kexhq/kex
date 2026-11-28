@@ -1,0 +1,20 @@
+# A block resolves its calls where it is written, not in the module of the
+# function that calls it. The walker ran a block in its caller's module, so
+# `s.to(Integer)` below reached Box's own `to` and answered "box".
+
+record Box do
+  n : Integer = 0
+end
+
+make Box do
+  let to(String, loud: Bool) -> String = loud then "BOX" else "box"
+end
+
+module Box do
+  let call(f: String -> Integer?) -> Integer? = f("1500")
+end
+
+main do
+  IO.printLine(Box.call { |s| s.to(Integer) }.inspected)
+  IO.printLine(Box.call { |s| s.to(Float).map(&.round) }.inspected)
+end
