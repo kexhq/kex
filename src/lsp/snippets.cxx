@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string_view>
 
@@ -115,34 +116,6 @@ auto wordStartBefore(const std::string& text, size_t cursor) -> size_t {
 auto lineStartOf(const std::string& text, size_t offset) -> size_t {
     const auto newline = offset == 0 ? std::string::npos : text.rfind('\n', offset - 1);
     return newline == std::string::npos ? 0 : newline + 1;
-}
-
-// The indentation one level adds in this file: the first step inward any
-// line takes from the one before it. Two spaces when nothing is indented.
-auto indentUnit(const std::string& text) -> std::string {
-    size_t previous = 0;
-    bool havePrevious = false;
-    size_t at = 0;
-    while (at < text.size()) {
-        const auto end = std::min(text.find('\n', at), text.size());
-        size_t indent = at;
-        while (indent < end && (text[indent] == ' ' || text[indent] == '\t')) {
-            ++indent;
-        }
-        if (indent < end && text[indent] != '#') {
-            const auto width = indent - at;
-            if (havePrevious && width > previous) {
-                if (text[at] == '\t') {
-                    return "\t";
-                }
-                return std::string(width - previous, ' ');
-            }
-            previous = width;
-            havePrevious = true;
-        }
-        at = end + 1;
-    }
-    return "  ";
 }
 
 constexpr unsigned TopLevelOnly = 1U << 0;
@@ -441,10 +414,11 @@ auto walk(
     return result;
 }
 
-// The cursor line's indentation, and the file's step inward.
+// The cursor line's indentation, and one step inward: a tab, which the
+// client turns into its own indentation setting as it inserts the snippet.
 struct Indentation {
     std::string base;
-    std::string unit;
+    std::string unit = "\t";
 };
 
 auto indentationAt(const std::string& text, size_t wordStart) -> Indentation {
@@ -453,7 +427,7 @@ auto indentationAt(const std::string& text, size_t wordStart) -> Indentation {
     while (indentEnd < text.size() && (text[indentEnd] == ' ' || text[indentEnd] == '\t')) {
         ++indentEnd;
     }
-    return {text.substr(lineStart, indentEnd - lineStart), indentUnit(text)};
+    return {text.substr(lineStart, indentEnd - lineStart)};
 }
 
 // `body` with each `\t` one indentation step and each line after the first
@@ -783,7 +757,8 @@ auto stubSnippets(
     return snippets;
 }
 
-auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEdit> {
+auto endOnEnter(const std::string& text, size_t cursor, const std::string& unit)
+    -> std::optional<EnterEdit> {
     cursor = std::min(cursor, text.size());
     const auto lineStart = lineStartOf(text, cursor);
     const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
@@ -823,7 +798,7 @@ auto endOnEnter(const std::string& text, size_t cursor) -> std::optional<EnterEd
     EnterEdit edit;
     edit.lineStart = lineStart;
     edit.lineEnd = lineEnd;
-    edit.indent = opener.base + opener.unit;
+    edit.indent = opener.base + unit;
     if (lineEnd < text.size()) {
         edit.closingAt = lineEnd + 1;
         edit.closing = opener.base + "end\n";
@@ -880,7 +855,58 @@ auto lineIndentation(const std::string& text, size_t offset) -> std::string {
 }
 
 auto indentStep(const std::string& text) -> std::string {
-    return indentUnit(text);
+    // How far the line after each block opener steps in from the opener's
+    // line. Only those lines: a continuation (a union's `| Variant` aligned
+    // under the first, a multi-line string) is not a step.
+    const auto width = [&](size_t lineStart) {
+        size_t at = lineStart;
+        while (at < text.size() && (text[at] == ' ' || text[at] == '\t')) {
+            ++at;
+        }
+        return at;
+    };
+    std::map<std::string, int> steps;
+    const auto measure = [&](const Open& block) {
+        if (block.block == Block::Bracket) {
+            return;
+        }
+        const auto openerStart = lineStartOf(text, block.offset);
+        const auto openerIndent = width(openerStart);
+        // The first line below the opener holding something.
+        auto next = text.find('\n', block.offset);
+        while (next != std::string::npos) {
+            const auto lineStart = next + 1;
+            const auto indent = width(lineStart);
+            if (indent < text.size() && text[indent] != '\n' && text[indent] != '\r') {
+                if (text[indent] == '#') {
+                    next = text.find('\n', lineStart);
+                    continue;
+                }
+                const auto inner = indent - lineStart;
+                const auto outer = openerIndent - openerStart;
+                if (inner > outer &&
+                    text.compare(lineStart, outer, text, openerStart, outer) == 0) {
+                    steps[text.substr(lineStart + outer, inner - outer)]++;
+                }
+                return;
+            }
+            next = text.find('\n', lineStart);
+        }
+    };
+    const auto walked =
+        walk(text + "\n", text.size() + 1, [&](const Open& block, size_t) { measure(block); });
+    for (const auto& block : walked.open) {
+        measure(block);
+    }
+    std::string best = "  ";
+    int count = 0;
+    for (const auto& [step, n] : steps) {
+        if (n > count) {
+            best = step;
+            count = n;
+        }
+    }
+    return best;
 }
 
 } // namespace kex::lsp
