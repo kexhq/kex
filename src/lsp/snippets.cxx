@@ -1,5 +1,6 @@
 #include "snippets.hxx"
 
+#include "../common/well_known.hxx"
 #include "../lexer/lexer.hxx"
 
 #include <algorithm>
@@ -646,7 +647,7 @@ namespace {
 // A parameter name for a value of type `type`: `other` for the implementor's
 // own type, else the type's initial.
 auto parameterName(const std::string& type) -> std::string {
-    if (type == "This") {
+    if (type == names::kThisType) {
         return "other";
     }
     const auto dot = type.rfind('.');
