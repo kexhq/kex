@@ -3191,9 +3191,8 @@ int main() {
         });
 
         const auto actionAt = [](int line, int character) {
-            const auto position =
-                R"({"line":)" + std::to_string(line) + R"(,"character":)" +
-                std::to_string(character) + "}";
+            const auto position = R"({"line":)" + std::to_string(line) + R"(,"character":)" +
+                                  std::to_string(character) + "}";
             return R"(,"range":{"start":)" + position + R"(,"end":)" + position +
                    R"(},"context":{"diagnostics":[]})";
         };
@@ -3206,8 +3205,8 @@ int main() {
                                      "  end\n"
                                      "end\n";
             for (const auto& [line, character] : {std::pair{3, 2}, std::pair{4, 8}}) {
-                const auto reply =
-                    askAt(uri, text, "codeAction", line, character, "{}", actionAt(line, character));
+                const auto reply = askAt(
+                    uri, text, "codeAction", line, character, "{}", actionAt(line, character));
                 assertTrue(
                     reply.find(
                         R"("newText":"    Rect(_, _) => die(\"Rect is not handled yet\")\n    Empty => die(\"Empty is not handled yet\")\n")") !=
@@ -3231,7 +3230,9 @@ int main() {
                                      "  end\n"
                                      "end\n";
             const auto reply = askAt(uri, text, "codeAction", 3, 2, "{}", actionAt(3, 2));
-            assertTrue(reply.find("newText") == std::string::npos, "a quick fix for a whole match: " + reply);
+            assertTrue(
+                reply.find("newText") == std::string::npos,
+                "a quick fix for a whole match: " + reply);
         });
 
         it("writes the trait's required functions after `make …, implement:`", [=]() {

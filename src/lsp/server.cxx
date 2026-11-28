@@ -3135,9 +3135,9 @@ private:
             }
         }
         ::lsp::CodeAction action{
-            .title = arms.size() == 1 ? "Add the missing match arm for " + arms.front().name
-                                      : "Add the " + std::to_string(arms.size()) +
-                                            " missing match arms",
+            .title = arms.size() == 1
+                         ? "Add the missing match arm for " + arms.front().name
+                         : "Add the " + std::to_string(arms.size()) + " missing match arms",
             .kind = ::lsp::CodeActionKind::QuickFix,
             .isPreferred = true,
             .edit = ::lsp::WorkspaceEdit{.changes = std::move(changes)},
@@ -6696,9 +6696,7 @@ private:
             .add<::lsp::requests::TextDocument_Rename>(
                 [this](::lsp::RenameParams&& params) { return rename(std::move(params)); })
             .add<::lsp::requests::TextDocument_CodeAction>(
-                [this](::lsp::CodeActionParams&& params) {
-                    return codeActions(std::move(params));
-                })
+                [this](::lsp::CodeActionParams&& params) { return codeActions(std::move(params)); })
             .add<::lsp::requests::TextDocument_OnTypeFormatting>(
                 [this](::lsp::DocumentOnTypeFormattingParams&& params) {
                     return onTypeFormatting(std::move(params));
