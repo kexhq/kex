@@ -1,0 +1,16 @@
+spec/error_modulo_float.kex:7:45: [KEXET-0525]: Error, `%` is the remainder of two Integers, got Float and Float: a Float has none; turn it into an Integer first (`.round`, `.floor`)
+  |
+7 | let both(a: Float, b: Float) -> Float = a % b
+  |                                         ^^^^^
+spec/error_modulo_float.kex:9:39: [KEXET-0525]: Error, `%` is the remainder of two Integers, got Integer and Float: a Float has none; turn it into an Integer first (`.round`, `.floor`)
+  |
+9 | let mixed(a: Integer, b: Float) = a % b
+  |                                   ^^^^^
+spec/error_modulo_float.kex:12:22: [KEXET-0525]: Error, `%` is the remainder of two Integers, got Float and Float: a Float has none; turn it into an Integer first (`.round`, `.floor`)
+   |
+12 |   IO.printLine(5.5 % 2.0)
+   |                ^^^^^^^^^
+spec/error_modulo_float.kex:13:20: [KEXET-0525]: Error, `%` is the remainder of two Integers, got Integer and Float: a Float has none; turn it into an Integer first (`.round`, `.floor`)
+   |
+13 |   IO.printLine(7 % 2.5)
+   |                ^^^^^^^

@@ -4411,6 +4411,116 @@ auto TypeChecker::checkClauseCoverage() -> void {
 // other kind of arm leaves the question to checkMatchExhaustiveness (see
 // kexhq/kex#645). Dropping the `Redirect` arm was accepted, and failed at run
 // time with no matching clause (found by `make fuzz-metamorphic`).
+auto TypeChecker::blockParameterTypes(const ast::Expr& block) const -> std::vector<std::string> {
+    const auto found = m_blockHints.find(&block);
+    if (found == m_blockHints.end()) {
+        return {};
+    }
+    auto params = found->second;
+    if (params.size() == 1 && params[0]) {
+        if (const auto* tuple = std::get_if<TupleType>(&resolve(params[0])->kind);
+            tuple && tuple->elements.size() > 1) {
+            params = tuple->elements;
+        }
+    }
+    std::vector<std::string> types;
+    for (const auto& param : params) {
+        const auto type = param ? resolve(param) : nullptr;
+        types.push_back(!type || isUndetermined(type) ? "" : typeToString(type));
+    }
+    return types;
+}
+
+auto TypeChecker::owedArms(const ast::MatchExpr& node, const TypePtr& subject)
+    -> std::vector<OwedArm> {
+    if (!subject || isUndetermined(resolve(subject))) {
+        return {};
+    }
+    // `X?` is its own kind of type, matched by the prelude's `Optional` arms.
+    auto adt = adtNameOfType(expandTypeAliases(resolve(subject)));
+    auto members = unionMemberNames(subject);
+    if (members.empty() && !adt.empty()) {
+        members = m_adtVariants.at(adt);
+    }
+    if (members.empty()) {
+        return {};
+    }
+    if (adt.empty()) {
+        if (const auto* named =
+                std::get_if<NamedType>(&expandTypeAliases(resolve(subject))->kind)) {
+            adt = named->name;
+        }
+    }
+    std::vector<bool> taken(members.size(), false);
+    for (const auto& clause : node.clauses) {
+        if (clause.guard && *clause.guard) {
+            continue;
+        }
+        for (const auto& pattern : clause.patterns) {
+            if (!pattern) {
+                continue;
+            }
+            std::string constructor;
+            if (const auto* written = std::get_if<ast::ConstructorPattern>(&pattern->kind)) {
+                constructor = written->name;
+            } else if (const auto* literal = std::get_if<ast::LiteralPattern>(&pattern->kind);
+                       literal && literal->literal.type == TokenType::None) {
+                constructor = "None";
+            }
+            if (!constructor.empty()) {
+                for (std::size_t i = 0; i < members.size(); ++i) {
+                    taken[i] = taken[i] || members[i] == constructor;
+                }
+                continue;
+            }
+            if (const auto takes = unionMembersTaken(*pattern, members)) {
+                for (std::size_t i = 0; i < members.size(); ++i) {
+                    taken[i] = taken[i] || (*takes)[i];
+                }
+            }
+        }
+    }
+    if (std::all_of(taken.begin(), taken.end(), [](bool whole) { return whole; })) {
+        return {};
+    }
+    std::vector<OwedArm> owed;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        if (taken[i]) {
+            continue;
+        }
+        const auto& member = members[i];
+        // A union of bare names is registered as a sum type, so a record or
+        // a primitive among them is listed as if a constructor: it is a type.
+        const bool type = adt.empty() || isPrimitiveTypeName(member) ||
+                          m_recordFields.contains(resolveRecordName(member));
+        std::size_t arity = 0;
+        if (!type) {
+            bool found = false;
+            if (const auto owners = m_constructorOwners.find(member);
+                owners != m_constructorOwners.end()) {
+                for (const auto& owner : owners->second) {
+                    if (owner.adt == adt) {
+                        arity = owner.arity;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                if (const auto known = m_constructorResult.find(member);
+                    known != m_constructorResult.end() && known->second.adtName == adt) {
+                    arity = known->second.slots.size();
+                } else if (const auto counted = m_constructorArity.find(member);
+                           counted != m_constructorArity.end()) {
+                    arity = counted->second;
+                }
+            }
+        }
+        owed.push_back({member, arity, type});
+    }
+    return owed;
+}
+
 auto TypeChecker::unionMemberNames(const TypePtr& subject) -> std::vector<std::string> {
     const auto nameOf = [](const TypePtr& type) {
         const auto* named = std::get_if<NamedType>(&type->kind);
@@ -8042,6 +8152,7 @@ auto TypeChecker::checkTraitDef(const ast::TraitDef& def) -> void {
 }
 
 auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
+    m_owedFunctions.erase(&def);
     if (def.implements.empty()) {
         return;
     }
@@ -8155,6 +8266,29 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
                     trait->defaultBodies.end()) {
                     continue;
                 }
+                // The receiver is never among a requirement's parameters, but
+                // under `trait Functor<F<_>>` it is written first (`F<A>`), and
+                // `describe : () -> String` takes nothing.
+                std::vector<TypePtr> owedParams = req.params;
+                if (!owedParams.empty() && owedParams[0] &&
+                    std::holds_alternative<TypeApp>(resolve(owedParams[0])->kind)) {
+                    owedParams.erase(owedParams.begin());
+                }
+                if (owedParams.size() == 1) {
+                    const auto only = owedParams[0] ? resolve(owedParams[0]) : Type::unknown();
+                    const auto* tuple = std::get_if<TupleType>(&only->kind);
+                    if ((tuple && tuple->elements.empty()) || typesEqual(only, Type::voidType())) {
+                        owedParams.clear();
+                    }
+                }
+                OwedFunction owed{req.name, written, req.isFoul, {}, {}};
+                for (const auto& param : owedParams) {
+                    owed.params.push_back(param ? typeToString(resolve(param)) : "");
+                }
+                if (req.result && !isUndetermined(resolve(req.result))) {
+                    owed.result = typeToString(resolve(req.result));
+                }
+                m_owedFunctions[&def].push_back(std::move(owed));
                 error(
                     diag::Code::MissingRequiredMethod, def.location,
                     {{"type", shownType}, {"trait", written}, {"method", req.name}});

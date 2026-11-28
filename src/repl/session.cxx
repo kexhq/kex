@@ -1013,12 +1013,14 @@ auto BeamReplSession::run() -> int {
         while (!otpInfo.empty() && otpInfo.back() == '\n') {
             otpInfo.pop_back();
         }
-        if (!otpInfo.empty()) {
+        if (!otpInfo.empty() && !replScriptOnly()) {
             std::cout << kex::color::apply(kex::color::gray) << otpInfo
                       << kex::color::apply(kex::color::reset) << "\n";
         }
     }
-    kex::printReplBanner(std::cout, "BEAM");
+    if (!replScriptOnly()) {
+        kex::printReplBanner(std::cout, "BEAM");
+    }
 
     if (!m_skipPrelude) {
         const auto preludeDisplay = preludeDisplayRegistration();
@@ -1640,7 +1642,9 @@ auto WalkerReplSession::evaluate(
 }
 
 auto WalkerReplSession::run() -> int {
-    kex::printReplBanner(std::cout, "");
+    if (!replScriptOnly()) {
+        kex::printReplBanner(std::cout, "");
+    }
 
 #ifdef HAS_READLINE
     const std::string historyFile = loadReplHistory();

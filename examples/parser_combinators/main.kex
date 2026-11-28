@@ -1,14 +1,14 @@
 # Parsing and evaluating simple arithmetic expressions like "3 + 42 * 5" with
-# the `Parsing` combinator library (lib/parsing.kex).
+# the `Combinators` parser library (lib/combinators.kex).
 #
 # The grammar lives here as the *application*: the reusable machinery — the
 # `Parser` cursor, `charWhen`/`whiteSpaces`, and the `many`/`some`/`choice`
-# combinators — is imported from `Parsing`. Each grammar rule is a plain
+# combinators — is imported from `Combinators`. Each grammar rule is a plain
 # function taking a `Parser`, so `p.integer`, `p.operator`, and `p.expression`
 # read as UFCS calls. The parsed `Expr` tree is then run through `eval` to get
 # its integer value.
 
-using Parsing
+using Combinators
 
 type Expr
   = IntLit(Int)

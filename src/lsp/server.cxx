@@ -17,6 +17,7 @@
 #include "../module/resolver.hxx"
 #include "../validation/tag_validator.hxx"
 #include "ket_template.hxx"
+#include "snippets.hxx"
 #include "tey_roots.hxx"
 
 #include <lsp/connection.h>
@@ -2961,6 +2962,23 @@ private:
             m_workspaceRoots.push_back(params.rootUri->fsPath());
         }
         m_configuredSourceRoots = configuredSourceRoots(params);
+        // Snippets (`if ${1:condition}` ...) only reach a client that can expand
+        // them; any other would insert the placeholders as text.
+        if (params.capabilities.textDocument && params.capabilities.textDocument->completion &&
+            params.capabilities.textDocument->completion->completionItem) {
+            m_snippetSupport = params.capabilities.textDocument->completion->completionItem
+                                   ->snippetSupport.value_or(false);
+            // Whether a snippet's later lines may carry their full indentation:
+            // a client that cannot take them as they are (Neovim's) indents
+            // them by the cursor's line itself.
+            const auto& item = *params.capabilities.textDocument->completion->completionItem;
+            m_insertAsIs = item.insertTextModeSupport &&
+                           std::any_of(
+                               item.insertTextModeSupport->valueSet.begin(),
+                               item.insertTextModeSupport->valueSet.end(), [](const auto& mode) {
+                                   return mode == ::lsp::InsertTextMode::AsIs;
+                               });
+        }
         return {
             .capabilities =
                 {
@@ -2983,6 +3001,13 @@ private:
                         },
                     .definitionProvider = true,
                     .referencesProvider = true,
+                    // A `match` missing arms gets them as a quick fix.
+                    // Each action says it is a quick fix; no kinds are listed here,
+                    // since GCC 14 warns on the options temporary (alpine).
+                    .codeActionProvider = true,
+                    // Enter after a line opening a block writes its `end`.
+                    .documentOnTypeFormattingProvider =
+                        ::lsp::DocumentOnTypeFormattingOptions{.firstTriggerCharacter = "\n"},
                     .renameProvider = ::lsp::RenameOptions{.prepareProvider = true},
                     .inlayHintProvider = true,
                 },
@@ -3038,6 +3063,261 @@ private:
         return semantic::CheckedSource{
             std::shared_ptr<ast::Program>(std::shared_ptr<void>{}, &state->ast), analyzer,
             std::move(retained)};
+    }
+
+    // Quick fixes at a range: for the innermost `match` holding its start,
+    // the arms it still owes (TypeChecker::owedArms), inserted before its
+    // `end` with bodies that fail until they are written.
+    auto codeActions(::lsp::CodeActionParams&& params)
+        -> ::lsp::requests::TextDocument_CodeAction::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end() || !found->second.ketOriginalText.empty()) {
+            return nullptr;
+        }
+        const auto& document = found->second;
+        const auto& text = document.text;
+        const auto at = byteOffsetAt(text, params.range.start);
+        auto checked = checkAsDocument(document, document.path, text);
+        if (!checked) {
+            return nullptr;
+        }
+        const auto& types = checked->analyzer->typeMap();
+        const ast::MatchExpr* match = nullptr;
+        size_t matchStart = 0;
+        size_t matchEnd = 0;
+        for (const auto& [expression, _] : types) {
+            if (!expression || expression->location.file != document.path ||
+                expression->location.startOffset < 0) {
+                continue;
+            }
+            const auto* candidate = std::get_if<ast::MatchExpr>(&expression->kind);
+            const auto start = static_cast<size_t>(expression->location.startOffset);
+            if (!candidate || start > at || (match && start <= matchStart)) {
+                continue;
+            }
+            const auto end = closingEndOf(text, start);
+            if (!end || *end < at) {
+                continue;
+            }
+            match = candidate;
+            matchStart = start;
+            matchEnd = *end;
+        }
+        if (!match || !match->subject) {
+            return nullptr;
+        }
+        const auto subject = types.find(match->subject.get());
+        if (subject == types.end()) {
+            return nullptr;
+        }
+        std::vector<Arm> arms;
+        for (auto& owed : checked->analyzer->owedArms(*match, subject->second)) {
+            arms.push_back({std::move(owed.name), owed.arity, owed.type});
+        }
+        if (arms.empty()) {
+            return nullptr;
+        }
+        // The new arms line up with the first one written, or sit one step
+        // in from `match` when there is none.
+        std::string indent = lineIndentation(text, matchStart) + indentStep(text);
+        if (!match->clauses.empty() && !match->clauses.front().patterns.empty() &&
+            match->clauses.front().patterns.front() &&
+            match->clauses.front().patterns.front()->location.startOffset >= 0) {
+            indent = lineIndentation(
+                text,
+                static_cast<size_t>(match->clauses.front().patterns.front()->location.startOffset));
+        }
+        const auto endLine = positionAt(text, matchEnd);
+        const ::lsp::Position insertAt{endLine.line, 0};
+        ::lsp::Map<::lsp::DocumentUri, ::lsp::Array<::lsp::TextEdit>> changes;
+        changes[params.textDocument.uri].push_back(
+            {.range = {insertAt, insertAt}, .newText = armSource(arms, indent)});
+        // The diagnostics this answers: those the client sent on the match's line.
+        ::lsp::Array<::lsp::Diagnostic> answered;
+        const auto matchLine = positionAt(text, matchStart).line;
+        for (const auto& diagnostic : params.context.diagnostics) {
+            if (diagnostic.range.start.line == matchLine) {
+                answered.push_back(diagnostic);
+            }
+        }
+        ::lsp::CodeAction action{
+            .title = arms.size() == 1
+                         ? "Add the missing match arm for " + arms.front().name
+                         : "Add the " + std::to_string(arms.size()) + " missing match arms",
+            .kind = ::lsp::CodeActionKind::QuickFix,
+            .isPreferred = true,
+            .edit = ::lsp::WorkspaceEdit{.changes = std::move(changes)},
+        };
+        if (!answered.empty()) {
+            action.diagnostics = std::move(answered);
+        }
+        ::lsp::Array<::lsp::OneOf<::lsp::Command, ::lsp::CodeAction>> actions;
+        actions.push_back(std::move(action));
+        return actions;
+    }
+
+    // Enter after a line that opens a block: the `end` it lacks, level with
+    // the line, and the new line indented one step in (endOnEnter).
+    auto onTypeFormatting(::lsp::DocumentOnTypeFormattingParams&& params)
+        -> ::lsp::requests::TextDocument_OnTypeFormatting::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end() || params.ch != "\n" ||
+            !found->second.ketOriginalText.empty()) {
+            return nullptr;
+        }
+        const auto& text = found->second.text;
+        const auto cursor = byteOffsetAt(text, params.position);
+        const auto edit = endOnEnter(text, cursor);
+        if (!edit) {
+            return nullptr;
+        }
+        ::lsp::Array<::lsp::TextEdit> edits;
+        if (text.compare(edit->lineStart, edit->lineEnd - edit->lineStart, edit->indent) != 0) {
+            edits.push_back({
+                .range = {positionAt(text, edit->lineStart), positionAt(text, edit->lineEnd)},
+                .newText = edit->indent,
+            });
+        }
+        const auto closing = positionAt(text, edit->closingAt);
+        edits.push_back({.range = {closing, closing}, .newText = edit->closing});
+        return edits;
+    }
+
+    // The byte offset of an LSP position in `text`.
+    static auto byteOffsetAt(const std::string& text, const ::lsp::Position& position) -> size_t {
+        size_t lineStart = 0;
+        for (unsigned int line = 0; line < position.line; ++line) {
+            const auto newline = text.find('\n', lineStart);
+            if (newline == std::string::npos) {
+                return text.size();
+            }
+            lineStart = newline + 1;
+        }
+        const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
+        return byteOffsetForUtf16Column(text, lineStart, lineEnd, position.character);
+    }
+
+    // The LSP position of byte `offset` in `text`.
+    static auto positionAt(const std::string& text, size_t offset) -> ::lsp::Position {
+        offset = std::min(offset, text.size());
+        const auto line = static_cast<int>(
+            std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(offset), '\n'));
+        const auto newline = offset == 0 ? std::string::npos : text.rfind('\n', offset - 1);
+        const auto lineStart = newline == std::string::npos ? 0 : newline + 1;
+        return {
+            static_cast<unsigned int>(line),
+            static_cast<unsigned int>(
+                utf16Column(text, line + 1, static_cast<int>(offset - lineStart) + 1))};
+    }
+
+    // The parameter types the call before `cursor` passes the block it
+    // takes (TypeChecker::blockParameterTypes): the word being typed is
+    // replaced by an empty block, which is checked against what the call
+    // expects. Empty when the call expects none, or the buffer cannot be
+    // checked.
+    auto blockParameterTypesAt(const Document& document, size_t cursor)
+        -> std::vector<std::string> {
+        const auto& text = document.text;
+        cursor = std::min(cursor, text.size());
+        auto wordStart = cursor;
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_')) {
+            --wordStart;
+        }
+        auto probe = text;
+        probe.replace(wordStart, cursor - wordStart, "do\nend");
+        auto checked = checkAsDocument(document, document.path, probe);
+        if (!checked) {
+            return {};
+        }
+        for (const auto& [expression, _] : checked->analyzer->typeMap()) {
+            if (expression && expression->location.file == document.path &&
+                expression->location.startOffset == static_cast<int>(wordStart) &&
+                std::holds_alternative<ast::Lambda>(expression->kind)) {
+                return checked->analyzer->checker().blockParameterTypes(*expression);
+            }
+        }
+        return {};
+    }
+
+    // The arms a `match` at `site` still owes, as snippets: the checker's
+    // answer (TypeChecker::owedArms) for the subject's type there. The word
+    // being typed is replaced by an arm that takes nothing (a guarded `_`),
+    // so a match with no arms yet, or a header with no `do`, still parses.
+    auto matchArmSnippets(const Document& document, size_t cursor, const MatchSite& site)
+        -> std::vector<Snippet> {
+        const auto& text = document.text;
+        cursor = std::min(cursor, text.size());
+        auto wordStart = cursor;
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_')) {
+            --wordStart;
+        }
+        auto probe = text;
+        probe.replace(
+            wordStart, cursor - wordStart,
+            site.header ? "do\n_ when false => 0\nend" : "_ when false => 0");
+        auto checked = checkAsDocument(document, document.path, probe);
+        if (!checked) {
+            return {};
+        }
+        const auto& types = checked->analyzer->typeMap();
+        for (const auto& [expression, _] : types) {
+            if (!expression || expression->location.file != document.path ||
+                expression->location.startOffset != static_cast<int>(site.matchOffset)) {
+                continue;
+            }
+            const auto* match = std::get_if<ast::MatchExpr>(&expression->kind);
+            if (!match || !match->subject) {
+                continue;
+            }
+            const auto subject = types.find(match->subject.get());
+            if (subject == types.end()) {
+                return {};
+            }
+            std::vector<Arm> arms;
+            for (auto& owed : checked->analyzer->owedArms(*match, subject->second)) {
+                arms.push_back({std::move(owed.name), owed.arity, owed.type});
+            }
+            return armSnippets(text, cursor, site, arms);
+        }
+        return {};
+    }
+
+    // The functions a `make … implement:` block at `site` still owes its
+    // traits, as snippets: what the checker reports missing
+    // (TypeChecker::owedFunctions) for that block. The word being typed is
+    // dropped, and a header with no `do` yet gets an empty block, so the
+    // buffer parses.
+    auto makeStubSnippets(const Document& document, size_t cursor, const MakeSite& site)
+        -> std::vector<Snippet> {
+        const auto& text = document.text;
+        cursor = std::min(cursor, text.size());
+        auto wordStart = cursor;
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_')) {
+            --wordStart;
+        }
+        auto probe = text;
+        probe.replace(wordStart, cursor - wordStart, site.header ? "do\nend" : "");
+        auto checked = checkAsDocument(document, document.path, probe);
+        if (!checked) {
+            return {};
+        }
+        for (const auto& [make, owed] : checked->analyzer->checker().owedFunctions()) {
+            if (!make || make->location.file != document.path ||
+                make->location.startOffset != static_cast<int>(site.makeOffset)) {
+                continue;
+            }
+            std::vector<Stub> stubs;
+            for (const auto& function : owed) {
+                stubs.push_back({function.name, function.foul, function.params, function.result});
+            }
+            return stubSnippets(text, cursor, site, stubs);
+        }
+        return {};
     }
 
     // Member completion at `position` when it follows `receiver.`: the
@@ -4647,6 +4927,79 @@ private:
                 item.sortText = "1" + item.label;
             }
             result.push_back(std::move(item));
+        }
+        // Whole constructs (`if … end`, `make … do … end`) where one can
+        // start. Not in a `.ket` hole: its text is synthetic Kex, whose
+        // indentation is not the buffer's.
+        if (m_snippetSupport && found->second.ketOriginalText.empty()) {
+            const auto& text = found->second.text;
+            size_t lineStart = 0;
+            for (unsigned int line = 0; line < params.position.line; ++line) {
+                const auto newline = text.find('\n', lineStart);
+                if (newline == std::string::npos) {
+                    lineStart = text.size();
+                    break;
+                }
+                lineStart = newline + 1;
+            }
+            const auto lineEnd = std::min(text.find('\n', lineStart), text.size());
+            const auto cursor =
+                byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character);
+            const auto matchSite = matchSiteAt(text, cursor);
+            const auto makeSite = makeSiteAt(text, cursor);
+            // `xs.each d`: name the block's parameters for what `each` passes.
+            std::vector<std::string> blockParameters;
+            if (!matchSite && !makeSite &&
+                snippetContextAt(text, cursor) == SnippetContext::BlockArgument) {
+                blockParameters = blockParameterTypesAt(found->second, cursor);
+            }
+            auto snippets = snippetCompletions(text, cursor, blockParameters);
+            if (const auto& site = matchSite) {
+                auto arms = matchArmSnippets(found->second, cursor, *site);
+                snippets.insert(
+                    snippets.begin(), std::make_move_iterator(arms.begin()),
+                    std::make_move_iterator(arms.end()));
+            }
+            if (const auto& site = makeSite) {
+                auto stubs = makeStubSnippets(found->second, cursor, *site);
+                snippets.insert(
+                    snippets.begin(), std::make_move_iterator(stubs.begin()),
+                    std::make_move_iterator(stubs.end()));
+            }
+            // The cursor line's indentation, which a client that cannot take a
+            // body as it is adds to each later line itself.
+            const auto base = lineIndentation(text, cursor);
+            for (auto& snippet : snippets) {
+                ::lsp::CompletionItem item{
+                    .label = std::move(snippet.label),
+                    .kind = ::lsp::CompletionItemKind::Snippet,
+                    .detail = std::move(snippet.detail),
+                    .filterText = std::move(snippet.filterText),
+                    .insertTextFormat = ::lsp::InsertTextFormat::Snippet,
+                };
+                if (m_insertAsIs) {
+                    // The body is already indented for the cursor's line.
+                    item.insertTextMode = ::lsp::InsertTextMode::AsIs;
+                } else if (!snippet.fromLineStart && !base.empty()) {
+                    // Lines relative to the cursor's: the client indents them.
+                    const auto indented = "\n" + base;
+                    for (auto at = snippet.body.find(indented); at != std::string::npos;
+                         at = snippet.body.find(indented, at + 1)) {
+                        snippet.body.erase(at + 1, base.size());
+                    }
+                }
+                if (snippet.fromLineStart) {
+                    // `elif` moves its line left: the edit takes the line
+                    // from its start, not just the word.
+                    item.textEdit = ::lsp::TextEdit{
+                        .range = {{params.position.line, 0}, params.position},
+                        .newText = std::move(snippet.body),
+                    };
+                } else {
+                    item.insertText = std::move(snippet.body);
+                }
+                result.push_back(std::move(item));
+            }
         }
         return result;
     }
@@ -6360,7 +6713,13 @@ private:
                     return prepareRename(std::move(params));
                 })
             .add<::lsp::requests::TextDocument_Rename>(
-                [this](::lsp::RenameParams&& params) { return rename(std::move(params)); });
+                [this](::lsp::RenameParams&& params) { return rename(std::move(params)); })
+            .add<::lsp::requests::TextDocument_CodeAction>(
+                [this](::lsp::CodeActionParams&& params) { return codeActions(std::move(params)); })
+            .add<::lsp::requests::TextDocument_OnTypeFormatting>(
+                [this](::lsp::DocumentOnTypeFormattingParams&& params) {
+                    return onTypeFormatting(std::move(params));
+                });
     }
 
     Iostream m_stream;
@@ -6393,6 +6752,8 @@ private:
     std::string m_referenceIndexWord;
     bool m_running = true;
     bool m_initialized = false;
+    bool m_snippetSupport = false;
+    bool m_insertAsIs = false;
     bool m_cleanShutdown = false;
 };
 

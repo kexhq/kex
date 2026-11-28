@@ -31,9 +31,9 @@ foreach(dir IN LISTS compiler_dirs)
         file(READ "${src}" content)
         file(RELATIVE_PATH relpath "${KEX_SOURCE_DIR}" "${src}")
 
-        # No compiler target should #include prelude .kex sources or read them
+        # No compiler target should #include stdlib .kex sources or read them
         # at compile time (runtime loading through prelude_loader is fine).
-        string(REGEX MATCHALL "#include[^\n]*prelude/[^\n]*\\.kex" prelude_hits "${content}")
+        string(REGEX MATCHALL "#include[^\n]*\\.kex[\">]" prelude_hits "${content}")
         foreach(hit IN LISTS prelude_hits)
             list(APPEND violations "${relpath}: ${hit}")
         endforeach()

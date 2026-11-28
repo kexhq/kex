@@ -602,7 +602,7 @@ target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE KEX_RUNTIME_OTP_FLOOR=${KEX_RUNTIME_OTP_FLOOR})
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_sources(kex PRIVATE src/lsp/server.cxx src/lsp/tey_roots.cxx
-                                src/lsp/ket_template.cxx)
+                                src/lsp/ket_template.cxx src/lsp/snippets.cxx)
     target_compile_definitions(kex PRIVATE KEX_HAS_LSP=1)
     target_link_libraries(kex PRIVATE lsp)
 endif()
@@ -870,7 +870,8 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         tests/lsp_test.cxx
         src/lsp/server.cxx
         src/lsp/tey_roots.cxx
-        src/lsp/ket_template.cxx)
+        src/lsp/ket_template.cxx
+        src/lsp/snippets.cxx)
     target_link_libraries(lsp_test PRIVATE kex_lib lsp)
     target_include_directories(lsp_test PRIVATE tests)
     add_test(NAME lsp_test COMMAND lsp_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -1003,6 +1004,13 @@ target_include_directories(multi_module_check_cli_test PRIVATE tests)
 target_compile_definitions(multi_module_check_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(multi_module_check_cli_test kex)
 add_test(NAME multi_module_check_cli_test COMMAND multi_module_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+add_executable(stdlib_shadow_cli_test tests/stdlib_shadow_cli_test.cxx)
+target_link_libraries(stdlib_shadow_cli_test PRIVATE kex_lib)
+target_include_directories(stdlib_shadow_cli_test PRIVATE tests)
+target_compile_definitions(stdlib_shadow_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(stdlib_shadow_cli_test kex)
+add_test(NAME stdlib_shadow_cli_test COMMAND stdlib_shadow_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 add_executable(compiled_dependency_cli_test tests/compiled_dependency_cli_test.cxx)
 target_link_libraries(compiled_dependency_cli_test PRIVATE kex_lib)

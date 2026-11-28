@@ -121,6 +121,11 @@
           "markdownDescription": "Kex toolchain the language server runs. Empty follows this package's `tey.lock`, then Tey's own selection; `tey` follows Tey's selection alone, ignoring the lock file; a version number such as `0.4.0` pins one of the toolchains Tey has installed; an absolute path runs a compiler you built yourself. Set this with **Kex: Select Toolchain** rather than by hand. Overridden by `#kex.executablePath#` when that is set."
         }
       }
+    },
+    "configurationDefaults": {
+      "[kex]": {
+        "editor.formatOnType": true
+      }
     }
   },
   "scripts": {

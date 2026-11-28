@@ -13,3 +13,4 @@ KEX_DIAGNOSTIC(ModuleFileDeclaresAnother, "KEXEM-0010", "this file is `{module}`
 KEX_DIAGNOSTIC(ModuleInFileNamedForAnother, "KEXEM-0011", "module `{module}` is declared in a file whose path names `{pathModule}`, so `{module}` is not found; name it `module {pathModule}`, or move it to {path}")
 KEX_DIAGNOSTIC(MainInDependency, "KEXEM-0012", "`{module}` is used by another file, so it cannot have a `main`: a program has one `main`, in the file it runs from")
 KEX_DIAGNOSTIC(StatementInDependency, "KEXEM-0013", "`{module}` is used by another file, so it cannot run statements at its top level: they are a second `main`. Move them into a function")
+KEX_DIAGNOSTIC(ModuleFileShadowsStandardLibrary, "KEXWM-0002", "this file is not loaded for `{module}`: that is the standard library's module, which a program's own file cannot replace; rename the file and its module")

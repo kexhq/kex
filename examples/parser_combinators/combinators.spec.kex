@@ -1,7 +1,7 @@
-# Tests for the `Parsing` combinator library (lib/parsing.kex).
-# Run from this directory: `kex -r parsing.spec.kex` (also works with -R).
+# Tests for the `Combinators` parser library (lib/combinators.kex).
+# Run from this directory: `kex -r combinators.spec.kex` (also works with -R).
 
-using Parsing
+using Combinators
 
 describe("Parser combinators with .try/rescue") do
   describe("charWhen") do

@@ -99,7 +99,10 @@ end
   `module Name do ... end`.
 - File names are snake_case, as `using` finds a module by its name: `module
   OptionParser` lives in `option_parser.kex`, `module Net.HTTP.WebSocket` in
-  `net/http/web_socket.kex`.
+  `net/http/web_socket.kex`. A program's own file cannot replace a
+  standard-library module: for `using Units.SI`, a `units.kex` beside the
+  program is skipped with a warning (KEXWM-0002). Give your modules names of
+  their own.
 - `using M` brings in every public name; `using M, only: [f, g]` brings in
   those; `using M, as: Short` only shortens the prefix. Put `using` in the
   narrowest place that needs it: a function body may start with one.
@@ -108,5 +111,6 @@ end
 - Everything is public unless it sits in the module's `private do ... end`
   block, which goes after the public functions.
 - Inside a module, call its own functions by their bare names.
-- Standard-library modules outside the prelude need `using` too:
-  `using FS`, `using JSON`, `using Regex`. `kex -s <Name>` says which.
+- Standard-library modules outside the prelude work the same way: write
+  `FS.File.read` or `JSON.parse` for a use or two, or `using FS` to call its
+  names bare. `kex -s <Name>` says which module a name is in.

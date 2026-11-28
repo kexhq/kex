@@ -1,12 +1,18 @@
 #include "resolver.hxx"
+#include "../common/diagnostics.hxx"
 #include "../common/name_case.hxx"
+#include "../common/prelude_loader.hxx"
+#include "../semantic/analyzer.hxx"
+#include "discovery.hxx"
 
 #include "../common/string_utils.hxx"
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <sstream>
 #include <utility>
@@ -118,6 +124,67 @@ bool g_caching = false;
 std::mutex g_cacheMutex;
 std::unordered_map<std::string, std::optional<Resolution>> g_resolutions;
 
+// Read afresh, not through the cached standardLibraryModuleRoots: a resolve
+// can come before whatever sets KEX_STDLIB_DIR, and must not fix the roots.
+auto inStandardLibrary(const std::string& path) -> bool {
+    std::error_code ec;
+    const auto file = std::filesystem::weakly_canonical(path, ec);
+    for (const auto& root : kex::standardLibraryRootCandidates()) {
+        const auto relative = file.lexically_relative(std::filesystem::weakly_canonical(root, ec));
+        if (!ec && !relative.empty() && *relative.begin() != "..") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A program's own file found ahead of a standard-library module's file (a
+// stray units.kex beside the entry, for `using Units.SI`). The stdlib's
+// wins: the runtimes used to load the program's file while the checker read
+// the stdlib's interface, so a program checked clean and failed when run, or
+// failed to parse a file it never meant to use. Every mode resolves here, so
+// they agree; the file is named once, as a warning.
+auto warnShadowed(const std::string& path, const std::string& moduleName) -> void {
+    static std::mutex warnedMutex;
+    static std::set<std::string> warned;
+    {
+        std::lock_guard lock(warnedMutex);
+        if (!warned.insert(path + '\x1f' + moduleName).second) {
+            return;
+        }
+    }
+    kex::diagnostics::printSemanticDiagnostic(
+        kex::semantic::makeDiagnostic(
+            kex::semantic::Diagnostic::Level::Warning,
+            kex::diag::Code::ModuleFileShadowsStandardLibrary,
+            SourceLocation{.file = shownPath(path), .line = 1, .column = 1},
+            {{"module", moduleName}}));
+}
+
+auto standardLibraryWins(const Resolution& program, Resolution stdlib) -> Resolution {
+    warnShadowed(program.path, stdlib.moduleName);
+    stdlib.shadowedPaths.push_back(program.path);
+    return stdlib;
+}
+
+// Whether the standard library has a file of `moduleName`'s own under a root
+// that `roots` leaves out.
+auto standardLibraryHasFile(const std::string& moduleName, const std::vector<std::string>& roots)
+    -> bool {
+    for (const auto& candidate : kex::standardLibraryRootCandidates()) {
+        const auto root = candidate.string();
+        if (std::find(roots.begin(), roots.end(), root) != roots.end()) {
+            continue;
+        }
+        for (const auto& relative : sourcePaths(moduleName)) {
+            if (std::filesystem::is_regular_file(std::filesystem::path(root) / relative)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 auto Resolver::setCaching(bool on) -> void {
@@ -162,6 +229,7 @@ auto Resolver::resolveUncached(const std::string& moduleName, const std::string&
     // callers can diagnose the shadowing without changing resolution order.
     for (const auto& candidateName : candidates(moduleName, currentModule)) {
         std::optional<Resolution> result;
+        std::optional<Resolution> stdlibMatch;
         for (const auto& root : m_roots) {
             std::optional<std::string> matchedPath;
             bool enclosing = false;
@@ -204,7 +272,24 @@ auto Resolver::resolveUncached(const std::string& moduleName, const std::string&
                 result = Resolution{candidateName, *matchedPath, {}, enclosing};
             } else if (*matchedPath != result->path) {
                 result->shadowedPaths.push_back(*matchedPath);
+                // The standard library's own file for the name, behind one of
+                // the program's: the stdlib's wins (standardLibraryWins).
+                if (!stdlibMatch && !enclosing && inStandardLibrary(*matchedPath) &&
+                    !inStandardLibrary(result->path)) {
+                    stdlibMatch = Resolution{candidateName, *matchedPath, {}, enclosing};
+                }
             }
+        }
+        if (result && stdlibMatch) {
+            return standardLibraryWins(*result, std::move(*stdlibMatch));
+        }
+        // Roots without the stdlib's (a check or a walker run, which read a
+        // stdlib module through its interface): its file is not ours to return,
+        // so the program's is not found and the caller takes the interface.
+        if (result && !inStandardLibrary(result->path) &&
+            standardLibraryHasFile(candidateName, m_roots)) {
+            warnShadowed(result->path, candidateName);
+            return std::nullopt;
         }
         if (result) {
             return result;

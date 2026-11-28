@@ -511,6 +511,9 @@ private:
 
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypePtr>& hintParams)
     -> TypePtr {
+    if (!hintParams.empty()) {
+        m_blockHints[&blockExpr] = hintParams;
+    }
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
         if (lam->params.empty() && !lam->collection) {
             // Zero-param lambda `{ }` / `do end`. Non-empty hintParams means
@@ -4393,6 +4396,17 @@ auto TypeChecker::inferBinaryOp(
         case TokenType::Caret:
             if (leftIsInt && rightIsInt) {
                 return Type::integer();
+            }
+            // `%` is Integer remainder only: both backends refuse a Float
+            // (the walker "modulo requires integers", BEAM `badarith`), so
+            // `5.5 % 2.0` checked clean and failed when run (found by `make
+            // fuzz-metamorphic`).
+            if (op == TokenType::Percent && (leftIsFloat || rightIsFloat) &&
+                (leftIsFloat || leftIsInt) && (rightIsFloat || rightIsInt)) {
+                error(
+                    diag::Code::ModuloRequiresIntegers, loc,
+                    {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
+                return Type::unknown();
             }
             if ((leftIsFloat || rightIsFloat) && (leftIsFloat || leftIsInt) &&
                 (rightIsFloat || rightIsInt)) {

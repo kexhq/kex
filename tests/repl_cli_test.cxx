@@ -248,7 +248,7 @@ int main() {
             const std::array<std::string, 6> bodies = {
                 "IO.printLine([1, 2].with([10, 20]) { |a, b| a + b }.inspected)\n",
                 "IO.printLine(Valid(1).with(Invalid([\"b\"])) { |a, b| a + b }.inspected)\n",
-                "IO.printLine(traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
+                "IO.printLine(Algebra.traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
                 "IO.printLine(\"${3.is?(Discrete)} ${Optional.wrap(1).inspected}\")\n",
                 "IO.printLine(\"hey\".find { |c| c == 'e' }.inspected)\n",
                 "IO.printLine([1, 2].into { |x| [x, x * 10] }.inspected)\n",
@@ -1951,12 +1951,77 @@ int main() {
         });
     });
 
-    // `-e` boots a session before the first prompt (kexhq/kex#549): what it
-    // defines is there for the first typed line, and a line that fails ends
-    // the session instead of leaving it half booted.
+    // `-e` runs its code and exits, as `ruby -e` does (kexhq/kex#834): no
+    // banner, no prompt, no `=> value` echo, and stdin is the program's own.
     describe("--eval", []() {
         const std::string kex = std::string(KEX_BINARY_PATH) + " --no-colors";
-        const std::string boot = " -e 'let x = 41' -e 'let double(n) do\n  n * 2\nend'";
+
+        it("runs its code in order and exits, on both backends", [kex]() {
+            for (const std::string backend : {"", " -R"}) {
+                auto out = runCommand(
+                    "echo 'IO.printLine(\"typed\")' | " + kex + backend +
+                    " -e 'IO.printLine(\"hi\")' -e '1 + 1'"
+                    " -e 'let double(n) do\n  n * 2\nend' -e 'IO.printLine(double(21))'"
+                    " 2>&1; echo \"status=$?\"");
+                assertEqual(out, std::string("hi\n42\nstatus=0\n"));
+            }
+        });
+
+        it("exits with status 1 when a line fails to check or raises", [kex]() {
+            for (const std::string backend : {"", " -R"}) {
+                for (const std::string failing :
+                     {"let y = undefinedThing", "IO.printLine([1].at(5).try)"}) {
+                    auto out = runCommand(
+                        kex + backend + " -e '" + failing + "' -e 'IO.printLine(\"later\")'" +
+                        " 2>&1; echo \"status=$?\"");
+                    assertTrue(
+                        out.find("status=1") != std::string::npos &&
+                            out.find("later") == std::string::npos,
+                        "a failed line did not end the run with 1 (" + failing + "): " + out);
+                }
+            }
+        });
+
+        it("refuses a file", [kex]() {
+            auto out = runCommand(kex + " -e '1' some.kex 2>&1; echo \"status=$?\"");
+            assertTrue(
+                out.find("status=1") != std::string::npos &&
+                    out.find("take no file") != std::string::npos,
+                "expected --eval to refuse a file: " + out);
+        });
+    });
+
+    // `-U M` enters `using M` before anything else, for -e and a REPL alike.
+    describe("--using", []() {
+        const std::string kex = std::string(KEX_BINARY_PATH) + " --no-colors";
+
+        it("brings a module's names in bare, on both backends", [kex]() {
+            const auto file = std::filesystem::temp_directory_path() /
+                              ("kex_repl_using_" + std::to_string(::getpid()) + ".txt");
+            std::ofstream(file) << "from a file";
+            for (const std::string backend : {"", " -R"}) {
+                auto out = runCommand(
+                    kex + backend + " -U FS -e 'IO.printLine(File.read(\"" + file.string() +
+                    "\").or(\"\"))' 2>&1; echo \"status=$?\"");
+                assertEqual(out, std::string("from a file\nstatus=0\n"));
+            }
+            std::filesystem::remove(file);
+        });
+    });
+
+    // `--init` boots a session before the first prompt (kexhq/kex#549,
+    // kexhq/kex#834): what it defines is there for the first typed line, and a
+    // line that fails ends the session instead of leaving it half booted.
+    describe("--init", []() {
+        const std::string kex = std::string(KEX_BINARY_PATH) + " --no-colors";
+        // ` --init <file>`, the file holding `text`.
+        const auto init = [](const std::string& name, const std::string& text) {
+            const auto file = std::filesystem::temp_directory_path() /
+                              ("kex_repl_init_" + name + "_" + std::to_string(::getpid()) + ".kex");
+            std::ofstream(file) << text;
+            return " --init " + file.string();
+        };
+        const std::string boot = init("boot", "let x = 41\nlet double(n) do\n  n * 2\nend\n");
 
         it("enters its lines before the first prompt in both REPLs", [kex, boot]() {
             for (const std::string repl : {"", " -i"}) {
@@ -1967,11 +2032,22 @@ int main() {
             }
         });
 
-        it("ends the session with status 1 when a line fails", [kex]() {
+        it("runs -e in the booted session, then exits", [kex, boot]() {
             for (const std::string repl : {"", " -i"}) {
                 auto out = runCommand(
-                    "echo 'IO.printLine(\"typed\")' | " + kex + repl +
-                    " -e 'let y = undefinedThing' -e 'IO.printLine(\"later\")'"
+                    kex + repl + boot + " -e 'IO.printLine(double(x))' 2>&1; echo \"status=$?\"");
+                assertTrue(
+                    out.find("82\nstatus=0") != std::string::npos,
+                    "-e did not run in the booted session: " + out);
+            }
+        });
+
+        it("ends the session with status 1 when a line fails", [kex, init]() {
+            const auto failing =
+                init("failing", "let y = undefinedThing\nIO.printLine(\"later\")\n");
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "echo 'IO.printLine(\"typed\")' | " + kex + repl + failing +
                     " 2>&1; echo \"status=$?\"");
                 assertTrue(
                     out.find("status=1") != std::string::npos,
@@ -1983,28 +2059,56 @@ int main() {
             }
         });
 
+        it("refuses a file that is not there", [kex]() {
+            auto out = runCommand(kex + " --init /no/such/boot.kex 2>&1; echo \"status=$?\"");
+            assertTrue(
+                out.find("status=1") != std::string::npos &&
+                    out.find("no such file") != std::string::npos,
+                "expected --init to refuse a missing file: " + out);
+        });
+
         // kexhq/kex#89: only what the program prints itself.
-        it("echoes no values with --no-inspect, in both REPLs", [kex]() {
+        it("echoes no values with --no-inspect, in both REPLs", [kex, init]() {
+            const auto halves = init("halves", "let x = 21\nlet half(n) = n / 2\n");
             for (const std::string repl : {"", " -i"}) {
                 auto out = runCommand(
                     "printf '1 + 1\\nIO.printLine(\"twice: ${x * 2}\")\\nIO.inspect(x)\\n' | " +
-                    kex + repl + " --no-inspect -e 'let x = 21' -e 'let half(n) = n / 2' 2>&1");
+                    kex + repl + " --no-inspect" + halves + " 2>&1");
                 assertTrue(out.find("twice: 42") != std::string::npos, "lost printLine: " + out);
                 assertTrue(out.find("21 : Integer") != std::string::npos, "lost inspect: " + out);
                 assertTrue(out.find("=> ") == std::string::npos, "echoed a value: " + out);
             }
         });
 
+        // A `.try` with no rescue, at the top level of the BEAM REPL, ended
+        // its VM: erl_crash.dump was written and every later input "failed to
+        // load session module".
+        it("goes on after a .try fails, in both REPLs", [kex]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "printf '[1].at(5).try\\nIO.printLine(\"after\")\\n' | " + kex + repl +
+                    " 2>&1");
+                assertTrue(
+                    out.find(".try failed with no rescue handler: None") != std::string::npos,
+                    "the failed .try was not reported: " + out);
+                assertTrue(
+                    out.find("after") != std::string::npos &&
+                        out.find("failed to load session module") == std::string::npos,
+                    "the session did not go on after the failed .try: " + out);
+            }
+        });
+
         // kexhq/kex#728: the checker's type, and nothing run.
-        it("/type answers from the checker, the same in both REPLs", [kex]() {
+        it("/type answers from the checker, the same in both REPLs", [kex, init]() {
+            const auto defs =
+                init("type", "let inc(n: Integer) -> Integer = n + 1\nlet xs = [1, 2]\n");
             std::vector<std::string> outputs;
             for (const std::string repl : {"", " -i"}) {
                 auto out = runCommand(
                     "printf '/type List.first\\n/type [1, 2].first\\n/type inc\\n/type xs\\n"
                     "/type 1 / 0\\n/type IO.readLine()\\n/type List\\n/type nope\\n"
                     "IO.printLine(\"still here\")\\n' | " +
-                    kex + repl +
-                    " -e 'let inc(n: Integer) -> Integer = n + 1' -e 'let xs = [1, 2]' 2>&1");
+                    kex + repl + defs + " 2>&1");
                 const auto has = [&](const std::string& part) {
                     assertTrue(out.find(part) != std::string::npos, "missing " + part + ": " + out);
                 };
@@ -2032,13 +2136,14 @@ int main() {
         });
 
         // kexhq/kex#729: `/type`'s answer plus the documentation.
-        it("/help <name> shows the type and the docs, the same in both REPLs", [kex]() {
+        it("/help <name> shows the type and the docs, the same in both REPLs", [kex, init]() {
+            const auto defs = init("help", "let xs = [1, 2]\nlet double(n: Integer) = n * 2\n");
             std::vector<std::string> outputs;
             for (const std::string repl : {"", " -i"}) {
                 auto out = runCommand(
                     "printf '/help List.first\\n/help xs\\n/help List\\n/help double\\n"
                     "/help nope\\n/help\\n' | " +
-                    kex + repl + " -e 'let xs = [1, 2]' -e 'let double(n: Integer) = n * 2' 2>&1");
+                    kex + repl + defs + " 2>&1");
                 const auto has = [&](const std::string& part) {
                     assertTrue(out.find(part) != std::string::npos, "missing " + part + ": " + out);
                 };
@@ -2058,19 +2163,11 @@ int main() {
             assertEqual(outputs[0], outputs[1]);
         });
 
-        it("refuses a file", [kex]() {
-            auto out = runCommand(kex + " -e '1' some.kex 2>&1; echo \"status=$?\"");
-            assertTrue(
-                out.find("status=1") != std::string::npos &&
-                    out.find("takes no file") != std::string::npos,
-                "expected --eval to refuse a file: " + out);
-        });
-
         // A record a pattern binds from a module under a source root: the
         // name replayed untyped into the next input, which then read its
         // field by name at run time, where nothing answered it ("Undefined
         // method: id for Shop.Cart.Cart", kexhq/kex#575).
-        it("reads a field of a record bound by a pattern in an earlier input", [kex]() {
+        it("reads a field of a record bound by a pattern in an earlier input", [kex, init]() {
             const auto root = std::filesystem::temp_directory_path() /
                               ("kex_repl_575_" + std::to_string(::getpid()));
             std::filesystem::create_directories(root / "shop");
@@ -2083,7 +2180,7 @@ int main() {
             }
             auto out = runCommand(
                 "cd " + root.string() + " && echo 'cart.id' | " + kex + " --source-root ." +
-                " -e 'let Just(cart) = Shop.Cart.carts.first' 2>&1");
+                init("575", "let Just(cart) = Shop.Cart.carts.first\n") + " 2>&1");
             std::filesystem::remove_all(root);
             assertTrue(
                 out.find("=> \"c1\" : String") != std::string::npos,
@@ -2094,13 +2191,13 @@ int main() {
         // ASCII-only scan, so `let árvíz = 2` lost its name ("Unexpected
         // token: )"); `let Φ = 1.618` showed the constant's function on both;
         // and `名前` reached erlc as a variable no name may start with.
-        it("binds and shows names written outside ASCII in both REPLs", [kex]() {
+        it("binds and shows names written outside ASCII in both REPLs", [kex, init]() {
+            const auto names = init(
+                "names",
+                "let árvíztűrő = \"tükörfúrógép\"\nvar ő = 1\nő = ő + 1\nlet 名前 = ő + 1\n"
+                "let Φ = 1.618\nIO.printLine(\"${árvíztűrő} ${ő} ${名前} ${Φ}\")\n");
             for (const std::string repl : {"", " -i"}) {
-                auto out = runCommand(
-                    "echo ':árvíz' | " + kex + repl +
-                    " -e 'let árvíztűrő = \"tükörfúrógép\"' -e 'var ő = 1'"
-                    " -e 'ő = ő + 1' -e 'let 名前 = ő + 1' -e 'let Φ = 1.618'"
-                    " -e 'IO.printLine(\"${árvíztűrő} ${ő} ${名前} ${Φ}\")' 2>&1");
+                auto out = runCommand("echo ':árvíz' | " + kex + repl + names + " 2>&1");
                 assertTrue(
                     out.find("tükörfúrógép 2 3 1.618") != std::string::npos,
                     "the bindings did not hold their values (repl'" + repl + "'): " + out);
