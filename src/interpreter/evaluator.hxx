@@ -557,6 +557,11 @@ private:
     // inside the module binds it as written there (`AccountId::successor`).
     auto ownMethodName(const std::string& type, const std::string& method) const -> std::string;
     auto decidedFunction(const ast::Expr& expr, const ast::MethodCall& call) const -> std::string;
+    auto labelledMethodOwner(
+        const ast::Expr& expr,
+        const std::string& method,
+        const std::vector<ValuePtr>& args,
+        const NamedArgs& namedArgs) const -> std::string;
     auto decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
         -> std::string;
     auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
@@ -619,6 +624,10 @@ private:
     std::unique_ptr<Scheduler> m_scheduler;
     std::string m_output;
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_functionDefs;
+    // The names each clause is filed under in m_functionDefs: one, or one per
+    // member of a union `make` target. The checker names the clause a call
+    // selected, and this finds the function the walker defined from it.
+    std::unordered_map<const ast::FunctionClause*, std::vector<std::string>> m_clauseOwners;
     struct RuntimeSignature {
         std::string receiverType;
         std::vector<const ast::TypeExpr*> params;

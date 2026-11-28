@@ -1742,6 +1742,12 @@ auto Evaluator::execFunctionDef(
     }
 
     m_functionDefs[regName].push_back(&def);
+    for (const auto& clause : def.clauses) {
+        auto& owners = m_clauseOwners[&clause];
+        if (std::find(owners.begin(), owners.end(), regName) == owners.end()) {
+            owners.push_back(regName);
+        }
+    }
     // The module's own definition, not an import of the same name: `using
     // Digest` inside `module Tool` must not keep answering `Tool.sha256` once
     // Tool defines its own `sha256` (kexhq/kex#103).
@@ -2645,6 +2651,43 @@ auto Evaluator::decidedFunction(const ast::Expr& expr, const ast::MethodCall& ca
                     });
             });
         return atThisArity ? name : std::string{};
+    }
+    return {};
+}
+
+// The function a labelled method call reaches: the one the walker defined
+// from the clause the checker selected, of a union `make` target's names the
+// receiver's type's. A signature read from an interface (an opt-in stdlib
+// module's) names no clause; then the receiver type's, or a supertype's,
+// function with a clause declaring the labels. "" when neither answers.
+auto Evaluator::labelledMethodOwner(
+    const ast::Expr& expr,
+    const std::string& method,
+    const std::vector<ValuePtr>& args,
+    const NamedArgs& namedArgs) const -> std::string {
+    const auto receiverType = args.empty() ? std::string{} : dispatchTypeName(args.front());
+    if (const auto* selected = m_programs.selectedSignatureOf(expr); selected && selected->clause) {
+        if (const auto owners = m_clauseOwners.find(selected->clause);
+            owners != m_clauseOwners.end() && !owners->second.empty()) {
+            for (const auto& owner : owners->second) {
+                if (kex::mangle::hasScope(owner) && kex::mangle::scopeOf(owner) == receiverType) {
+                    return owner;
+                }
+            }
+            return owners->second.front();
+        }
+    }
+    if (receiverType.empty()) {
+        return {};
+    }
+    auto types = dispatchSupertypes(receiverType);
+    types.insert(types.begin(), receiverType);
+    for (const auto& type : types) {
+        const auto candidate = kex::mangle::qualify(type, method);
+        if (m_functionDefs.count(candidate) &&
+            findNamedClause(candidate, namedArgs, args.size() - 1)) {
+            return candidate;
+        }
     }
     return {};
 }
@@ -3635,6 +3678,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // binds it (decidedFunction); otherwise the value decides, by its
                 // run-time type.
                 std::string specificMethod = decidedFunction(expr, node);
+                // Labels the run-time types cannot see: `42.to(String, style:
+                // s)` reached the prelude's free `to(value, t)` by its two
+                // positional values, then failed on `style:`. The clause the
+                // checker selected is the one that declares the label, so the
+                // function defined from it answers.
+                if (specificMethod.empty() && !namedArgs.empty()) {
+                    specificMethod = labelledMethodOwner(expr, node.method, args, namedArgs);
+                }
                 if (specificMethod.empty()) {
                     specificMethod = resolveMethodName(receiver, node.method, &args);
                 }

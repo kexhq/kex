@@ -1,0 +1,26 @@
+# Overloads of `to(String, ...)` for Integer, told apart by their labels,
+# beside the prelude's own (`radix:`, `format:`, `culture:`). The walker chose
+# among them by the values' types, which do not include the labels: it took
+# the prelude's `to(value, t, radix)` for `42.to(String, stars: s)` and failed
+# on `stars:`. It now takes the clause the checker selected.
+record Stars do
+  count : Integer = 1
+end
+
+record Brackets do
+  open : String = "["
+  close : String = "]"
+end
+
+make Integer do
+  let to(String, stars: Stars) -> String? = Just("*".repeat(stars.count) + this.showValue)
+
+  let to(String, brackets: Brackets) -> String? = Just(brackets.open + this.showValue + brackets.close)
+end
+
+main do
+  IO.printLine(42.to(String, stars: Stars { count: 3 }).inspected)
+  IO.printLine(42.to(String, brackets: Brackets { open: "<", close: ">" }).inspected)
+  IO.printLine(255.to(String, radix: 16).inspected)
+  IO.printLine(42.to(String).inspected)
+end
