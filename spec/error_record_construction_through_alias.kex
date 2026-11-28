@@ -1,0 +1,23 @@
+# kex: check-only
+# kexhq/kex#891: a construction through an alias is checked as the record it
+# names, with the alias's type arguments in place; an alias of a non-record
+# still names no record.
+record Greet do
+  name : String
+end
+
+type OtherGreeter = Greet
+
+record Box<A> do
+  items : [A]
+end
+
+type IntBox = Box<Integer>
+type Name = String
+
+main do
+  IO.inspect(OtherGreeter { name: 1 })
+  IO.inspect(OtherGreeter { nick: "A" })
+  IO.inspect(IntBox { items: ["a"] })
+  IO.inspect(Name { value: "x" })
+end

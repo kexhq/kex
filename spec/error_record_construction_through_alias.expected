@@ -1,0 +1,20 @@
+spec/error_record_construction_through_alias.kex:19:35: [KEXET-0454]: Error, `OtherGreeter.name` expects String, but got Integer
+   |
+19 |   IO.inspect(OtherGreeter { name: 1 })
+   |                                   ^
+spec/error_record_construction_through_alias.kex:20:35: [KEXET-0452]: Error, record `OtherGreeter` has no field `nick`. It has name
+   |
+20 |   IO.inspect(OtherGreeter { nick: "A" })
+   |                                   ^^^
+spec/error_record_construction_through_alias.kex:20:14: [KEXET-0455]: Error, missing mandatory field `name` constructing `OtherGreeter`
+   |
+20 |   IO.inspect(OtherGreeter { nick: "A" })
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_record_construction_through_alias.kex:21:30: [KEXET-0454]: Error, `IntBox.items` expects [Integer], but got [String]
+   |
+21 |   IO.inspect(IntBox { items: ["a"] })
+   |                              ^^^^^
+spec/error_record_construction_through_alias.kex:22:14: [KEXET-0457]: Error, unknown record type `Name`
+   |
+22 |   IO.inspect(Name { value: "x" })
+   |              ^^^^^^^^^^^^^^^^^^^

@@ -4102,7 +4102,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                     typeName = record->typeName;
                 } else {
-                    typeName = resolveRecordTypeName(node.typeName);
+                    // The record the checker typed the construction as, which
+                    // follows a type alias to its record (kexhq/kex#891); the
+                    // written name only resolves a record of that name.
+                    const auto checked = m_programs.typeOf(expr);
+                    const auto* named =
+                        checked ? std::get_if<semantic::NamedType>(&checked->kind) : nullptr;
+                    typeName = named && m_recordDefs.count(named->name)
+                                   ? named->name
+                                   : resolveRecordTypeName(node.typeName);
                     // A `Mock.*` stand-in is test-only like the mock functions are
                     // (issue #144): building one is where a program starts to
                     // lie about the world, so that is where the grant is checked.

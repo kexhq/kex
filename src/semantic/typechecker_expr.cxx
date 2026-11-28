@@ -3421,7 +3421,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     sourceName = named->name;
                     contextualRecordType = receiver;
                 }
-                const auto recordName = resolveRecordName(sourceName);
+                auto recordName = resolveRecordName(sourceName);
+                // `OtherGreeter { … }` for `type OtherGreeter = Greet` builds a
+                // Greet, as the annotation `OtherGreeter` already means one
+                // (kexhq/kex#891). An alias applying arguments (`type IntBox =
+                // Box<Integer>`) fixes them for the values to be checked against.
+                std::vector<TypePtr> aliasArgs;
+                if (!contextualRecordType && !m_recordFields.count(recordName) &&
+                    !(m_importedInterfaces &&
+                      m_importedInterfaces->recordArities.count(recordName))) {
+                    auto aliased = recordThroughAlias(sourceName);
+                    if (!aliased && recordName != sourceName) {
+                        aliased = recordThroughAlias(recordName);
+                    }
+                    if (aliased) {
+                        const auto& target = std::get<NamedType>(aliased->kind);
+                        recordName = target.name;
+                        aliasArgs = target.typeArgs;
+                    }
+                }
                 // Naming a qualified record is a reference to its MODULE: the
                 // record's `make` block and field defaults live in that source,
                 // and on BEAM the module has to be in the build at all
@@ -3436,6 +3454,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 std::unordered_set<std::string> supplied;
                 // Type arguments recovered from the values, slot by slot.
                 std::unordered_map<int, TypePtr> typeParamSlots;
+                // The alias's arguments come first: first binding wins.
+                for (size_t i = 0; i < aliasArgs.size(); ++i) {
+                    bindRecordTypeParams(
+                        Type::genericLetter(-static_cast<int>(i + 1)), aliasArgs[i],
+                        typeParamSlots);
+                }
                 for (const auto& entry : node.fields) {
                     const auto& fieldName = entry.name;
                     const auto& val = entry.value;
@@ -3450,7 +3474,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!entry.spread && record != m_recordFields.end() && writtenFunction(*val)) {
                         if (const auto field = record->second.find(fieldName);
                             field != record->second.end()) {
-                            fieldExpectation = field->second;
+                            fieldExpectation =
+                                aliasArgs.empty()
+                                    ? field->second
+                                    : substituteInterfaceGenerics(field->second, aliasArgs);
                         }
                     }
                     const auto outerExpectation =
@@ -3542,7 +3569,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         }
                         continue;
                     }
-                    auto expected = resolve(declared->second);
+                    auto expected = resolve(
+                        aliasArgs.empty()
+                            ? declared->second
+                            : substituteInterfaceGenerics(declared->second, aliasArgs));
                     bindRecordTypeParams(expected, valueType, typeParamSlots);
                     // A field written `Float` is a bound, so open: the note comes
                     // first (decision 2: `Point { x: 2 }` builds a Float).
