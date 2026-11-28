@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string_view>
 #include <array>
+#include <vector>
 #ifndef _WIN32
 #include <arpa/inet.h>
 #endif
@@ -664,54 +665,105 @@ struct IPValue {
     std::array<unsigned char, 16> bytes{};
 };
 
-// The syntax both backends take, checked here rather than left to the
-// platform's inet_pton(3): macOS's takes a leading zero (`010.0.0.1`, which
-// other parsers read as octal), a five-digit group (`00042::1`) and a `%zone`
-// suffix, glibc's does not. Only hex digits, `:` and `.` reach inet_pton, no
-// IPv6 group is over four hex digits, and each octet of a dotted quad, alone or
-// ending an IPv6 address, is one to three decimal digits with no leading zero.
-// A NUL is rejected with the rest, since inet_pton would stop at it.
-auto strictIPText(const std::string& text) -> bool {
-    for (unsigned char c : text) {
-        if (!std::isxdigit(c) && c != ':' && c != '.') {
+// A dotted quad: four octets, each one to three decimal digits with no
+// leading zero and at most 255. Shorthand (`127.1`), hex and octal octets,
+// signs and spaces are all rejected, since they are how an address slips past
+// an allow-list.
+auto parseIPv4(std::string_view text, unsigned char* out) -> bool {
+    size_t at = 0;
+    for (int octet = 0; octet < 4; ++octet) {
+        if (octet > 0) {
+            if (at >= text.size() || text[at] != '.') {
+                return false;
+            }
+            ++at;
+        }
+        const auto start = at;
+        unsigned value = 0;
+        while (at < text.size() && at - start < 4 &&
+               std::isdigit(static_cast<unsigned char>(text[at]))) {
+            value = value * 10 + static_cast<unsigned>(text[at] - '0');
+            ++at;
+        }
+        const auto digits = at - start;
+        if (digits == 0 || digits > 3 || (digits > 1 && text[start] == '0') || value > 255) {
             return false;
         }
+        out[octet] = static_cast<unsigned char>(value);
     }
-    std::stringstream groups(text);
-    std::string group;
-    while (std::getline(groups, group, ':')) {
-        if (group.size() > 4 && group.find('.') == std::string::npos) {
-            return false;
-        }
-    }
-    if (text.find('.') == std::string::npos) {
-        return true;
-    }
-    const auto colon = text.rfind(':');
-    std::stringstream quad(colon == std::string::npos ? text : text.substr(colon + 1));
-    std::string octet;
-    while (std::getline(quad, octet, '.')) {
-        if (octet.empty() || octet.size() > 3 || (octet.size() > 1 && octet[0] == '0') ||
-            !std::all_of(
-                octet.begin(), octet.end(), [](unsigned char c) { return std::isdigit(c); })) {
-            return false;
-        }
-    }
-    return !text.ends_with('.');
+    return at == text.size();
 }
 
+// The 16-bit groups of one side of an IPv6 address's `::`, each one to four
+// hex digits; a dotted quad may end the address (`last`) as two groups.
+auto parseIPv6Groups(std::string_view text, bool last, std::vector<unsigned>& groups) -> bool {
+    if (text.empty()) {
+        return true;
+    }
+    size_t at = 0;
+    while (true) {
+        const auto colon = text.find(':', at);
+        const auto group = text.substr(at, colon == std::string_view::npos ? colon : colon - at);
+        if (colon == std::string_view::npos && last && group.find('.') != std::string_view::npos) {
+            std::array<unsigned char, 4> quad{};
+            if (!parseIPv4(group, quad.data())) {
+                return false;
+            }
+            groups.push_back((unsigned{quad[0]} << 8) | quad[1]);
+            groups.push_back((unsigned{quad[2]} << 8) | quad[3]);
+            return true;
+        }
+        if (group.empty() || group.size() > 4 ||
+            !std::all_of(group.begin(), group.end(), [](char c) {
+                return std::isxdigit(static_cast<unsigned char>(c)) != 0;
+            })) {
+            return false;
+        }
+        groups.push_back(static_cast<unsigned>(std::stoul(std::string(group), nullptr, 16)));
+        if (colon == std::string_view::npos) {
+            return true;
+        }
+        at = colon + 1;
+    }
+}
+
+// The syntax both backends take, parsed here rather than by the platform's
+// inet_pton(3): macOS's takes a leading zero (`010.0.0.1`, which other
+// parsers read as octal), a five-digit group (`00042::1`) and a `%zone`
+// suffix, glibc's does not, and Emscripten's misplaces the groups around a
+// `::` (`2001:db8::42` read back as `0:42::`).
 auto parseIP(const std::string& text) -> std::optional<IPValue> {
     IPValue out;
-    if (!strictIPText(text)) {
-        return std::nullopt;
-    }
-    if (inet_pton(AF_INET, text.c_str(), out.bytes.data()) == 1) {
+    if (text.find(':') == std::string::npos) {
+        if (!parseIPv4(text, out.bytes.data())) {
+            return std::nullopt;
+        }
         out.family = AF_INET;
-    } else if (inet_pton(AF_INET6, text.c_str(), out.bytes.data()) == 1) {
-        out.family = AF_INET6;
-    } else {
-        return std::nullopt;
+        return out;
     }
+    const std::string_view view(text);
+    const auto gap = view.find("::");
+    std::vector<unsigned> head;
+    std::vector<unsigned> tail;
+    if (gap == std::string_view::npos) {
+        if (!parseIPv6Groups(view, true, head) || head.size() != 8) {
+            return std::nullopt;
+        }
+    } else {
+        // One `::`, standing for at least one zero group.
+        if (view.find("::", gap + 1) != std::string_view::npos ||
+            !parseIPv6Groups(view.substr(0, gap), false, head) ||
+            !parseIPv6Groups(view.substr(gap + 2), true, tail) || head.size() + tail.size() > 7) {
+            return std::nullopt;
+        }
+        head.resize(8 - tail.size(), 0);
+        head.insert(head.end(), tail.begin(), tail.end());
+    }
+    for (size_t i = 0; i < 8; ++i) {
+        out.bytes[2 * i] = static_cast<unsigned char>(head[i] >> 8);
+        out.bytes[2 * i + 1] = static_cast<unsigned char>(head[i] & 0xff);
+    }
+    out.family = AF_INET6;
     return out;
 }
 
