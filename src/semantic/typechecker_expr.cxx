@@ -9986,8 +9986,11 @@ auto TypeChecker::checkCallCore(
     // `person.name` on a record without a `name` field: no function named
     // `name` takes a Person either, so what is wrong is the field. It was
     // reported as `name` expecting a Weekday, the first unrelated function of
-    // that name (the plan's §11, item 9).
-    if (argumentOff && isMethodCall && offIndex == 0 && argTypes.size() == 1 && !argTypes.empty()) {
+    // that name (the plan's §11, item 9). A qualified name is never a field:
+    // `Math.log(z)` on a Complex is an argument `Math.log` does not take, not
+    // a field `Math.log` the record lacks (kexhq/kex#895).
+    if (argumentOff && isMethodCall && offIndex == 0 && argTypes.size() == 1 && !argTypes.empty() &&
+        sourceName(name).find('.') == std::string::npos) {
         if (const auto* named = std::get_if<NamedType>(&resolve(argTypes[0])->kind)) {
             const auto record = findRecordFields(*named);
             if (record != m_recordFields.end() && !record->second.contains(sourceName(name))) {
