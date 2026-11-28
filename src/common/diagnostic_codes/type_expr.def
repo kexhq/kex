@@ -110,3 +110,4 @@ KEX_DIAGNOSTIC(RecordCalledLikeFunction, "KEXET-0520", "`{name}` is a record, no
 KEX_DIAGNOSTIC(NestedTooDeepToCheck, "KEXET-0521", "this is nested too deeply to check: give an inner part a name with `let`, and use the name")
 KEX_DIAGNOSTIC(TuplePatternNeverMatches, "KEXET-0523", "a tuple pattern never matches a value of type `{type}`")
 KEX_DIAGNOSTIC(BangResultNotReceiverType, "KEXET-0524", "`{name}!` rebinds `{variable}` to what `{name}` returns, {actual}, but `{variable}` is {expected}: bind the result with `let` instead, or call a function that returns {expected}")
+KEX_DIAGNOSTIC(ModuloRequiresIntegers, "KEXET-0525", "`%` is the remainder of two Integers, got {left} and {right}: a Float has none; turn it into an Integer first (`.round`, `.floor`)")

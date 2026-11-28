@@ -4397,6 +4397,17 @@ auto TypeChecker::inferBinaryOp(
             if (leftIsInt && rightIsInt) {
                 return Type::integer();
             }
+            // `%` is Integer remainder only: both backends refuse a Float
+            // (the walker "modulo requires integers", BEAM `badarith`), so
+            // `5.5 % 2.0` checked clean and failed when run (found by `make
+            // fuzz-metamorphic`).
+            if (op == TokenType::Percent && (leftIsFloat || rightIsFloat) &&
+                (leftIsFloat || leftIsInt) && (rightIsFloat || rightIsInt)) {
+                error(
+                    diag::Code::ModuloRequiresIntegers, loc,
+                    {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
+                return Type::unknown();
+            }
             if ((leftIsFloat || rightIsFloat) && (leftIsFloat || leftIsInt) &&
                 (rightIsFloat || rightIsInt)) {
                 return Type::float64();
